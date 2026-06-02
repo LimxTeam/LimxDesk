@@ -134,70 +134,56 @@ export function CommandButtonPanel({ onButtonPress }: CommandButtonPanelProps) {
   return (
     <div
       style={{
-        width: 600,
-        height: "100%",
         display: "flex",
-        flexDirection: "column",
+        flexDirection: "row",
+        gap: 6,
+        height: "100%",
         padding: "4px 6px",
-        gap: GAP,
-        overflow: "hidden",
         boxSizing: "border-box",
+        flexShrink: 0,
       }}
     >
-      {/* 主体三列 */}
+      {/* 左侧：功能按钮 4列网格 */}
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "repeat(4, 68px)",
+          gap: GAP,
+          flexShrink: 0,
+          alignContent: "start",
+        }}
+      >
+        {COMMAND_ROWS.flat().map((label) => renderBtn(label))}
+      </div>
+
+      {/* 中间：数字键盘 — 固定 4 列等宽 */}
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "repeat(4, 36px)",
+          gap: GAP,
+          flexShrink: 0,
+          alignContent: "start",
+        }}
+      >
+        {NUMPAD_KEYS.map((key) => renderBtn(key))}
+      </div>
+
+      {/* 右侧：Oops + ESC + Clear + Store 垂直排列 */}
       <div
         style={{
           display: "flex",
-          flexDirection: "row",
-          gap: 6,
-          flex: 1,
-          minHeight: 0,
-          overflow: "hidden",
+          flexDirection: "column",
+          gap: GAP,
+          width: 56,
+          flexShrink: 0,
         }}
       >
-        {/* 左侧：功能按钮 4列网格 */}
-        <div
-          style={{
-            display: "grid",
-            gridTemplateColumns: "repeat(4, 68px)",
-            gap: GAP,
-            width: 280,
-            flexShrink: 0,
-            alignContent: "start",
-          }}
-        >
-          {COMMAND_ROWS.flat().map((label) => renderBtn(label))}
-        </div>
-
-        {/* 中间：数字键盘 — 固定宽度 4 列等宽 */}
-        <div
-          style={{
-            display: "grid",
-            gridTemplateColumns: "repeat(4, 1fr)",
-            gap: GAP,
-            width: 148,
-            flexShrink: 0,
-          }}
-        >
-          {NUMPAD_KEYS.map((key) => renderBtn(key))}
-        </div>
-
-        {/* 右侧：Oops + ESC + Clear + Store 垂直排列，宽度和数字键盘一致 */}
-        <div
-          style={{
-            display: "flex",
-            flexDirection: "column",
-            gap: GAP,
-            width: 148,
-            flexShrink: 0,
-          }}
-        >
-          {RIGHT_KEYS.map((label) => (
-            <div key={label} style={{ flex: 1 }}>
-              {renderBtn(label)}
-            </div>
-          ))}
-        </div>
+        {RIGHT_KEYS.map((label) => (
+          <div key={label} style={{ flex: 1 }}>
+            {renderBtn(label)}
+          </div>
+        ))}
       </div>
     </div>
   );
