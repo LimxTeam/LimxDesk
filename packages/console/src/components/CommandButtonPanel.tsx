@@ -34,8 +34,8 @@ const NUMPAD_KEYS = [
   "DESK", "/",  "Please", "",
 ];
 
-/** 右侧按钮（Store 放最上面） */
-const RIGHT_KEYS = ["Store", "Oops", "ESC", "Clear"];
+/** 右侧按钮（Store 放最下面） */
+const RIGHT_KEYS = ["Oops", "ESC", "Clear", "Store"];
 
 // ─── 样式 ───────────────────────────────
 
@@ -134,7 +134,7 @@ export function CommandButtonPanel({ onButtonPress }: CommandButtonPanelProps) {
   return (
     <div
       style={{
-        width: 540,
+        width: 600,
         height: "100%",
         display: "flex",
         flexDirection: "column",
@@ -169,26 +169,26 @@ export function CommandButtonPanel({ onButtonPress }: CommandButtonPanelProps) {
           {COMMAND_ROWS.flat().map((label) => renderBtn(label))}
         </div>
 
-        {/* 中间：数字键盘 — 严格 4 列等宽 */}
+        {/* 中间：数字键盘 — 固定宽度 4 列等宽 */}
         <div
           style={{
             display: "grid",
             gridTemplateColumns: "repeat(4, 1fr)",
             gap: GAP,
-            flex: 1,
-            minWidth: 0,
+            width: 148,
+            flexShrink: 0,
           }}
         >
           {NUMPAD_KEYS.map((key) => renderBtn(key))}
         </div>
 
-        {/* 右侧：Please + Oops + ESC + Clear 垂直排列 */}
+        {/* 右侧：Oops + ESC + Clear + Store 垂直排列，宽度和数字键盘一致 */}
         <div
           style={{
             display: "flex",
             flexDirection: "column",
             gap: GAP,
-            width: 72,
+            width: 148,
             flexShrink: 0,
           }}
         >
