@@ -18,7 +18,7 @@ export function BigEncoderWheel({
   value = "100%",
   rotation: controlledRotation,
   onRotationChange,
-  size = 110,
+  size = 130,
 }: BigEncoderWheelProps) {
   const [internalRotation, setInternalRotation] = useState(-30);
   const rotation = controlledRotation ?? internalRotation;

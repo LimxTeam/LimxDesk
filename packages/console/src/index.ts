@@ -13,3 +13,4 @@ export { ScreenSelector } from "./components/ScreenSelector";
 export { GrandMaster } from "./components/GrandMaster";
 export { ResolutionSelector } from "./components/ResolutionSelector";
 export { EncoderInfoBar } from "./components/EncoderInfoBar";
+export { CommandButtonPanel } from "./components/CommandButtonPanel";

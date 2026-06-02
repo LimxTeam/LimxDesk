@@ -3,8 +3,7 @@ import { AttributeTabBar } from "./components/AttributeTabBar";
 import { ToolButtonGroup } from "./components/ToolButtonGroup";
 import { BigEncoderWheel } from "./components/BigEncoderWheel";
 import { ModeButtonBar } from "./components/ModeButtonBar";
-import { ScreenSelector } from "./components/ScreenSelector";
-import { GrandMaster } from "./components/GrandMaster";
+import { CommandButtonPanel } from "./components/CommandButtonPanel";
 import { EncoderInfoBar } from "./components/EncoderInfoBar";
 
 /** 编码器参数定义 */
@@ -171,22 +170,19 @@ export function ControlPanel() {
           </div>
         </div>
 
-        {/* 右侧占位，把屏幕和 GM 推到最右 */}
-        <div style={{ flex: 1, minWidth: 0 }} />
-
-        {/* 最右侧：屏幕选择器 + GrandMaster */}
+        {/* 右侧：命令按钮面板（占据剩余空间） */}
         <div
           style={{
             display: "flex",
             alignItems: "center",
-            gap: 12,
-            padding: "2px 12px",
             borderLeft: "1px solid var(--lx-stroke)",
-            flexShrink: 0,
+            flex: 1,
+            minWidth: 440,
           }}
         >
-          <ScreenSelector />
-          <GrandMaster value={100} />
+          <CommandButtonPanel
+            onButtonPress={(label) => console.log("Button pressed:", label)}
+          />
         </div>
       </div>
     </div>
