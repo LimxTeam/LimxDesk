@@ -125,7 +125,7 @@ export function ConsoleShell({ children }: { children?: React.ReactNode }) {
       {/* ── 控制面板 ── */}
       <div
         style={{
-          height: 260,
+          height: 225,
           flexShrink: 0,
           borderTop: "1px solid var(--lx-stroke)",
           background: "var(--lx-bg-surface)",

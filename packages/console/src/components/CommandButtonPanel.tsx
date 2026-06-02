@@ -25,13 +25,15 @@ const COMMAND_ROWS = [
   ["Group", "Preset", "Sequence", "Cue"],
 ];
 
-/** 数字键盘：严格 4 列 × 5 行，所有格子等宽 */
-const NUMPAD_KEYS = [
-  "7",  "8",  "9",  "+",
-  "4",  "5",  "6",  "Thru",
-  "1",  "2",  "3",  "-",
-  "0",  ".",  "If", "At",
-  "DESK", "/",  "Please", "",
+/** 数字键盘行定义：每个元素可以是 string（占位）或 { label, span } */
+type NumpadCell = string | { label: string; span: number };
+
+const NUMPAD_ROWS: NumpadCell[][] = [
+  ["7", "8", "9",      "+"],
+  ["4", "5", "6",      "Thru"],
+  ["1", "2", "3",      "-"],
+  ["0", ".", "If",     "At"],
+  ["DESK", "/", { label: "Please", span: 2 }],
 ];
 
 /** 右侧按钮（Store 放最下面） */
@@ -156,17 +158,44 @@ export function CommandButtonPanel({ onButtonPress }: CommandButtonPanelProps) {
         {COMMAND_ROWS.flat().map((label) => renderBtn(label))}
       </div>
 
-      {/* 中间：数字键盘 — 固定 4 列等宽 */}
+      {/* 中间：数字键盘 — 固定 4 列，Please 跨两列 */}
       <div
         style={{
-          display: "grid",
-          gridTemplateColumns: "repeat(4, 36px)",
+          display: "flex",
+          flexDirection: "column",
           gap: GAP,
+          width: 148,
           flexShrink: 0,
-          alignContent: "start",
         }}
       >
-        {NUMPAD_KEYS.map((key) => renderBtn(key))}
+        {NUMPAD_ROWS.map((row, ri) => (
+          <div
+            key={ri}
+            style={{
+              display: "grid",
+              gridTemplateColumns: "repeat(4, 1fr)",
+              gap: GAP,
+              flex: 1,
+              minHeight: 0,
+            }}
+          >
+            {row.map((cell, ci) => {
+              if (cell === "") return <div key={`${ri}-${ci}`} style={{ visibility: "hidden" }} />;
+              if (typeof cell === "string") {
+                return renderBtn(cell);
+              }
+              // span cell（Please）
+              return (
+                <div
+                  key={cell.label}
+                  style={{ gridColumn: `span ${cell.span}` }}
+                >
+                  {renderBtn(cell.label)}
+                </div>
+              );
+            })}
+          </div>
+        ))}
       </div>
 
       {/* 右侧：Oops + ESC + Clear + Store 垂直排列 */}

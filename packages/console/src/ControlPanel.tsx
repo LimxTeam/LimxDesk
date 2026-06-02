@@ -125,7 +125,7 @@ export function ControlPanel() {
             flexDirection: "column",
             alignItems: "flex-start",
             padding: "2px 8px",
-            flexShrink: 0,
+            flex: 1,
             minWidth: 0,
             overflow: "hidden",
           }}
@@ -170,14 +170,13 @@ export function ControlPanel() {
           </div>
         </div>
 
-        {/* 右侧：命令按钮面板（占据剩余空间） */}
+        {/* 右侧：命令按钮面板（固定宽度，不拉伸） */}
         <div
           style={{
             display: "flex",
             alignItems: "center",
             borderLeft: "1px solid var(--lx-stroke)",
-            flex: 1,
-            minWidth: 440,
+            flexShrink: 0,
           }}
         >
           <CommandButtonPanel
