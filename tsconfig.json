@@ -1,0 +1,35 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["DOM", "DOM.Iterable", "ESNext"],
+    "useDefineForClassFields": true,
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "moduleDetection": "force",
+    "skipLibCheck": true,
+    "esModuleInterop": true,
+    "allowSyntheticDefaultImports": true,
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "noEmit": true,
+    "strict": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noFallthroughCasesInSwitch": true,
+    "jsx": "react-jsx",
+    "types": ["vite/client", "node"],
+    "paths": {
+      "@limxdesk/shell": ["./packages/shell/src/index.ts"],
+      "@limxdesk/shell/*": ["./packages/shell/src/*"],
+      "@limxdesk/notifications": ["./packages/notifications/src/index.ts"],
+      "@limxdesk/notifications/*": ["./packages/notifications/src/*"],
+      "@limxdesk/ui": ["./packages/ui/src/index.tsx"],
+      "@limxdesk/ui/*": ["./packages/ui/src/*"],
+      "@limxdesk/console": ["./packages/console/src/index.ts"],
+      "@limxdesk/console/*": ["./packages/console/src/*"],
+      "@/*": ["./apps/src/*"]
+    }
+  },
+  "include": ["apps/src/**/*.ts", "apps/src/**/*.tsx", "packages/**/*.ts", "packages/**/*.tsx", "vite.config.ts"],
+  "exclude": ["node_modules", "dist", "backend/target"]
+}

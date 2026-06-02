@@ -1,0 +1,770 @@
+@import "tailwindcss";
+@source "../../packages";
+
+/* ══════════════════════════════════════════════════════════════
+   LimxDesk — UE5 Cobalt 设计系统
+   ══════════════════════════════════════════════════════════════
+   定位：基于 Unreal Engine 5 编辑器视觉语言的专业桌面应用
+   美学：深空碳黑底 + 钴蓝主色 + 琥珀强调 + 工业级紧凑布局
+
+   ── UE5 配色战略 ────────────────────────────────────────────
+   主色    COBALT #0078D4    UE5 标志性蓝 / 选中态 / 聚焦
+   强调色  AMBER  #F09D1C    属性编辑 / 警告 / 高亮
+   行动色  GREEN  #4EC94E    成功 / 播放 / 已连接
+   危险色  RED    #E74856    错误 / 断开 / 关闭hover
+
+   ── 紧凑度策略 ───────────────────────────────────────────────
+   字号基准 12.5px / 行高 1.4
+   控件统一高度 26px / 标题栏 32px / 工具栏 36px / 状态栏 22px
+   间距阶梯 2 / 4 / 6 / 8 / 10 / 12 / 16 / 20 / 24 px
+   圆角阶梯 2 / 3 / 5 / 8 / 12 px（UE5 编辑器风格，方正克制）
+
+   ── 文件分区 ─────────────────────────────────────────────────
+   1. 设计 Token（CSS 变量）
+   2. Tailwind v4 主题映射
+   3. 全局 Base 样式
+   4. 面板 / 卡片
+   5. 按钮族
+   6. 输入框 / 选择框
+   7. 状态指示点
+   8. 分割线 / 描边
+   9. 动画关键帧
+   ══════════════════════════════════════════════════════════════ */
+
+/* ╔══════════════════════════════════════════════════════════╗
+   ║ 1. 设计 Token — UE5 Cobalt Dark                         ║
+   ╚══════════════════════════════════════════════════════════╝ */
+:root {
+  /* ── 背景层级（UE5 编辑器深碳黑渐变） ── */
+  --lx-bg-void: #0D0D0D;
+  --lx-bg-abyss: #141414;
+  --lx-bg-deep: #1A1A1A;
+  --lx-bg-surface: #222222;
+  --lx-bg-elevated: #2A2A2A;
+  --lx-bg-hover: #333333;
+  --lx-bg-active: #404040;
+
+  /* ── 文字（高对比冷白阶梯，UE5 风格） ── */
+  --lx-fg-primary: #F0F0F0;
+  --lx-fg-secondary: #B0B0B0;
+  --lx-fg-tertiary: #707070;
+  --lx-fg-muted: #484848;
+  --lx-fg-disabled: #353535;
+
+  /* ── 主色 PRIMARY ─ 钴蓝（UE5 选中态 / 聚焦） ── */
+  --lx-primary: #0078D4;
+  --lx-primary-bright: #4DA3F5;
+  --lx-primary-dim: rgba(0, 120, 212, 0.10);
+  --lx-primary-fill: rgba(0, 120, 212, 0.18);
+  --lx-primary-trace: rgba(0, 120, 212, 0.30);
+  --lx-primary-glow: rgba(0, 120, 212, 0.45);
+
+  /* ── 强调色 ACCENT ─ 琥珀（UE5 Property 高亮 / 警告） ── */
+  --lx-accent: #F09D1C;
+  --lx-accent-bright: #F5B84D;
+  --lx-accent-dim: rgba(240, 157, 28, 0.10);
+  --lx-accent-fill: rgba(240, 157, 28, 0.18);
+  --lx-accent-trace: rgba(240, 157, 28, 0.30);
+  --lx-accent-glow: rgba(240, 157, 28, 0.45);
+
+  /* ── 行动色 ACTION ─ 绿色 ── */
+  --lx-action: #4EC94E;
+  --lx-action-bright: #78D978;
+  --lx-action-dim: rgba(78, 201, 78, 0.10);
+  --lx-action-fill: rgba(78, 201, 78, 0.18);
+  --lx-action-trace: rgba(78, 201, 78, 0.30);
+  --lx-action-glow: rgba(78, 201, 78, 0.45);
+
+  /* ── 语义状态色 ── */
+  --lx-status-online: var(--lx-action);
+  --lx-status-warn: var(--lx-accent);
+  --lx-status-error: #E74856;
+  --lx-status-error-glow: rgba(231, 72, 86, 0.40);
+  --lx-status-idle: var(--lx-fg-tertiary);
+
+  /* ── 描边 / 分割线（UE5 细线克制风格） ── */
+  --lx-stroke: rgba(176, 176, 176, 0.06);
+  --lx-stroke-strong: rgba(176, 176, 176, 0.12);
+  --lx-stroke-glow: rgba(0, 120, 212, 0.18);
+  --lx-stroke-active: rgba(0, 120, 212, 0.40);
+  --lx-stroke-accent: rgba(240, 157, 28, 0.35);
+
+  /* ── 间距阶梯（UE5 编辑器紧凑布局） ── */
+  --lx-gap-0_5: 2px;
+  --lx-gap-1: 4px;
+  --lx-gap-1_5: 6px;
+  --lx-gap-2: 8px;
+  --lx-gap-2_5: 10px;
+  --lx-gap-3: 12px;
+  --lx-gap-4: 16px;
+  --lx-gap-5: 20px;
+  --lx-gap-6: 24px;
+
+  /* ── 圆角阶梯（UE5 编辑器风格：方正、克制） ── */
+  --lx-radius-xs: 2px;
+  --lx-radius-sm: 3px;
+  --lx-radius-md: 5px;
+  --lx-radius-lg: 8px;
+  --lx-radius-xl: 12px;
+  --lx-radius-full: 9999px;
+
+  /* ── 控件高度（紧凑统一） ── */
+  --lx-h-control: 26px;
+  --lx-h-control-sm: 22px;
+  --lx-h-control-lg: 32px;
+  --lx-h-titlebar: 32px;
+  --lx-h-toolbar: 36px;
+  --lx-h-statusbar: 22px;
+
+  /* ── 字体栈 ── */
+  --lx-font-sans:
+    "Inter", "IBM Plex Sans", "PingFang SC", "Microsoft YaHei",
+    system-ui, -apple-system, sans-serif;
+  --lx-font-mono:
+    "JetBrains Mono", "IBM Plex Mono", "Fira Code",
+    ui-monospace, "Consolas", monospace;
+
+  /* ── 阴影（UE5 深碳面板深度） ── */
+  --lx-shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.50);
+  --lx-shadow-md: 0 2px 8px rgba(0, 0, 0, 0.55);
+  --lx-shadow-lg: 0 8px 24px rgba(0, 0, 0, 0.65);
+  --lx-shadow-xl: 0 16px 48px rgba(0, 0, 0, 0.75);
+
+  /* ── 辉光预设 ── */
+  --lx-glow-primary:
+    0 0 8px var(--lx-primary-glow),
+    0 0 24px rgba(0, 120, 212, 0.18);
+  --lx-glow-accent:
+    0 0 8px var(--lx-accent-glow),
+    0 0 24px rgba(240, 157, 28, 0.18);
+  --lx-glow-action:
+    0 0 8px var(--lx-action-glow),
+    0 0 22px rgba(78, 201, 78, 0.14);
+
+  /* ── 动画时长 ── */
+  --lx-duration-instant: 80ms;
+  --lx-duration-fast: 150ms;
+  --lx-duration-base: 240ms;
+  --lx-duration-slow: 400ms;
+
+  /* ── 缓动函数 ── */
+  --lx-ease-out: cubic-bezier(0.16, 1, 0.30, 1);
+  --lx-ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
+  --lx-ease-snap: cubic-bezier(0.50, 0, 0.10, 1);
+
+  /* ── 层级（z-index） ── */
+  --lx-z-base: 1;
+  --lx-z-dropdown: 100;
+  --lx-z-sticky: 200;
+  --lx-z-modal: 1000;
+  --lx-z-toast: 2000;
+  --lx-z-tooltip: 3000;
+}
+
+/* ╔══════════════════════════════════════════════════════════╗
+   ║ 2. Tailwind v4 主题映射                                   ║
+   ╚══════════════════════════════════════════════════════════╝ */
+@theme inline {
+  --color-background: var(--lx-bg-void);
+  --color-foreground: var(--lx-fg-primary);
+
+  --color-bg-void: var(--lx-bg-void);
+  --color-bg-abyss: var(--lx-bg-abyss);
+  --color-bg-deep: var(--lx-bg-deep);
+  --color-bg-surface: var(--lx-bg-surface);
+  --color-bg-elevated: var(--lx-bg-elevated);
+  --color-bg-hover: var(--lx-bg-hover);
+  --color-bg-active: var(--lx-bg-active);
+
+  --color-fg-primary: var(--lx-fg-primary);
+  --color-fg-secondary: var(--lx-fg-secondary);
+  --color-fg-tertiary: var(--lx-fg-tertiary);
+  --color-fg-muted: var(--lx-fg-muted);
+  --color-fg-disabled: var(--lx-fg-disabled);
+
+  --color-primary: var(--lx-primary);
+  --color-primary-bright: var(--lx-primary-bright);
+  --color-accent: var(--lx-accent);
+  --color-accent-bright: var(--lx-accent-bright);
+  --color-action: var(--lx-action);
+  --color-action-bright: var(--lx-action-bright);
+
+  --color-stroke: var(--lx-stroke);
+  --color-stroke-strong: var(--lx-stroke-strong);
+  --color-stroke-glow: var(--lx-stroke-glow);
+
+  --font-sans: var(--lx-font-sans);
+  --font-mono: var(--lx-font-mono);
+
+  --radius-xs: var(--lx-radius-xs);
+  --radius-sm: var(--lx-radius-sm);
+  --radius-md: var(--lx-radius-md);
+  --radius-lg: var(--lx-radius-lg);
+}
+
+/* ╔══════════════════════════════════════════════════════════╗
+   ║ 3. 全局 Base                                              ║
+   ╚══════════════════════════════════════════════════════════╝ */
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+}
+
+body {
+  background: linear-gradient(160deg, #0D0D0D 0%, #111216 40%, #0F1117 70%, #0A0C10 100%);
+  color: var(--lx-fg-primary);
+  font-family: var(--lx-font-sans);
+  font-size: 12.5px;
+  line-height: 1.4;
+  font-feature-settings: "cv11", "ss01";
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+  overflow: hidden;
+  -webkit-user-select: none;
+  user-select: none;
+}
+
+#root {
+  height: 100%;
+  isolation: isolate;
+}
+
+input,
+textarea,
+select,
+[contenteditable=""],
+[contenteditable="true"],
+[contenteditable="plaintext-only"],
+.lx-text-selectable {
+  -webkit-user-select: text;
+  user-select: text;
+}
+
+/* 文本选区 — UE5 钴蓝高亮 */
+::selection {
+  background: var(--lx-primary-fill);
+  color: var(--lx-primary-bright);
+}
+
+/* 焦点可见性 */
+:focus-visible {
+  outline: 1px solid var(--lx-primary);
+  outline-offset: 1px;
+}
+
+/* 滚动条（UE5 深色紧凑） */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(0, 120, 212, 0.20) transparent;
+}
+*::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+*::-webkit-scrollbar-thumb {
+  background: rgba(176, 176, 176, 0.10);
+  border-radius: var(--lx-radius-full);
+  transition: background var(--lx-duration-fast);
+}
+*::-webkit-scrollbar-thumb:hover {
+  background: rgba(0, 120, 212, 0.40);
+}
+*::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+/* 按钮基础重置 */
+button {
+  font-family: inherit;
+  cursor: pointer;
+  transition: all var(--lx-duration-fast) var(--lx-ease-out);
+}
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.4;
+}
+
+/* ╔══════════════════════════════════════════════════════════╗
+   ║ 4. 面板（PANEL）— UE5 深碳面板风格                         ║
+   ╚══════════════════════════════════════════════════════════╝ */
+.lx-panel {
+  background: var(--lx-bg-surface);
+  border: 1px solid var(--lx-stroke);
+  border-radius: var(--lx-radius-md);
+}
+
+.lx-panel-deep {
+  background: var(--lx-bg-deep);
+  border: 1px solid var(--lx-stroke);
+  border-radius: var(--lx-radius-md);
+}
+
+.lx-panel-glow {
+  background: linear-gradient(
+    135deg,
+    var(--lx-bg-surface) 0%,
+    var(--lx-bg-elevated) 100%
+  );
+  border: 1px solid var(--lx-stroke-glow);
+  border-radius: var(--lx-radius-md);
+  box-shadow:
+    inset 0 1px 0 rgba(255, 255, 255, 0.04),
+    0 0 0 1px rgba(0, 120, 212, 0.04),
+    var(--lx-shadow-md);
+}
+
+.lx-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  height: 28px;
+  padding: 0 8px;
+  border-bottom: 1px solid var(--lx-stroke);
+  color: var(--lx-fg-secondary);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+/* 紧凑面板 */
+.lx-panel-compact {
+  background: var(--lx-bg-surface);
+  border: 1px solid var(--lx-stroke);
+  border-radius: var(--lx-radius-sm);
+  padding: 6px 8px;
+}
+
+/* ╔══════════════════════════════════════════════════════════╗
+   ║ 4.1 表格行（紧凑 DAW 风格）                               ║
+   ╚══════════════════════════════════════════════════════════╝ */
+.lx-table-row {
+  display: flex;
+  align-items: center;
+  height: 26px;
+  padding: 0 8px;
+  gap: 6px;
+  font-size: 11.5px;
+  color: var(--lx-fg-secondary);
+  border-bottom: 1px solid var(--lx-stroke);
+  transition: background var(--lx-duration-fast);
+}
+.lx-table-row:hover {
+  background: var(--lx-bg-hover);
+}
+.lx-table-row.active {
+  background: var(--lx-primary-dim);
+  color: var(--lx-primary-bright);
+}
+
+/* ╔══════════════════════════════════════════════════════════╗
+   ║ 4.2 工具提示（TOOLTIP）                                   ║
+   ╚══════════════════════════════════════════════════════════╝ */
+.lx-tooltip {
+  position: absolute;
+  z-index: var(--lx-z-tooltip);
+  padding: 3px 7px;
+  background: var(--lx-bg-elevated);
+  border: 1px solid var(--lx-stroke-strong);
+  border-radius: var(--lx-radius-xs);
+  font-size: 10.5px;
+  color: var(--lx-fg-primary);
+  white-space: nowrap;
+  pointer-events: none;
+  box-shadow: var(--lx-shadow-md);
+}
+
+/* ╔══════════════════════════════════════════════════════════╗
+   ║ 5. 按钮族 — UE5 工业级按钮                                ║
+   ╚══════════════════════════════════════════════════════════╝ */
+.lx-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  height: var(--lx-h-control);
+  padding: 0 10px;
+  border: 1px solid transparent;
+  border-radius: var(--lx-radius-sm);
+  background: transparent;
+  color: var(--lx-fg-secondary);
+  font-size: 11.5px;
+  font-weight: 500;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+  transition:
+    background var(--lx-duration-fast) var(--lx-ease-out),
+    border-color var(--lx-duration-fast) var(--lx-ease-out),
+    color var(--lx-duration-fast) var(--lx-ease-out),
+    box-shadow var(--lx-duration-fast) var(--lx-ease-out);
+}
+.lx-btn > svg {
+  flex-shrink: 0;
+  width: 13px;
+  height: 13px;
+}
+
+.lx-btn-primary {
+  background: var(--lx-primary-fill);
+  border-color: var(--lx-primary-trace);
+  color: var(--lx-primary-bright);
+}
+.lx-btn-primary:hover:not(:disabled) {
+  background: rgba(0, 120, 212, 0.28);
+  border-color: var(--lx-primary);
+  box-shadow: var(--lx-glow-primary);
+}
+.lx-btn-primary:active:not(:disabled) {
+  background: rgba(0, 120, 212, 0.38);
+}
+
+.lx-btn-accent {
+  background: var(--lx-accent-fill);
+  border-color: var(--lx-accent-trace);
+  color: var(--lx-accent-bright);
+}
+.lx-btn-accent:hover:not(:disabled) {
+  background: rgba(240, 157, 28, 0.28);
+  border-color: var(--lx-accent);
+  box-shadow: var(--lx-glow-accent);
+}
+
+.lx-btn-action {
+  background: var(--lx-action-fill);
+  border-color: var(--lx-action-trace);
+  color: var(--lx-action-bright);
+  font-weight: 600;
+}
+.lx-btn-action:hover:not(:disabled) {
+  background: rgba(78, 201, 78, 0.28);
+  border-color: var(--lx-action);
+  box-shadow: var(--lx-glow-action);
+}
+
+.lx-btn-ghost {
+  background: transparent;
+  border-color: var(--lx-stroke-strong);
+  color: var(--lx-fg-secondary);
+}
+.lx-btn-ghost:hover:not(:disabled) {
+  background: rgba(0, 120, 212, 0.06);
+  border-color: var(--lx-stroke-glow);
+  color: var(--lx-fg-primary);
+}
+
+.lx-btn-icon {
+  width: var(--lx-h-control);
+  padding: 0;
+  flex-shrink: 0;
+}
+
+/* 大尺寸按钮（32px） */
+.lx-btn-lg {
+  height: var(--lx-h-control-lg);
+  padding: 0 12px;
+  font-size: 12.5px;
+}
+.lx-btn-lg.lx-btn-icon {
+  width: var(--lx-h-control-lg);
+  padding: 0;
+}
+
+/* 小尺寸按钮（22px） */
+.lx-btn-sm {
+  height: 22px;
+  padding: 0 7px;
+  font-size: 10.5px;
+  gap: 3px;
+  border-radius: var(--lx-radius-xs);
+}
+.lx-btn-sm > svg {
+  width: 11px;
+  height: 11px;
+}
+.lx-btn-sm.lx-btn-icon {
+  width: 22px;
+  padding: 0;
+}
+
+/* ╔══════════════════════════════════════════════════════════╗
+   ║ 5.1 标签 / 徽章（TAG / BADGE）                           ║
+   ╚══════════════════════════════════════════════════════════╝ */
+.lx-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  height: 18px;
+  padding: 0 6px;
+  border-radius: var(--lx-radius-xs);
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+.lx-badge-default {
+  background: var(--lx-bg-elevated);
+  border: 1px solid var(--lx-stroke);
+  color: var(--lx-fg-secondary);
+}
+.lx-badge-success {
+  background: var(--lx-action-dim);
+  border: 1px solid var(--lx-action-trace);
+  color: var(--lx-action-bright);
+}
+.lx-badge-warn {
+  background: var(--lx-accent-dim);
+  border: 1px solid var(--lx-accent-trace);
+  color: var(--lx-accent-bright);
+}
+.lx-badge-error {
+  background: rgba(231, 72, 86, 0.10);
+  border: 1px solid rgba(231, 72, 86, 0.28);
+  color: #E74856;
+}
+.lx-badge-info {
+  background: var(--lx-primary-dim);
+  border: 1px solid var(--lx-primary-trace);
+  color: var(--lx-primary-bright);
+}
+
+/* ╔══════════════════════════════════════════════════════════╗
+   ║ 5.2 状态栏（STATUS BAR）                                  ║
+   ╚══════════════════════════════════════════════════════════╝ */
+.lx-statusbar {
+  display: flex;
+  align-items: center;
+  height: var(--lx-h-statusbar);
+  padding: 0 8px;
+  gap: 8px;
+  background: var(--lx-bg-deep);
+  border-top: 1px solid var(--lx-stroke);
+  font-size: 10.5px;
+  color: var(--lx-fg-tertiary);
+}
+.lx-statusbar-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+/* ╔══════════════════════════════════════════════════════════╗
+   ║ 5.3 代码块（CODE）                                        ║
+   ╚══════════════════════════════════════════════════════════╝ */
+.lx-code {
+  font-family: var(--lx-font-mono);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: 0.02em;
+}
+.lx-code-block {
+  padding: 6px 8px;
+  background: var(--lx-bg-deep);
+  border: 1px solid var(--lx-stroke);
+  border-radius: var(--lx-radius-sm);
+  font-family: var(--lx-font-mono);
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--lx-fg-secondary);
+  overflow-x: auto;
+}
+
+/* ╔══════════════════════════════════════════════════════════╗
+   ║ 6. 输入框 / 选择框                                        ║
+   ╚══════════════════════════════════════════════════════════╝ */
+.lx-input {
+  height: var(--lx-h-control);
+  padding: 0 7px;
+  background: var(--lx-bg-deep);
+  border: 1px solid var(--lx-stroke-strong);
+  border-radius: var(--lx-radius-sm);
+  color: var(--lx-fg-primary);
+  font-family: inherit;
+  font-size: 11.5px;
+  outline: none;
+  transition:
+    border-color var(--lx-duration-fast),
+    box-shadow var(--lx-duration-fast);
+}
+.lx-input:hover {
+  border-color: var(--lx-stroke-glow);
+}
+.lx-input:focus,
+.lx-input:focus-visible {
+  border-color: var(--lx-primary);
+  box-shadow:
+    0 0 0 2px var(--lx-primary-dim),
+    0 0 12px rgba(0, 120, 212, 0.20);
+}
+.lx-input::placeholder {
+  color: var(--lx-fg-muted);
+}
+
+/* 紧凑输入框 */
+.lx-input-sm {
+  height: var(--lx-h-control-sm);
+  padding: 0 5px;
+  font-size: 10.5px;
+}
+
+textarea.lx-input {
+  height: auto;
+  min-height: calc(var(--lx-h-control) * 2);
+  padding: var(--lx-gap-1_5) var(--lx-gap-2);
+  line-height: 1.4;
+  resize: vertical;
+}
+
+/* ╔══════════════════════════════════════════════════════════╗
+   ║ 7. 状态指示点（PULSE DOT）                                ║
+   ╚══════════════════════════════════════════════════════════╝ */
+.lx-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.lx-dot-online {
+  background: var(--lx-action);
+  box-shadow: 0 0 8px var(--lx-action-glow);
+  animation: lx-pulse-soft 2s ease-in-out infinite;
+}
+.lx-dot-warn {
+  background: var(--lx-accent);
+  box-shadow: 0 0 8px var(--lx-accent-glow);
+}
+.lx-dot-error {
+  background: var(--lx-status-error);
+  box-shadow: 0 0 8px var(--lx-status-error-glow);
+}
+.lx-dot-idle {
+  background: var(--lx-status-idle);
+}
+
+/* ╔══════════════════════════════════════════════════════════╗
+   ║ 8. 分割线                                                ║
+   ╚══════════════════════════════════════════════════════════╝ */
+.lx-divider-h {
+  height: 1px;
+  background: var(--lx-stroke);
+}
+.lx-divider-v {
+  width: 1px;
+  background: var(--lx-stroke);
+}
+.lx-divider-glow {
+  height: 1px;
+  background: linear-gradient(
+    90deg,
+    transparent 0%,
+    var(--lx-stroke-glow) 50%,
+    transparent 100%
+  );
+}
+
+/* ╔══════════════════════════════════════════════════════════╗
+   ║ 9. 关键帧动画                                            ║
+   ╚══════════════════════════════════════════════════════════╝ */
+@keyframes lx-pulse-soft {
+  0%, 100% {
+    opacity: 0.6;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.15);
+  }
+}
+
+@keyframes lx-glow-pulse {
+  0%, 100% {
+    box-shadow:
+      0 0 4px var(--lx-primary-dim),
+      0 0 12px rgba(0, 120, 212, 0.04);
+  }
+  50% {
+    box-shadow:
+      0 0 8px var(--lx-primary-glow),
+      0 0 24px rgba(0, 120, 212, 0.18);
+  }
+}
+
+@keyframes lx-spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+@keyframes lx-island-sweep {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(250%);
+  }
+}
+
+@keyframes lx-dropdown-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+  }
+}
+
+/* ── 灵动岛呼吸辉光（硅胶感） ── */
+@keyframes lx-island-glow {
+  0%, 100% {
+    box-shadow:
+      0 4px 24px rgba(0, 0, 0, 0.60),
+      0 0 0 1px rgba(120, 217, 120, 0.04),
+      0 0 16px rgba(120, 217, 120, 0.05);
+  }
+  50% {
+    box-shadow:
+      0 4px 24px rgba(0, 0, 0, 0.60),
+      0 0 0 1px rgba(120, 217, 120, 0.10),
+      0 0 24px rgba(120, 217, 120, 0.12),
+      0 0 48px rgba(120, 217, 120, 0.04);
+  }
+}
+
+.lx-island-capsule {}
+
+.lx-island-glow {
+  animation: lx-island-glow 2.5s ease-in-out infinite;
+}
+
+/* 隐藏滚动条但可滚动 */
+.lx-hide-scrollbar {
+  scrollbar-width: none;
+}
+.lx-hide-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
+.lx-anim-pulse-soft {
+  animation: lx-pulse-soft 2s ease-in-out infinite;
+}
+.lx-anim-glow-pulse {
+  animation: lx-glow-pulse 3s ease-in-out infinite;
+}
+.lx-anim-spin {
+  animation: lx-spin 1s linear infinite;
+}
