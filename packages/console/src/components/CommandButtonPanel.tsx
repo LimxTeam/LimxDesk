@@ -1,43 +1,86 @@
 import { useState, useCallback } from "react";
 
-/* ── 按钮定义 ── */
+/**
+ * 右侧命令/数字按钮面板
+ *
+ * 布局：
+ *  ┌──────────────────┬────────────┬────────────────┐
+ *  │ 左侧：功能按钮    │ 中间：数字  │ 右侧：        │
+ *  │ [On][Off][Sel]  │ 键盘（4列   │ [Please]      │
+ *  │ [Move][Copy]…   │ 严格等宽）  │ [Oops]        │
+ *  │                  │            │ [ESC]         │
+ *  │                  │            │ [Clear]       │
+ *  └──────────────────┴────────────┴────────────────┘
+ */
 
-const COMMAND_BTNS = [
-  "On", "Off", "Move", "Copy", "Delete",
-  "Stomp", "Select", "Goto", "Help", "Align",
+const BTN_HEIGHT = 32;
+const BTN_FONT = 13;
+const GAP = 3;
+
+/** 功能按钮（每行4个） */
+const COMMAND_ROWS = [
+  ["On", "Off", "Select", "Fixture"],
+  ["Move", "Copy", "Delete", "Stomp"],
+  ["Edit", "Update", "", ""],
+  ["Group", "Preset", "Sequence", "Cue"],
 ];
 
-const OBJECT_BTNS = [
-  "Fixture", "Channel", "Group",
-  "Preset", "Sequence", "Cue",
-  "Edit", "Assign", "Time",
-  "Update", "Store",
+/** 数字键盘：严格 4 列 × 5 行，所有格子等宽 */
+const NUMPAD_KEYS = [
+  "7",  "8",  "9",  "+",
+  "4",  "5",  "6",  "Thru",
+  "1",  "2",  "3",  "-",
+  "0",  ".",  "If", "At",
+  "DESK", "/",  "Please", "",
 ];
 
-const NUMPAD_ROWS = [
-  ["7", "8", "9", "+"],
-  ["4", "5", "6", "Thru"],
-  ["1", "2", "3", "-"],
-  ["0", ".", "If", "At"],
-  ["MA", "/"],
-];
+/** 右侧按钮（Store 放最上面） */
+const RIGHT_KEYS = ["Store", "Oops", "ESC", "Clear"];
 
-const AUX_BTNS = [
-  { label: "Oops", warn: true },
-  { label: "ESC", warn: false },
-  { label: "Clear", warn: true },
-];
+// ─── 样式 ───────────────────────────────
 
-/* 固定尺寸 */
-const BTN_H = 28;          // 普通按钮高度
-const BTN_GAP = 4;         // 按钮间距
-const PAD_X = 6;           // 面板水平内边距
-const PAD_Y = 5;           // 面板垂直内边距
-const SECTION_GAP = 5;     // 区域间距
+function btnStyle(warn?: boolean, pressed?: boolean): React.CSSProperties {
+  const base = warn
+    ? "linear-gradient(180deg, #5a2020 0%, #3a1010 100%)"
+    : "linear-gradient(180deg, #3c3c44 0%, #2a2a32 100%)";
+  const active = warn
+    ? "linear-gradient(180deg, #3a1010 0%, #5a2020 100%)"
+    : "linear-gradient(180deg, #2a2a32 0%, #3c3c44 100%)";
+  return {
+    height: BTN_HEIGHT,
+    border: "1px solid var(--lx-stroke)",
+    borderRadius: "var(--lx-radius-xs)",
+    background: pressed ? active : base,
+    color: warn ? "#ff9090" : "var(--lx-fg-primary)",
+    fontWeight: 600,
+    fontSize: BTN_FONT,
+    cursor: "pointer",
+    userSelect: "none" as const,
+    whiteSpace: "nowrap" as const,
+    padding: "0 4px",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+    transition: "background 0.12s, transform 0.12s",
+    boxShadow: pressed
+      ? "0 0 1px rgba(0,0,0,0.5), inset 0 1px 2px rgba(0,0,0,0.3)"
+      : "0 1px 2px rgba(0,0,0,0.35), inset 0 1px 0 rgba(255,255,255,0.04)",
+    fontFamily: "inherit",
+    transform: pressed ? "translateY(1px)" : undefined,
+  };
+}
 
-/* ── 组件 ── */
+function isOp(key: string) {
+  return ["+", "Thru", "-", "At", "/"].includes(key);
+}
 
-interface CommandButtonPanelProps {
+function isWarn(key: string) {
+  return ["Off", "Delete", "Oops", "Clear"].includes(key);
+}
+
+// ─── 组件 ─────────────────────────────────
+
+export interface CommandButtonPanelProps {
   onButtonPress?: (label: string) => void;
 }
 
@@ -46,239 +89,116 @@ export function CommandButtonPanel({ onButtonPress }: CommandButtonPanelProps) {
 
   const handlePress = useCallback(
     (label: string) => {
+      if (!label) return;
       setPressed(label);
       onButtonPress?.(label);
       setTimeout(() => setPressed(null), 120);
     },
-    [onButtonPress]
+    [onButtonPress],
   );
+
+  const renderBtn = (label: string, styleOverrides?: React.CSSProperties) => {
+    if (!label) return <div key={`ph-${Math.random()}`} style={{ visibility: "hidden" }} />;
+    const isPlease = label === "Please";
+    const warn = isWarn(label);
+    const op = isOp(label);
+    return (
+      <button
+        key={label}
+        onClick={() => handlePress(label)}
+        style={{
+          ...btnStyle(warn || op, pressed === label),
+          fontFamily: /^[0-9.]$/.test(label)
+            ? '"Fira Code", monospace'
+            : undefined,
+          fontWeight: op ? 700 : isPlease ? 700 : 600,
+          fontSize: /^[0-9]$/.test(label) ? BTN_FONT + 1 : BTN_FONT,
+          ...(isPlease
+            ? {
+                background:
+                  pressed === "Please"
+                    ? "linear-gradient(180deg, #7a5a00 0%, #b07e00 100%)"
+                    : "linear-gradient(180deg, #b07e00 0%, #7a5a00 100%)",
+                color: "#000",
+                letterSpacing: 1,
+              }
+            : {}),
+          ...styleOverrides,
+        }}
+      >
+        {label}
+      </button>
+    );
+  };
 
   return (
     <div
       style={{
+        width: 540,
+        height: "100%",
         display: "flex",
         flexDirection: "column",
-        gap: SECTION_GAP,
-        padding: `${PAD_Y}px ${PAD_X}px`,
-        flexShrink: 0,
-        width: "100%",
+        padding: "4px 6px",
+        gap: GAP,
+        overflow: "hidden",
         boxSizing: "border-box",
       }}
     >
-      {/* ── 命令按钮（5列 × 2行）── */}
-      <div
-        style={{
-          display: "grid",
-          gridTemplateColumns: "repeat(5, 1fr)",
-          gap: `${BTN_GAP}px`,
-          height: BTN_H * 2 + BTN_GAP,
-          flexShrink: 0,
-        }}
-      >
-        {COMMAND_BTNS.map((label) => (
-          <ConsoleButton
-            key={label}
-            label={label}
-            pressed={pressed === label}
-            onPress={() => handlePress(label)}
-          />
-        ))}
-      </div>
-
-      {/* ── 主体：对象按钮 + 数字键盘 + 辅助按钮 ── */}
+      {/* 主体三列 */}
       <div
         style={{
           display: "flex",
-          gap: BTN_GAP + 2,
-          height: BTN_H * 5 + BTN_GAP * 4,
-          flexShrink: 0,
+          flexDirection: "row",
+          gap: 6,
+          flex: 1,
+          minHeight: 0,
+          overflow: "hidden",
         }}
       >
-        {/* 左侧：对象按钮（3列 × 4行） */}
+        {/* 左侧：功能按钮 4列网格 */}
         <div
           style={{
             display: "grid",
-            gridTemplateColumns: "repeat(3, 1fr)",
-            gridTemplateRows: `repeat(4, ${BTN_H}px)`,
-            gap: `${BTN_GAP}px`,
-            width: 170,
+            gridTemplateColumns: "repeat(4, 68px)",
+            gap: GAP,
+            width: 280,
             flexShrink: 0,
+            alignContent: "start",
           }}
         >
-          {OBJECT_BTNS.slice(0, 9).map((label) => (
-            <ConsoleButton
-              key={label}
-              label={label}
-              pressed={pressed === label}
-              onPress={() => handlePress(label)}
-              small
-            />
-          ))}
-          <div style={{ gridColumn: "span 2" }}>
-            <ConsoleButton
-              label="Update"
-              pressed={pressed === "Update"}
-              onPress={() => handlePress("Update")}
-              small
-            />
-          </div>
-          <ConsoleButton
-            label="Store"
-            pressed={pressed === "Store"}
-            onPress={() => handlePress("Store")}
-            small
-          />
+          {COMMAND_ROWS.flat().map((label) => renderBtn(label))}
         </div>
 
-        {/* 中间：数字键盘（4列 × 5行） */}
+        {/* 中间：数字键盘 — 严格 4 列等宽 */}
         <div
           style={{
             display: "grid",
             gridTemplateColumns: "repeat(4, 1fr)",
-            gridTemplateRows: `repeat(5, ${BTN_H}px)`,
-            gap: `${BTN_GAP}px`,
+            gap: GAP,
             flex: 1,
             minWidth: 0,
           }}
         >
-          {NUMPAD_ROWS.map((row, ri) =>
-            row.map((label, ci) => {
-              const isWide = label === "MA";
-              return (
-                <div
-                  key={`${ri}-${ci}`}
-                  style={isWide ? { gridColumn: "span 2" } : undefined}
-                >
-                  <ConsoleButton
-                    label={label}
-                    pressed={pressed === label}
-                    onPress={() => handlePress(label)}
-                    small
-                    mono={!isNaN(Number(label)) || label === "."}
-                  />
-                </div>
-              );
-            })
-          )}
+          {NUMPAD_KEYS.map((key) => renderBtn(key))}
         </div>
 
-        {/* 右侧：辅助按钮（垂直分布） */}
+        {/* 右侧：Please + Oops + ESC + Clear 垂直排列 */}
         <div
           style={{
             display: "flex",
             flexDirection: "column",
-            gap: BTN_GAP,
-            width: 65,
+            gap: GAP,
+            width: 72,
             flexShrink: 0,
           }}
         >
-          {AUX_BTNS.map((btn) => (
-            <ConsoleButton
-              key={btn.label}
-              label={btn.label}
-              pressed={pressed === btn.label}
-              onPress={() => handlePress(btn.label)}
-              warn={btn.warn}
-              small
-            />
+          {RIGHT_KEYS.map((label) => (
+            <div key={label} style={{ flex: 1 }}>
+              {renderBtn(label)}
+            </div>
           ))}
         </div>
       </div>
-
-      {/* ── 底部：Please 按钮 ── */}
-      <div style={{ height: BTN_H + 4, flexShrink: 0 }}>
-        <ConsoleButton
-          label="Please"
-          pressed={pressed === "Please"}
-          onPress={() => handlePress("Please")}
-          highlight
-        />
-      </div>
     </div>
-  );
-}
-
-/* ─────────────────────────────────────────────── */
-
-interface ConsoleButtonProps {
-  label: string;
-  pressed?: boolean;
-  onPress: () => void;
-  highlight?: boolean;
-  warn?: boolean;
-  small?: boolean;
-  mono?: boolean;
-}
-
-function ConsoleButton({
-  label,
-  pressed,
-  onPress,
-  highlight,
-  warn,
-  small,
-  mono,
-}: ConsoleButtonProps) {
-  const isPressed = pressed;
-
-  const bg = highlight
-    ? isPressed
-      ? "#c47a00"
-      : "#b87400"
-    : warn
-    ? isPressed
-      ? "#8a1c1c"
-      : "#6e1717"
-    : isPressed
-    ? "#2a2a30"
-    : "#32323a";
-
-  const borderColor = highlight
-    ? "rgba(255,180,40,0.35)"
-    : warn
-    ? "rgba(220,60,60,0.3)"
-    : "rgba(255,255,255,0.08)";
-
-  const textColor = highlight
-    ? "#fff"
-    : warn
-    ? "#ff8888"
-    : "var(--lx-fg-primary, #ddd)";
-
-  return (
-    <button
-      onMouseDown={(e) => {
-        e.preventDefault();
-        onPress();
-      }}
-      style={{
-        width: "100%",
-        height: "100%",
-        borderRadius: "var(--lx-radius-xs, 3px)",
-        border: `1px solid ${borderColor}`,
-        background: bg,
-        color: textColor,
-        fontSize: small ? 11 : 12,
-        fontWeight: mono ? 700 : 600,
-        fontFamily: mono
-          ? '"SF Mono", "Fira Code", "JetBrains Mono", monospace'
-          : "inherit",
-        cursor: "pointer",
-        userSelect: "none",
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "center",
-        transition: "background 0.05s, transform 0.05s",
-        transform: isPressed ? "translateY(1px)" : "none",
-        letterSpacing: "0.02em",
-        padding: "0 4px",
-        whiteSpace: "nowrap",
-        overflow: "hidden",
-        textOverflow: "ellipsis",
-        lineHeight: 1,
-      }}
-    >
-      {label}
-    </button>
   );
 }
