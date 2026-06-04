@@ -9,6 +9,8 @@ interface BigEncoderWheelProps {
   rotation?: number;
   /** 旋转角度变化回调 */
   onRotationChange?: (deg: number) => void;
+  /** 编码器增量回调。正数为顺时针，负数为逆时针。 */
+  onRotationDelta?: (delta: number) => void;
   /** 编码器直径（px） */
   size?: number;
 }
@@ -18,6 +20,7 @@ export function BigEncoderWheel({
   value = "100%",
   rotation: controlledRotation,
   onRotationChange,
+  onRotationDelta,
   size = 144,
 }: BigEncoderWheelProps) {
   const [internalRotation, setInternalRotation] = useState(-30);
@@ -69,17 +72,19 @@ export function BigEncoderWheel({
   /** 更新旋转角度 */
   const updateRotation = useCallback(
     (next: number) => {
-      const normalized = ((next % 360) + 360) % 360;
-      liveRotation.current = normalized;
+      const previous = liveRotation.current;
+      const delta = next - previous;
+      liveRotation.current = next;
 
       if (frame.current !== null) cancelAnimationFrame(frame.current);
       frame.current = requestAnimationFrame(() => {
-        setInternalRotation(normalized);
-        onRotationChange?.(normalized);
+        setInternalRotation(next);
+        onRotationChange?.(next);
+        onRotationDelta?.(delta);
         frame.current = null;
       });
     },
-    [onRotationChange]
+    [onRotationChange, onRotationDelta]
   );
 
   /** 指针按下：开始拖动 */

@@ -178,7 +178,7 @@ export function ControlPanel() {
         const nextSelectedId = event.payload.primaryFixtureId ?? "";
         selectedFixtureIdRef.current = nextSelectedId;
         setSelectedFixtureId(nextSelectedId);
-        if (!fixturesRef.current.some((fixture) => fixture.id === nextSelectedId)) {
+        if (!fixturesRef.current.some((fixture) => fixture.id === parentFixtureId(nextSelectedId))) {
           void refreshRuntimeData(event.payload);
         }
       });
@@ -308,9 +308,10 @@ export function ControlPanel() {
     }));
   }
 
-  function handleEncoderRotation(encoder: EncoderParam, rotation: number) {
+  function handleEncoderDelta(encoder: EncoderParam, delta: number) {
     if (!selectedFixtureIdRef.current || !encoder.attribute || !encoder.featureGroup || !encoder.layer) return;
-    const value = deriveProgrammerValue(encoder.attribute, rotation);
+    const current = resolveProgrammerNumeric(programmer, selectedFixtureIdRef.current, encoder.attribute);
+    const value = deriveProgrammerValue(encoder.attribute, current, delta);
     void invoke<Programmer>("programmer_set_attribute_for_selection", {
       request: {
         attribute: encoder.attribute,
@@ -402,7 +403,7 @@ export function ControlPanel() {
                   key={`${info.name}-${enc.name}-${currentPage}-${i}`}
                   paramName={enc.name}
                   value={enc.value}
-                  onRotationChange={(rotation) => handleEncoderRotation(enc, rotation)}
+                  onRotationDelta={(delta) => handleEncoderDelta(enc, delta)}
                 />
               ))
             ) : (
@@ -554,6 +555,18 @@ function resolveProgrammerValue(programmer: Programmer, fixtureId: string, attri
   return formatProgrammerScalar(match.value, attribute);
 }
 
+function resolveProgrammerNumeric(programmer: Programmer, fixtureId: string, attribute: string) {
+  const buffer = programmer.mode === "preview" ? programmer.preview : programmer.live;
+  const values = buffer.parts.flatMap((part) => part.values);
+  const match = values.find(
+    (value) => value.fixtureId === fixtureId && value.attribute === attribute && value.active,
+  );
+  if (typeof match?.value.numeric === "number" && Number.isFinite(match.value.numeric)) {
+    return match.value.numeric;
+  }
+  return defaultAttributeNumeric(attribute);
+}
+
 function formatProgrammerScalar(value: ProgrammerScalar, attribute: string) {
   if (value.text && value.text.trim()) return value.text;
   if (typeof value.numeric === "number" && Number.isFinite(value.numeric)) {
@@ -600,23 +613,35 @@ function buildAttributeTabs(pageInfo: Record<string, EncoderGroup>): AttributeTa
   return tabs;
 }
 
-function deriveProgrammerValue(attribute: string, rotation: number): ProgrammerScalar {
+function deriveProgrammerValue(attribute: string, current: number, delta: number): ProgrammerScalar {
   const lower = attribute.toLowerCase();
   if (lower.includes("pan") || lower.includes("tilt") || lower.includes("rotate") || lower.includes("rot")) {
-    const value = rotation - 180;
+    const value = clamp(current + delta * 0.5, -180, 180);
     return {
       numeric: value,
       text: `${value.toFixed(1)}°`,
     };
   }
 
-  const percent = Math.max(0, Math.min(100, Math.round((rotation / 360) * 100)));
+  const percent = clamp(current + delta / 3.6, 0, 100);
   return {
-    numeric: percent,
-    text: `${percent}%`,
+    numeric: Math.round(percent),
+    text: `${Math.round(percent)}%`,
   };
 }
 
 function titleCase(value: string) {
   return value.charAt(0).toUpperCase() + value.slice(1);
+}
+
+function defaultAttributeNumeric(attribute: string) {
+  const lower = attribute.toLowerCase();
+  if (lower.includes("pan") || lower.includes("tilt") || lower.includes("rotate") || lower.includes("rot")) {
+    return 0;
+  }
+  return 0;
+}
+
+function clamp(value: number, min: number, max: number) {
+  return Math.min(max, Math.max(min, value));
 }
