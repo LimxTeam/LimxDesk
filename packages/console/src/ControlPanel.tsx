@@ -68,6 +68,7 @@ interface Programmer {
   preview: ProgrammerBuffer;
   mode: ProgrammerMode;
   blind: boolean;
+  selection?: ProgrammerSelectionContext;
   version: number;
 }
 
@@ -95,6 +96,14 @@ interface ProgrammerValue {
 interface ProgrammerScalar {
   numeric: number | null;
   text: string | null;
+}
+
+interface ProgrammerSelectionContext {
+  order: Array<{
+    fixtureId: string;
+    orderIndex: number;
+  }>;
+  primaryFixtureId: string | null;
 }
 
 type ProgrammerMode = "live" | "preview";
@@ -179,6 +188,7 @@ export function ControlPanel() {
     version: 0,
   });
   const selectedFixtureIdRef = useRef("");
+  const fixturesRef = useRef<PatchFixture[]>([]);
 
   useEffect(() => {
     void refreshRuntimeData();
@@ -194,6 +204,9 @@ export function ControlPanel() {
         const nextSelectedId = event.payload.primaryFixtureId ?? "";
         selectedFixtureIdRef.current = nextSelectedId;
         setSelectedFixtureId(nextSelectedId);
+        if (!fixturesRef.current.some((fixture) => fixture.id === nextSelectedId)) {
+          void refreshRuntimeData(event.payload);
+        }
       });
       const programmerChanged = await listen<Programmer>("programmer:changed", (event) => {
         setProgrammer(event.payload);
@@ -208,6 +221,7 @@ export function ControlPanel() {
         void refreshRuntimeData();
       });
       const showDeleted = await listen("show:deleted", () => {
+        fixturesRef.current = [];
         setFixtures([]);
         setFixtureTypes([]);
         selectedFixtureIdRef.current = "";
@@ -261,7 +275,7 @@ export function ControlPanel() {
     selectedFixtureIdRef.current = selectedFixtureId;
   }, [selectedFixtureId]);
 
-  async function refreshRuntimeData() {
+  async function refreshRuntimeData(selectionOverride?: FixtureSelection) {
     try {
       const [document, types, currentSelection, currentProgrammer] = await Promise.all([
         invoke<PatchDocument | null>("patch_load_current_show"),
@@ -270,14 +284,17 @@ export function ControlPanel() {
         invoke<Programmer>("programmer_get"),
       ]);
       const nextFixtures = document?.fixtures ?? [];
+      const nextSelection = selectionOverride ?? currentSelection;
+      fixturesRef.current = nextFixtures;
       setFixtures(nextFixtures);
       setFixtureTypes(types);
-      setSelection(currentSelection);
+      setSelection(nextSelection);
       setProgrammer(currentProgrammer);
-      const nextSelectedId = resolveSelectedFixtureId(currentSelection, nextFixtures);
+      const nextSelectedId = resolveSelectedFixtureId(nextSelection, nextFixtures);
       selectedFixtureIdRef.current = nextSelectedId;
       setSelectedFixtureId(nextSelectedId);
     } catch {
+      fixturesRef.current = [];
       setFixtures([]);
       setFixtureTypes([]);
       selectedFixtureIdRef.current = "";
@@ -433,13 +450,20 @@ function buildPageInfo(
     encoders: [
       { name: "FID", value: String(fixture.fid) },
       { name: "Fixture", value: fixture.name },
+      { name: "Selected", value: String(programmer.selection?.order.length ?? 1) },
       { name: "Mode", value: fixture.modeName },
-      { name: "Patch", value: formatPatch(fixture) },
     ],
   };
 
-  const fixtureType = fixtureTypes.find((item) => item.path === fixture.fixtureTypePath);
-  const mode = fixtureType?.modes.find((item) => item.id === fixture.modeId);
+  const fixtureType = fixtureTypes.find(
+    (item) =>
+      item.path === fixture.fixtureTypePath ||
+      item.id === fixture.fixtureTypeId ||
+      `${item.manufacturer} ${item.name}`.trim() === fixture.fixtureTypeName,
+  );
+  const mode =
+    fixtureType?.modes.find((item) => item.id === fixture.modeId) ??
+    fixtureType?.modes.find((item) => item.name === fixture.modeName);
   if (!mode) return groups;
 
   const dynamicGroups = groupAttributes(mode.attributes, fixture, programmer);
@@ -570,11 +594,6 @@ function deriveProgrammerValue(attribute: string, rotation: number): ProgrammerS
     numeric: percent,
     text: `${percent}%`,
   };
-}
-
-function formatPatch(fixture: PatchFixture) {
-  if (fixture.universe === null || fixture.address === null) return "-";
-  return `${fixture.universe}.${String(fixture.address).padStart(3, "0")}`;
 }
 
 function titleCase(value: string) {

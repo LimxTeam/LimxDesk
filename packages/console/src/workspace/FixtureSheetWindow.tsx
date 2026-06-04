@@ -31,7 +31,9 @@ interface FixtureSelection {
 
 export function FixtureSheetWindow() {
   const [fixtures, setFixtures] = useState<PatchFixture[]>([]);
-  const [selectedId, setSelectedId] = useState("");
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
+  const [primaryId, setPrimaryId] = useState("");
+  const [anchorId, setAnchorId] = useState("");
   const [query, setQuery] = useState("");
   const [status, setStatus] = useState("Ready");
 
@@ -63,13 +65,16 @@ export function FixtureSheetWindow() {
       });
       const showDeleted = await listen("show:deleted", () => {
         setFixtures([]);
-        setSelectedId("");
+        setSelectedIds([]);
+        setPrimaryId("");
+        setAnchorId("");
         setStatus("No show loaded");
       });
       const selectionChanged = await listen<FixtureSelection>(
         "fixture-selection:changed",
         (event) => {
-          setSelectedId(event.payload.primaryFixtureId ?? "");
+          setSelectedIds(event.payload.fixtureIds);
+          setPrimaryId(event.payload.primaryFixtureId ?? "");
         },
       );
 
@@ -95,11 +100,15 @@ export function FixtureSheetWindow() {
       const document = await invoke<PatchDocument | null>("patch_load_current_show");
       const nextFixtures = document?.fixtures ?? [];
       setFixtures(nextFixtures);
-      setSelectedId((current) => (nextFixtures.some((fixture) => fixture.id === current) ? current : ""));
+      setSelectedIds((current) => current.filter((id) => nextFixtures.some((fixture) => fixture.id === id)));
+      setPrimaryId((current) => (nextFixtures.some((fixture) => fixture.id === current) ? current : ""));
+      setAnchorId((current) => (nextFixtures.some((fixture) => fixture.id === current) ? current : ""));
       setStatus(`${nextFixtures.length} fixture${nextFixtures.length === 1 ? "" : "s"}`);
     } catch {
       setFixtures([]);
-      setSelectedId("");
+      setSelectedIds([]);
+      setPrimaryId("");
+      setAnchorId("");
       setStatus("No show loaded");
     }
   }
@@ -107,18 +116,38 @@ export function FixtureSheetWindow() {
   async function loadSelection() {
     try {
       const selection = await invoke<FixtureSelection>("fixture_selection_get");
-      setSelectedId(selection.primaryFixtureId ?? "");
+      setSelectedIds(selection.fixtureIds);
+      setPrimaryId(selection.primaryFixtureId ?? "");
+      setAnchorId(selection.primaryFixtureId ?? "");
     } catch {
-      setSelectedId("");
+      setSelectedIds([]);
+      setPrimaryId("");
+      setAnchorId("");
     }
   }
 
-  function selectFixture(fixture: PatchFixture) {
-    setSelectedId(fixture.id);
+  function selectFixture(event: React.MouseEvent<HTMLTableRowElement>, fixture: PatchFixture) {
+    const additive = event.ctrlKey || event.metaKey;
+    const range = event.shiftKey && anchorId;
+    const mode = range ? (additive ? "add" : "replace") : additive ? "toggle" : "replace";
+    const fixtureIds = range ? getRangeFixtureIds(visibleFixtures, anchorId, fixture.id) : [fixture.id];
+
+    setAnchorId(fixture.id);
+    setPrimaryId(fixture.id);
+    setSelectedIds((current) => {
+      if (range) return mergeUnique(additive ? current : [], fixtureIds);
+      if (additive) {
+        return current.includes(fixture.id)
+          ? current.filter((id) => id !== fixture.id)
+          : [...current, fixture.id];
+      }
+      return [fixture.id];
+    });
+
     void invoke("fixture_selection_select", {
-      fixtureIds: [fixture.id],
+      fixtureIds,
       primaryFixtureId: fixture.id,
-      mode: "replace",
+      mode,
     });
   }
 
@@ -198,14 +227,19 @@ export function FixtureSheetWindow() {
           </thead>
           <tbody>
             {visibleFixtures.map((fixture) => {
-              const selected = fixture.id === selectedId;
+              const selected = selectedIds.includes(fixture.id);
+              const primary = fixture.id === primaryId;
               return (
                 <tr
                   key={fixture.id}
-                  onClick={() => selectFixture(fixture)}
+                  onClick={(event) => selectFixture(event, fixture)}
                   style={{
                     height: 28,
-                    background: selected ? "rgba(77, 163, 245, 0.18)" : "transparent",
+                    background: primary
+                      ? "rgba(240, 157, 28, 0.18)"
+                      : selected
+                        ? "rgba(77, 163, 245, 0.18)"
+                        : "transparent",
                     color: selected ? "var(--lx-fg-primary)" : "var(--lx-fg-secondary)",
                     cursor: "pointer",
                   }}
@@ -254,10 +288,27 @@ export function FixtureSheetWindow() {
         }}
       >
         <span>{status}</span>
-        <span>{selectedId ? "Selection linked to encoders" : "No selection"}</span>
+        <span>{selectedIds.length > 0 ? `${selectedIds.length} selected` : "No selection"}</span>
       </div>
     </div>
   );
+}
+
+function getRangeFixtureIds(fixtures: PatchFixture[], anchorId: string, targetId: string) {
+  const anchorIndex = fixtures.findIndex((fixture) => fixture.id === anchorId);
+  const targetIndex = fixtures.findIndex((fixture) => fixture.id === targetId);
+  if (anchorIndex < 0 || targetIndex < 0) return [targetId];
+  const start = Math.min(anchorIndex, targetIndex);
+  const end = Math.max(anchorIndex, targetIndex);
+  return fixtures.slice(start, end + 1).map((fixture) => fixture.id);
+}
+
+function mergeUnique(left: string[], right: string[]) {
+  const merged = [...left];
+  for (const item of right) {
+    if (!merged.includes(item)) merged.push(item);
+  }
+  return merged;
 }
 
 function HeaderCell({ children, width }: { children: React.ReactNode; width?: number }) {
