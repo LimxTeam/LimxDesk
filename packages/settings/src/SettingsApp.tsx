@@ -1,71 +1,70 @@
-import { Titlebar } from "@limxdesk/shell";
+import { WindowChrome } from "@limxdesk/shell";
 import { useState } from "react";
-import { Cable, LibraryBig } from "lucide-react";
+import { LibraryBig, PlugZap } from "lucide-react";
 import { ConnectivitySettingsPage } from "./pages/ConnectivitySettingsPage";
 import { FixtureTypesSettingsPage } from "./pages/FixtureTypesSettingsPage";
 import type { SettingsSection, SettingsSectionId } from "./types";
 
 const SECTIONS: SettingsSection[] = [
-  { id: "connectivity", label: "配接", caption: "网络、协议、适配器" },
-  { id: "fixture-types", label: "灯具类型", caption: "库、模板、校验" },
+  { id: "patch", label: "配接", caption: "灯具、地址、舞台" },
+  { id: "fixture-types", label: "灯具类型", caption: "资料库、模式、通道" },
 ];
 
 const SECTION_ICONS = {
-  connectivity: Cable,
+  patch: PlugZap,
   "fixture-types": LibraryBig,
-} satisfies Record<SettingsSectionId, typeof Cable>;
+} satisfies Record<SettingsSectionId, typeof PlugZap>;
 
 export function SettingsApp() {
   const [activeSection, setActiveSection] =
-    useState<SettingsSectionId>("connectivity");
+    useState<SettingsSectionId>("patch");
 
   const section = SECTIONS.find((item) => item.id === activeSection) ?? SECTIONS[0];
 
   return (
-    <div className="flex h-screen w-screen flex-col">
-      <Titlebar hasActiveProject={false} projectName="Settings" />
-
+    <WindowChrome title="LimxDesk 设置" subtitle={section.label}>
       <div
         style={{
           display: "grid",
-          gridTemplateColumns: "260px minmax(0, 1fr)",
-          minHeight: 0,
-          flex: 1,
-          background: "linear-gradient(180deg, #121212 0%, #17181d 100%)",
+          width: "100%",
+          height: "100%",
+          gridTemplateColumns: "244px minmax(0, 1fr)",
+          background:
+            "linear-gradient(180deg, rgba(15,15,17,0.98), rgba(20,21,25,0.98))",
         }}
       >
         <aside
           style={{
             display: "flex",
             flexDirection: "column",
-            gap: 14,
-            padding: 18,
+            gap: 16,
+            padding: "18px 14px",
             borderRight: "1px solid var(--lx-stroke)",
             background:
-              "linear-gradient(180deg, rgba(18, 18, 20, 0.98), rgba(24, 25, 31, 0.98))",
+              "linear-gradient(180deg, rgba(28, 28, 30, 0.98), rgba(18, 18, 20, 0.98))",
           }}
         >
-          <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+          <div style={{ display: "flex", flexDirection: "column", gap: 7, padding: "0 4px" }}>
             <span
               style={{
-                color: "var(--lx-primary-bright)",
+                color: "var(--lx-accent-bright)",
                 fontSize: 10,
                 fontWeight: 700,
                 letterSpacing: "0.18em",
                 textTransform: "uppercase",
               }}
             >
-              LimxDesk Settings
+              Setup
             </span>
             <h1
               style={{
                 margin: 0,
                 color: "var(--lx-fg-primary)",
-                fontSize: 26,
+                fontSize: 23,
                 lineHeight: 1,
               }}
             >
-              System Setup
+              控台设置
             </h1>
             <p
               style={{
@@ -75,7 +74,7 @@ export function SettingsApp() {
                 fontSize: 12,
               }}
             >
-              独立窗口，面向真实部署、灯具库和连接策略的常规软件设置界面。
+              管理 show 文件里的配接、灯具资料和基础配置。
             </p>
           </div>
 
@@ -91,7 +90,7 @@ export function SettingsApp() {
                   onClick={() => setActiveSection(item.id)}
                   style={{
                     display: "flex",
-                    alignItems: "flex-start",
+                    alignItems: "center",
                     gap: 12,
                     padding: "12px 14px",
                     borderRadius: "var(--lx-radius-md)",
@@ -138,11 +137,12 @@ export function SettingsApp() {
         <main
           style={{
             minWidth: 0,
+            minHeight: 0,
             overflow: "auto",
-            padding: 20,
+            padding: 18,
             display: "flex",
             flexDirection: "column",
-            gap: 16,
+            gap: 14,
           }}
         >
           <div
@@ -167,13 +167,13 @@ export function SettingsApp() {
             <span className="lx-badge lx-badge-info">UI Draft</span>
           </div>
 
-          {activeSection === "connectivity" ? (
+          {activeSection === "patch" ? (
             <ConnectivitySettingsPage />
           ) : (
             <FixtureTypesSettingsPage />
           )}
         </main>
       </div>
-    </div>
+    </WindowChrome>
   );
 }

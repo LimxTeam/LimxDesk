@@ -1,4 +1,4 @@
-export type SettingsSectionId = "connectivity" | "fixture-types";
+export type SettingsSectionId = "patch" | "fixture-types";
 
 export interface SettingsSection {
   id: SettingsSectionId;

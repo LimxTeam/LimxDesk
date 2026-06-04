@@ -1,253 +1,334 @@
-const FIXTURE_FAMILIES = [
-  { name: "Beam / Spot Hybrid", manufacturer: "Robe", mode: "56 ch", profile: "Loaded" },
-  { name: "LED Wash XL", manufacturer: "Martin", mode: "32 ch", profile: "Draft" },
-  { name: "Pixel Strobe Bar", manufacturer: "GLP", mode: "120 ch", profile: "Validated" },
-  { name: "Followspot Remote", manufacturer: "Arri", mode: "28 ch", profile: "Loaded" },
+import { Copy, FilePlus2, Import, Pencil, Search, ShieldCheck, Trash2 } from "lucide-react";
+
+const FIXTURE_TYPES = [
+  {
+    name: "Ayrton Diablo S",
+    manufacturer: "Ayrton",
+    modes: "3",
+    channels: "38-54",
+    source: "Library",
+    used: "42",
+    state: "Ready",
+  },
+  {
+    name: "Robe Pointe",
+    manufacturer: "Robe",
+    modes: "2",
+    channels: "24-30",
+    source: "Library",
+    used: "24",
+    state: "Ready",
+  },
+  {
+    name: "GLP X4 Bar 20",
+    manufacturer: "GLP",
+    modes: "5",
+    channels: "44-88",
+    source: "Custom",
+    used: "12",
+    state: "Edited",
+  },
+  {
+    name: "Generic Dimmer",
+    manufacturer: "Generic",
+    modes: "1",
+    channels: "1",
+    source: "System",
+    used: "36",
+    state: "Locked",
+  },
 ];
 
-const TEMPLATE_BLOCKS = [
-  { title: "Attribute Schema", body: "Color wheels, additive engines, pan/tilt, beam, shutters, and virtual dimmer stacks." },
-  { title: "Physical Metadata", body: "Lens angle, weight, power draw, mounting style, yoke limits, and safety offsets." },
-  { title: "Visualization", body: "Emitter geometry, beam cone presets, gobos, media layers, and stage proxy meshes." },
+const MODES = [
+  { name: "Standard", channels: 38, attributes: "Dimmer, Position, Color, Beam" },
+  { name: "Extended", channels: 54, attributes: "Standard + Frost, Shaper, Prism" },
+  { name: "Compact", channels: 24, attributes: "Dimmer, Position, Color" },
+];
+
+const ATTRIBUTE_GROUPS = [
+  { group: "Dimmer", count: 2, page: "Dimmer 1 of 1" },
+  { group: "Position", count: 6, page: "Position 1 of 2" },
+  { group: "Color", count: 14, page: "Color 1 of 4" },
+  { group: "Beam", count: 9, page: "Beam 1 of 3" },
 ];
 
 export function FixtureTypesSettingsPage() {
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
+    <div style={{ display: "grid", minHeight: 0, gap: 14 }}>
       <section
-        className="lx-panel-glow"
         style={{
-          padding: 18,
           display: "grid",
-          gridTemplateColumns: "1fr 360px",
-          gap: 18,
+          gridTemplateColumns: "minmax(0, 1fr) 350px",
+          gap: 14,
         }}
       >
-        <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-          <span
-            style={{
-              color: "var(--lx-accent-bright)",
-              fontSize: 10,
-              fontWeight: 700,
-              letterSpacing: "0.18em",
-              textTransform: "uppercase",
-            }}
-          >
-            Fixture Types
-          </span>
-          <h2
-            style={{
-              margin: 0,
-              fontSize: 26,
-              lineHeight: 1.05,
-              color: "var(--lx-fg-primary)",
-            }}
-          >
-            Design the fixture library like a real show-system taxonomy.
-          </h2>
-          <p
-            style={{
-              margin: 0,
-              maxWidth: 680,
-              color: "var(--lx-fg-secondary)",
-              fontSize: 13,
-              lineHeight: 1.6,
-            }}
-          >
-            This page is where the operator curates fixture templates, channel
-            layouts, and visualization metadata. It should support both clean
-            stock libraries and aggressive custom type authoring.
-          </p>
+        <div className="lx-panel" style={{ overflow: "hidden" }}>
+          <FixtureToolbar />
+          <FixtureTypeTable />
         </div>
 
-        <div
-          style={{
-            display: "grid",
-            gap: 10,
-            gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
-          }}
-        >
-          {[
-            { label: "Library Count", value: "148 Types" },
-            { label: "Custom Types", value: "26 Edited" },
-            { label: "Visual Profiles", value: "91 Synced" },
-            { label: "Template Drift", value: "2 Warnings" },
-          ].map((item) => (
-            <div
-              key={item.label}
-              className="lx-panel"
-              style={{
-                padding: 14,
-                background:
-                  "linear-gradient(180deg, rgba(18, 18, 24, 0.92), rgba(10, 10, 14, 0.98))",
-              }}
-            >
-              <div
-                style={{
-                  color: "var(--lx-fg-tertiary)",
-                  fontSize: 10,
-                  fontWeight: 700,
-                  letterSpacing: "0.1em",
-                  textTransform: "uppercase",
-                  marginBottom: 8,
-                }}
-              >
-                {item.label}
-              </div>
-              <div style={{ color: "var(--lx-fg-primary)", fontWeight: 700, fontSize: 18 }}>
-                {item.value}
-              </div>
-            </div>
-          ))}
-        </div>
+        <TypeInspector />
       </section>
 
       <section
         style={{
           display: "grid",
-          gridTemplateColumns: "minmax(0, 1.12fr) minmax(320px, 0.88fr)",
-          gap: 16,
+          gridTemplateColumns: "minmax(0, 0.95fr) minmax(320px, 0.75fr)",
+          gap: 14,
         }}
       >
-        <div className="lx-panel" style={{ overflow: "hidden" }}>
-          <div className="lx-panel-header">
-            <span>Fixture Type Library</span>
-            <span style={{ fontFamily: "var(--lx-font-mono)" }}>Authoring Mode</span>
-          </div>
-
-          <div style={{ display: "flex", flexDirection: "column" }}>
-            {FIXTURE_FAMILIES.map((row) => (
-              <div
-                key={`${row.name}-${row.mode}`}
-                className="lx-table-row"
-                style={{
-                  display: "grid",
-                  gridTemplateColumns: "1.3fr 0.8fr 0.6fr 0.6fr",
-                  height: 46,
-                  alignItems: "center",
-                }}
-              >
-                <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
-                  <span style={{ color: "var(--lx-fg-primary)", fontWeight: 600 }}>
-                    {row.name}
-                  </span>
-                  <span style={{ color: "var(--lx-fg-tertiary)", fontSize: 10 }}>
-                    Template family / personality mapping
-                  </span>
-                </div>
-                <span>{row.manufacturer}</span>
-                <span className="lx-code">{row.mode}</span>
-                <span
-                  className={`lx-badge ${
-                    row.profile === "Validated"
-                      ? "lx-badge-success"
-                      : row.profile === "Draft"
-                        ? "lx-badge-warn"
-                        : "lx-badge-info"
-                  }`}
-                >
-                  {row.profile}
-                </span>
-              </div>
-            ))}
-          </div>
-        </div>
-
-        <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-          <div className="lx-panel" style={{ padding: 16 }}>
-            <div
-              style={{
-                color: "var(--lx-fg-primary)",
-                fontSize: 14,
-                fontWeight: 700,
-                marginBottom: 12,
-              }}
-            >
-              Type Builder Blocks
-            </div>
-            <div style={{ display: "grid", gap: 10 }}>
-              {TEMPLATE_BLOCKS.map((block) => (
-                <div
-                  key={block.title}
-                  style={{
-                    padding: "12px 14px",
-                    borderRadius: "var(--lx-radius-sm)",
-                    border: "1px solid var(--lx-stroke)",
-                    background: "rgba(255,255,255,0.02)",
-                  }}
-                >
-                  <div
-                    style={{
-                      color: "var(--lx-fg-primary)",
-                      fontWeight: 700,
-                      marginBottom: 6,
-                    }}
-                  >
-                    {block.title}
-                  </div>
-                  <div style={{ color: "var(--lx-fg-secondary)", lineHeight: 1.5 }}>
-                    {block.body}
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-
-          <div className="lx-panel" style={{ padding: 16 }}>
-            <div
-              style={{
-                color: "var(--lx-fg-primary)",
-                fontSize: 14,
-                fontWeight: 700,
-                marginBottom: 12,
-              }}
-            >
-              Validation Pipeline
-            </div>
-            <div style={{ display: "grid", gap: 10 }}>
-              {[
-                "DMX channel map matches imported profile personality.",
-                "Visualization emitters align with beam origin and lens size.",
-                "Default encoder pages group attributes for operator speed.",
-              ].map((item, index) => (
-                <div
-                  key={item}
-                  style={{
-                    display: "flex",
-                    alignItems: "flex-start",
-                    gap: 10,
-                    padding: "10px 12px",
-                    borderRadius: "var(--lx-radius-sm)",
-                    background: "var(--lx-bg-deep)",
-                    border: "1px solid var(--lx-stroke)",
-                  }}
-                >
-                  <span
-                    style={{
-                      width: 18,
-                      height: 18,
-                      flexShrink: 0,
-                      borderRadius: "50%",
-                      background: index === 2 ? "var(--lx-accent-fill)" : "var(--lx-primary-dim)",
-                      color: index === 2 ? "var(--lx-accent-bright)" : "var(--lx-primary-bright)",
-                      display: "inline-flex",
-                      alignItems: "center",
-                      justifyContent: "center",
-                      fontSize: 10,
-                      fontWeight: 700,
-                    }}
-                  >
-                    {index + 1}
-                  </span>
-                  <span style={{ color: "var(--lx-fg-secondary)", lineHeight: 1.5 }}>
-                    {item}
-                  </span>
-                </div>
-              ))}
-            </div>
-          </div>
-        </div>
+        <ModePanel />
+        <AttributePanel />
       </section>
     </div>
   );
 }
+
+function FixtureToolbar() {
+  return (
+    <div
+      style={{
+        display: "grid",
+        gridTemplateColumns: "minmax(240px, 1fr) auto",
+        gap: 10,
+        alignItems: "center",
+        padding: 10,
+        borderBottom: "1px solid var(--lx-stroke)",
+        background: "var(--lx-bg-deep)",
+      }}
+    >
+      <div
+        style={{
+          display: "flex",
+          height: 30,
+          alignItems: "center",
+          gap: 8,
+          border: "1px solid var(--lx-stroke-strong)",
+          borderRadius: "var(--lx-radius-sm)",
+          background: "rgba(0,0,0,0.24)",
+          padding: "0 9px",
+          color: "var(--lx-fg-tertiary)",
+        }}
+      >
+        <Search size={14} />
+        <span style={{ color: "var(--lx-fg-muted)", fontSize: 11 }}>
+          搜索厂商、型号、模式、通道数量
+        </span>
+      </div>
+
+      <div style={{ display: "flex", gap: 6 }}>
+        <button type="button" className="lx-btn lx-btn-primary">
+          <FilePlus2 size={13} />
+          新建类型
+        </button>
+        <button type="button" className="lx-btn lx-btn-ghost">
+          <Import size={13} />
+          导入 GDTF
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function FixtureTypeTable() {
+  return (
+    <div style={{ minWidth: 760 }}>
+      <div
+        style={{
+          display: "grid",
+          gridTemplateColumns: "1.35fr 0.8fr 62px 90px 82px 62px 84px",
+          height: 34,
+          alignItems: "center",
+          borderBottom: "1px solid rgba(240,157,28,0.35)",
+          background: "rgba(0,0,0,0.22)",
+          color: "var(--lx-fg-secondary)",
+          fontSize: 11,
+          fontWeight: 700,
+          letterSpacing: "0.04em",
+          textTransform: "uppercase",
+        }}
+      >
+        {["Name", "Manufacturer", "Modes", "Channels", "Source", "Used", "State"].map((cell) => (
+          <span key={cell} style={{ padding: "0 9px" }}>
+            {cell}
+          </span>
+        ))}
+      </div>
+
+      {FIXTURE_TYPES.map((row, index) => (
+        <div
+          key={row.name}
+          className="lx-table-row"
+          style={{
+            display: "grid",
+            gridTemplateColumns: "1.35fr 0.8fr 62px 90px 82px 62px 84px",
+            height: 42,
+            alignItems: "center",
+            background: index === 0 ? "rgba(0,120,212,0.10)" : undefined,
+          }}
+        >
+          <span style={{ padding: "0 9px", color: "var(--lx-fg-primary)", fontWeight: 650 }}>
+            {row.name}
+          </span>
+          <span style={{ padding: "0 9px" }}>{row.manufacturer}</span>
+          <span className="lx-code" style={{ padding: "0 9px" }}>
+            {row.modes}
+          </span>
+          <span className="lx-code" style={{ padding: "0 9px" }}>
+            {row.channels}
+          </span>
+          <span style={{ padding: "0 9px" }}>{row.source}</span>
+          <span className="lx-code" style={{ padding: "0 9px" }}>
+            {row.used}
+          </span>
+          <span style={{ padding: "0 9px" }}>
+            <span
+              className={`lx-badge ${
+                row.state === "Ready"
+                  ? "lx-badge-success"
+                  : row.state === "Edited"
+                    ? "lx-badge-warn"
+                    : "lx-badge-default"
+              }`}
+            >
+              {row.state}
+            </span>
+          </span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function TypeInspector() {
+  return (
+    <div className="lx-panel" style={{ padding: 14 }}>
+      <div style={panelTitleStyle}>当前灯具类型</div>
+      <div
+        style={{
+          border: "1px solid var(--lx-primary-trace)",
+          borderRadius: "var(--lx-radius-md)",
+          background: "linear-gradient(180deg, rgba(0,120,212,0.14), rgba(0,0,0,0.18))",
+          padding: 13,
+        }}
+      >
+        <div style={{ color: "var(--lx-fg-primary)", fontSize: 18, fontWeight: 850 }}>
+          Ayrton Diablo S
+        </div>
+        <div style={{ marginTop: 5, color: "var(--lx-fg-tertiary)", fontSize: 11 }}>
+          Manufacturer: Ayrton / Source: Library / Used by 42 fixtures
+        </div>
+      </div>
+
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8, marginTop: 12 }}>
+        {[
+          ["Modes", "3"],
+          ["Max Ch", "54"],
+          ["Attrs", "31"],
+        ].map(([label, value]) => (
+          <div
+            key={label}
+            style={{
+              border: "1px solid var(--lx-stroke)",
+              borderRadius: "var(--lx-radius-sm)",
+              background: "var(--lx-bg-deep)",
+              padding: "9px 10px",
+            }}
+          >
+            <div style={{ color: "var(--lx-fg-tertiary)", fontSize: 10 }}>{label}</div>
+            <div style={{ marginTop: 4, color: "var(--lx-fg-primary)", fontSize: 17, fontWeight: 800 }}>
+              {value}
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <div style={{ display: "flex", gap: 6, marginTop: 12 }}>
+        <button type="button" className="lx-btn lx-btn-sm lx-btn-primary">
+          <Pencil size={11} />
+          编辑
+        </button>
+        <button type="button" className="lx-btn lx-btn-sm lx-btn-ghost">
+          <Copy size={11} />
+          复制
+        </button>
+        <button type="button" className="lx-btn lx-btn-sm lx-btn-ghost">
+          <Trash2 size={11} />
+          删除
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function ModePanel() {
+  return (
+    <div className="lx-panel" style={{ overflow: "hidden" }}>
+      <div className="lx-panel-header">
+        <span>模式</span>
+        <span className="lx-code">3 modes</span>
+      </div>
+      <div style={{ display: "grid" }}>
+        {MODES.map((mode, index) => (
+          <div
+            key={mode.name}
+            className="lx-table-row"
+            style={{
+              display: "grid",
+              gridTemplateColumns: "1fr 88px 1.45fr",
+              height: 44,
+              alignItems: "center",
+              background: index === 0 ? "rgba(0,120,212,0.10)" : undefined,
+            }}
+          >
+            <span style={{ color: "var(--lx-fg-primary)", fontWeight: 700 }}>{mode.name}</span>
+            <span className="lx-code">{mode.channels} ch</span>
+            <span>{mode.attributes}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function AttributePanel() {
+  return (
+    <div className="lx-panel" style={{ padding: 14 }}>
+      <div style={{ ...panelTitleStyle, display: "flex", justifyContent: "space-between" }}>
+        <span>编码器属性分组</span>
+        <ShieldCheck size={14} style={{ color: "var(--lx-action-bright)" }} />
+      </div>
+      <div style={{ display: "grid", gap: 8 }}>
+        {ATTRIBUTE_GROUPS.map((item) => (
+          <div
+            key={item.group}
+            style={{
+              display: "grid",
+              gridTemplateColumns: "1fr 54px 96px",
+              alignItems: "center",
+              gap: 8,
+              border: "1px solid var(--lx-stroke)",
+              borderRadius: "var(--lx-radius-sm)",
+              background: "var(--lx-bg-deep)",
+              padding: "9px 10px",
+              color: "var(--lx-fg-secondary)",
+            }}
+          >
+            <span style={{ color: "var(--lx-fg-primary)", fontWeight: 700 }}>{item.group}</span>
+            <span className="lx-code">{item.count}</span>
+            <span className="lx-code" style={{ color: "var(--lx-accent-bright)" }}>
+              {item.page}
+            </span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+const panelTitleStyle = {
+  marginBottom: 10,
+  color: "var(--lx-fg-primary)",
+  fontSize: 13,
+  fontWeight: 800,
+} as const;
