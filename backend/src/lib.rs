@@ -77,6 +77,11 @@ pub fn run() {
             fixture_types::fixture_type_delete_from_show,
             patch::patch_load_current_show,
             patch::patch_save_current_show,
+            patch::patch_apply_wizard,
+            patch::patch_update_fixture,
+            patch::patch_delete_fixture,
+            patch::patch_duplicate_fixture,
+            patch::patch_auto_patch,
         ])
         .run(tauri::generate_context!())
         .expect("启动 Tauri 应用失败");

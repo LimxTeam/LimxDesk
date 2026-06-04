@@ -1,16 +1,14 @@
 use crate::show::ShowRuntimeState;
-use limxdesk_showfile::ShowRepository;
-use serde::{Deserialize, Serialize};
+use limxdesk_patch::{
+    apply_wizard, auto_patch, delete_fixture, duplicate_fixture, normalize_document,
+    update_fixture, validate_fixtures, FixtureTypeRef, PatchCommandResult, PatchDocument,
+    PatchFixturePatch, PatchWizardDraft,
+};
+use limxdesk_showfile::{LoadedShow, ShowRepository};
 use tauri::State;
 
 const PATCH_SECTION_KEY: &str = "patch.v1";
 const PATCH_SECTION_VERSION: u16 = 1;
-
-#[derive(Clone, Debug, Default, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct PatchDocument {
-    pub fixtures: serde_json::Value,
-}
 
 #[tauri::command]
 pub fn patch_load_current_show(
@@ -20,15 +18,7 @@ pub fn patch_load_current_show(
         return Ok(None);
     };
 
-    let document = ShowRepository::default_for_current_os()
-        .read_section::<PatchDocument>(&show.path, PATCH_SECTION_KEY)
-        .map_err(|error| error.to_string())?;
-
-    Ok(document.or_else(|| {
-        Some(PatchDocument {
-            fixtures: serde_json::Value::Array(Vec::new()),
-        })
-    }))
+    Ok(Some(load_patch_document(&show)?))
 }
 
 #[tauri::command]
@@ -40,13 +30,87 @@ pub fn patch_save_current_show(
         return Err("No show file loaded. Create or load a show before editing patch.".to_string());
     };
 
-    let document = PatchDocument { fixtures };
+    let fixtures = serde_json::from_value(fixtures).map_err(|error| error.to_string())?;
+    let document = normalize_document(PatchDocument { fixtures });
+    validate_fixtures(&document.fixtures).map_err(|error| error.to_string())?;
+    save_patch_document(&show, &document, &state)?;
+    Ok(())
+}
+
+#[tauri::command]
+pub fn patch_apply_wizard(
+    fixture_type: FixtureTypeRef,
+    draft: PatchWizardDraft,
+    state: State<'_, ShowRuntimeState>,
+) -> Result<PatchCommandResult, String> {
+    mutate_patch_document(state, |document| {
+        apply_wizard(document, fixture_type, draft)
+    })
+}
+
+#[tauri::command]
+pub fn patch_update_fixture(
+    id: String,
+    patch: PatchFixturePatch,
+    state: State<'_, ShowRuntimeState>,
+) -> Result<PatchCommandResult, String> {
+    mutate_patch_document(state, |document| update_fixture(document, &id, patch))
+}
+
+#[tauri::command]
+pub fn patch_delete_fixture(
+    id: String,
+    state: State<'_, ShowRuntimeState>,
+) -> Result<PatchCommandResult, String> {
+    mutate_patch_document(state, |document| delete_fixture(document, &id))
+}
+
+#[tauri::command]
+pub fn patch_duplicate_fixture(
+    id: String,
+    state: State<'_, ShowRuntimeState>,
+) -> Result<PatchCommandResult, String> {
+    mutate_patch_document(state, |document| duplicate_fixture(document, &id))
+}
+
+#[tauri::command]
+pub fn patch_auto_patch(state: State<'_, ShowRuntimeState>) -> Result<PatchCommandResult, String> {
+    mutate_patch_document(state, auto_patch)
+}
+
+fn mutate_patch_document(
+    state: State<'_, ShowRuntimeState>,
+    mutation: impl FnOnce(PatchDocument) -> limxdesk_patch::PatchResult<PatchCommandResult>,
+) -> Result<PatchCommandResult, String> {
+    let Some(show) = state.current()? else {
+        return Err("No show file loaded. Create or load a show before editing patch.".to_string());
+    };
+
+    let document = load_patch_document(&show)?;
+    let result = mutation(document).map_err(|error| error.to_string())?;
+    save_patch_document(&show, &result.document, &state)?;
+    Ok(result)
+}
+
+fn load_patch_document(show: &LoadedShow) -> Result<PatchDocument, String> {
+    let document = ShowRepository::default_for_current_os()
+        .read_section::<PatchDocument>(&show.path, PATCH_SECTION_KEY)
+        .map_err(|error| error.to_string())?
+        .unwrap_or_default();
+    Ok(normalize_document(document))
+}
+
+fn save_patch_document(
+    show: &LoadedShow,
+    document: &PatchDocument,
+    state: &State<'_, ShowRuntimeState>,
+) -> Result<(), String> {
     let loaded = ShowRepository::default_for_current_os()
         .write_section(
             &show.path,
             PATCH_SECTION_KEY,
             PATCH_SECTION_VERSION,
-            &document,
+            document,
         )
         .map_err(|error| error.to_string())?;
 

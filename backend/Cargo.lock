@@ -7,6 +7,7 @@ name = "LimxDesk"
 version = "0.1.0"
 dependencies = [
  "limxdesk-fixture-types",
+ "limxdesk-patch",
  "limxdesk-platform",
  "limxdesk-showfile",
  "serde",
@@ -1832,6 +1833,14 @@ dependencies = [
  "serde",
  "uuid",
  "zip",
+]
+
+[[package]]
+name = "limxdesk-patch"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "uuid",
 ]
 
 [[package]]

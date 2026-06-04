@@ -62,7 +62,13 @@ interface PatchWizardDraft {
 }
 
 interface PatchDocument {
-  fixtures: unknown;
+  fixtures: PatchFixture[];
+}
+
+interface PatchCommandResult {
+  document: PatchDocument;
+  selectedId: string | null;
+  message: string;
 }
 
 const STAGES = ["Main", "Stage B", "Previs"];
@@ -107,7 +113,7 @@ export function ConnectivitySettingsPage() {
       }
 
       const nextFixtures = Array.isArray(document.fixtures)
-        ? (document.fixtures as PatchFixture[]).map((fixture) => normalizeFixture(fixture, fixtureTypes))
+        ? document.fixtures.map((fixture) => normalizeFixture(fixture, fixtureTypes))
         : [];
       setShowLoaded(true);
       setFixtures(nextFixtures);
@@ -152,18 +158,9 @@ export function ConnectivitySettingsPage() {
       return;
     }
 
-    const nextFixture = normalizeFixture({ ...selectedFixture, ...patch }, fixtureTypes);
-    const issues = getFixtureIssues(fixtures, nextFixture);
-    if (issues.length > 0) {
-      const message = formatIssueMessage(issues, nextFixture);
-      showPatchNotice("error", "配接冲突", message, 4200);
-      setLogLine(message);
-      return;
-    }
-
-    void commitFixtures(
-      fixtures.map((fixture) => (fixture.id === selectedFixture.id ? nextFixture : fixture)),
-      `Saved fixture ${nextFixture.fid}`,
+    void runPatchCommand(
+      () => invoke<PatchCommandResult>("patch_update_fixture", { id: selectedFixture.id, patch }),
+      "正在保存配接",
     );
   };
 
@@ -176,22 +173,11 @@ export function ConnectivitySettingsPage() {
       return;
     }
 
-    const nextFixtures = previewPatch(normalizeWizardDraft(draft), fixtureType, mode).map((fixture, index) => ({
-      ...fixture,
-      id: `fix-${Date.now()}-${index}`,
-    }));
-    const issues = getBatchIssues(fixtures, nextFixtures);
-    if (issues.length > 0) {
-      const message = `Cannot patch: ${issues[0]}`;
-      showPatchNotice("error", "配接冲突", issues[0], 4600);
-      setLogLine(message);
-      return;
-    }
-
-    const next = [...fixtures, ...nextFixtures].sort((left, right) => left.fid - right.fid);
-    const saved = await commitFixtures(next, `Patched ${nextFixtures.length} ${fixtureType.name} fixture${nextFixtures.length === 1 ? "" : "s"}`);
+    const saved = await runPatchCommand(
+      () => invoke<PatchCommandResult>("patch_apply_wizard", { fixtureType, draft: normalizeWizardDraft(draft) }),
+      "正在应用配接",
+    );
     if (saved) {
-      setSelectedId(nextFixtures[0]?.id ?? selectedId);
       setWizardOpen(false);
     }
   };
@@ -204,19 +190,10 @@ export function ConnectivitySettingsPage() {
       return;
     }
 
-    const nextFid = getNextFid(fixtures);
-    const fixture = {
-      ...selectedFixture,
-      id: `fix-${Date.now()}`,
-      fid: nextFid,
-      name: `${selectedFixture.name} Copy`,
-      universe: null,
-      address: null,
-    };
-
-    const next = [...fixtures, fixture].sort((left, right) => left.fid - right.fid);
-    void commitFixtures(next, `Duplicated fixture ${selectedFixture.fid}`);
-    setSelectedId(fixture.id);
+    void runPatchCommand(
+      () => invoke<PatchCommandResult>("patch_duplicate_fixture", { id: selectedFixture.id }),
+      "正在复制配接",
+    );
   };
 
   const deleteFixture = () => {
@@ -227,9 +204,10 @@ export function ConnectivitySettingsPage() {
       return;
     }
 
-    const next = fixtures.filter((fixture) => fixture.id !== selectedFixture.id);
-    setSelectedId(next[0]?.id ?? "");
-    void commitFixtures(next, `Deleted fixture ${selectedFixture.fid}`);
+    void runPatchCommand(
+      () => invoke<PatchCommandResult>("patch_delete_fixture", { id: selectedFixture.id }),
+      "正在删除配接",
+    );
   };
 
   const autoPatch = () => {
@@ -239,36 +217,34 @@ export function ConnectivitySettingsPage() {
       return;
     }
 
-    const patched = fixtures.filter((fixture) => fixture.universe !== null && fixture.address !== null);
-    const next = fixtures.map((fixture) => {
-      if (fixture.universe !== null && fixture.address !== null) return fixture;
-
-      const candidate = findNextFreePatch(patched, fixture.channels, 1, 1);
-      const nextFixture = { ...fixture, universe: candidate.universe, address: candidate.address };
-      patched.push(nextFixture);
-      return nextFixture;
-    });
-
-    void commitFixtures(next, "Auto patched unassigned fixtures");
+    void runPatchCommand(
+      () => invoke<PatchCommandResult>("patch_auto_patch"),
+      "正在自动配接",
+    );
   };
 
-  const commitFixtures = async (nextFixtures: PatchFixture[], message: string): Promise<boolean> => {
+  const runPatchCommand = async (
+    command: () => Promise<PatchCommandResult>,
+    loadingTitle: string,
+  ): Promise<boolean> => {
     setBusy(true);
     const islandId = dynamicIsland.show({
       type: "loading",
-      title: "正在保存配接",
+      title: loadingTitle,
       subtitle: "写入当前 show 文件",
       glow: true,
     });
     try {
-      await invoke<void>("patch_save_current_show", { fixtures: nextFixtures });
+      const result = await command();
+      const nextFixtures = result.document.fixtures.map((fixture) => normalizeFixture(fixture, fixtureTypes));
       setFixtures(nextFixtures);
+      setSelectedId(result.selectedId ?? nextFixtures[0]?.id ?? "");
       setShowLoaded(true);
-      setLogLine(message);
+      setLogLine(result.message);
       dynamicIsland.update(islandId, {
         type: "success",
         title: "配接已保存",
-        subtitle: message,
+        subtitle: result.message,
         progress: 1,
         spinning: false,
         glow: false,
@@ -957,19 +933,6 @@ function getBatchIssues(existing: PatchFixture[], batch: PatchFixture[]): string
 
 function hasFidConflict(fixtures: PatchFixture[], fixture: PatchFixture) {
   return fixtures.some((item) => item.id !== fixture.id && item.fid === fixture.fid);
-}
-
-function formatIssueMessage(issues: string[], fixture: PatchFixture) {
-  if (issues.includes("FID")) {
-    return `Cannot edit: FID ${fixture.fid} already exists`;
-  }
-  if (issues.includes("ADDR")) {
-    return `Cannot edit: address range ${formatPatch(fixture)} uses occupied DMX addresses`;
-  }
-  if (issues.includes("OVER")) {
-    return `Cannot edit: address range ${formatPatch(fixture)} exceeds 512`;
-  }
-  return "Cannot edit fixture";
 }
 
 function hasRangeConflict(fixtures: PatchFixture[], fixture: PatchFixture) {
