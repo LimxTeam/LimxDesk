@@ -1,12 +1,14 @@
-import { useDeferredValue, useState } from "react";
+import { useDeferredValue, useEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
+import { invoke } from "@tauri-apps/api/core";
+import { open } from "@tauri-apps/plugin-dialog";
 import {
   Check,
-  Copy,
   FilePlus2,
   Import,
-  Pencil,
   Plus,
+  RefreshCw,
+  Save,
   Search,
   Trash2,
 } from "lucide-react";
@@ -17,7 +19,7 @@ interface FixtureMode {
   id: string;
   name: string;
   channels: number;
-  attributes: string;
+  attributes: string[];
 }
 
 interface AttributeGroup {
@@ -31,207 +33,221 @@ interface FixtureType {
   id: string;
   name: string;
   manufacturer: string;
-  source: "Library" | "Custom" | "System";
+  shortName: string;
+  longName: string;
+  description: string;
+  source: "Gdtf" | "Custom";
   used: number;
   locked: boolean;
+  path: string;
+  sizeBytes: number;
   modes: FixtureMode[];
   attributes: AttributeGroup[];
 }
 
-const INITIAL_TYPES: FixtureType[] = [
-  {
-    id: "type-ayrton-diablo",
-    name: "Ayrton Diablo S",
-    manufacturer: "Ayrton",
-    source: "Library",
-    used: 42,
-    locked: false,
-    modes: [
-      { id: "standard", name: "Standard", channels: 38, attributes: "Dimmer, Position, Color, Beam" },
-      { id: "extended", name: "Extended", channels: 54, attributes: "Standard + Frost, Shaper, Prism" },
-      { id: "compact", name: "Compact", channels: 24, attributes: "Dimmer, Position, Color" },
-    ],
-    attributes: [
-      { id: "dimmer", name: "Dimmer", count: 2, encoderPage: "Dimmer 1 of 1" },
-      { id: "position", name: "Position", count: 6, encoderPage: "Position 1 of 2" },
-      { id: "color", name: "Color", count: 14, encoderPage: "Color 1 of 4" },
-      { id: "beam", name: "Beam", count: 9, encoderPage: "Beam 1 of 3" },
-    ],
-  },
-  {
-    id: "type-robe-pointe",
-    name: "Robe Pointe",
-    manufacturer: "Robe",
-    source: "Library",
-    used: 24,
-    locked: false,
-    modes: [
-      { id: "mode-1", name: "Mode 1", channels: 24, attributes: "Dimmer, Position, Color, Beam" },
-      { id: "mode-2", name: "Mode 2", channels: 30, attributes: "Mode 1 + Prism, Frost" },
-    ],
-    attributes: [
-      { id: "dimmer", name: "Dimmer", count: 1, encoderPage: "Dimmer 1 of 1" },
-      { id: "position", name: "Position", count: 4, encoderPage: "Position 1 of 1" },
-      { id: "beam", name: "Beam", count: 8, encoderPage: "Beam 1 of 2" },
-    ],
-  },
-  {
-    id: "type-glp-x4",
-    name: "GLP X4 Bar 20",
-    manufacturer: "GLP",
-    source: "Custom",
-    used: 12,
-    locked: false,
-    modes: [
-      { id: "basic", name: "Basic", channels: 44, attributes: "Dimmer, Color, Tilt" },
-      { id: "pixel", name: "Pixel", channels: 88, attributes: "Basic + Pixel Cells" },
-    ],
-    attributes: [
-      { id: "dimmer", name: "Dimmer", count: 20, encoderPage: "Dimmer 1 of 5" },
-      { id: "color", name: "Color", count: 60, encoderPage: "Color 1 of 15" },
-      { id: "position", name: "Position", count: 2, encoderPage: "Position 1 of 1" },
-    ],
-  },
-  {
-    id: "type-generic-dimmer",
-    name: "Generic Dimmer",
-    manufacturer: "Generic",
-    source: "System",
-    used: 36,
-    locked: true,
-    modes: [{ id: "dimmer", name: "Dimmer", channels: 1, attributes: "Dimmer" }],
-    attributes: [{ id: "dimmer", name: "Dimmer", count: 1, encoderPage: "Dimmer 1 of 1" }],
-  },
-];
+interface FixtureTypeDraft {
+  name: string;
+  manufacturer: string;
+  shortName: string;
+  longName: string;
+  description: string;
+  modes: FixtureModeDraft[];
+}
+
+interface FixtureModeDraft {
+  id: string;
+  name: string;
+  channels: number;
+  attributes: string[];
+}
+
+const DEFAULT_DRAFT: FixtureTypeDraft = {
+  name: "New Fixture Type",
+  manufacturer: "Custom",
+  shortName: "New",
+  longName: "New Fixture Type",
+  description: "Created in LimxDesk",
+  modes: [
+    {
+      id: "basic",
+      name: "Basic",
+      channels: 1,
+      attributes: ["Dimmer"],
+    },
+  ],
+};
 
 export function FixtureTypesSettingsPage() {
-  const [fixtureTypes, setFixtureTypes] = useState(INITIAL_TYPES);
-  const [selectedId, setSelectedId] = useState(INITIAL_TYPES[0]?.id ?? "");
-  const [selectedModeId, setSelectedModeId] = useState(INITIAL_TYPES[0]?.modes[0]?.id ?? "");
+  const [fixtureTypes, setFixtureTypes] = useState<FixtureType[]>([]);
+  const [selectedPath, setSelectedPath] = useState("");
+  const [draft, setDraft] = useState<FixtureTypeDraft>(DEFAULT_DRAFT);
   const [query, setQuery] = useState("");
+  const [libraryRoot, setLibraryRoot] = useState("C:/ProgramData/LimxDesk/Library/FixtureTypes/GDTF");
   const [logLine, setLogLine] = useState("Ready");
+  const [busy, setBusy] = useState(false);
+  const [dirty, setDirty] = useState(false);
   const deferredQuery = useDeferredValue(query.trim().toLowerCase());
 
-  const selectedType = fixtureTypes.find((item) => item.id === selectedId) ?? fixtureTypes[0];
-  const selectedMode = selectedType?.modes.find((mode) => mode.id === selectedModeId) ?? selectedType?.modes[0];
+  const selectedType = fixtureTypes.find((item) => item.path === selectedPath) ?? fixtureTypes[0];
   const visibleTypes = fixtureTypes.filter((fixtureType) =>
-    `${fixtureType.name} ${fixtureType.manufacturer} ${fixtureType.source}`.toLowerCase().includes(deferredQuery),
+    `${fixtureType.name} ${fixtureType.manufacturer} ${fixtureType.shortName} ${fixtureType.path}`
+      .toLowerCase()
+      .includes(deferredQuery),
   );
+  const draftAttributeGroups = useMemo(() => summarizeDraftAttributes(draft), [draft]);
 
-  const selectType = (id: string) => {
-    const fixtureType = fixtureTypes.find((item) => item.id === id);
-    setSelectedId(id);
-    setSelectedModeId(fixtureType?.modes[0]?.id ?? "");
+  useEffect(() => {
+    void refreshLibrary();
+  }, []);
+
+  useEffect(() => {
+    if (selectedType && !dirty) {
+      setDraft(entryToDraft(selectedType));
+    }
+  }, [dirty, selectedType]);
+
+  const refreshLibrary = async (preferredPath?: string) => {
+    setBusy(true);
+    try {
+      const [root, entries] = await Promise.all([
+        invoke<string>("fixture_type_library_root"),
+        invoke<FixtureType[]>("fixture_type_scan_library"),
+      ]);
+      setLibraryRoot(root);
+      setFixtureTypes(entries);
+
+      const nextSelected =
+        preferredPath && entries.some((item) => item.path === preferredPath)
+          ? preferredPath
+          : selectedPath && entries.some((item) => item.path === selectedPath)
+            ? selectedPath
+            : entries[0]?.path ?? "";
+      setSelectedPath(nextSelected);
+      setDirty(false);
+      setLogLine(`Scanned ${entries.length} GDTF fixture type${entries.length === 1 ? "" : "s"}`);
+    } catch (error) {
+      setLogLine(errorToMessage(error));
+    } finally {
+      setBusy(false);
+    }
   };
 
-  const updateSelectedType = (patch: Partial<FixtureType>) => {
-    if (!selectedType || selectedType.locked) {
+  const selectType = (path: string) => {
+    const fixtureType = fixtureTypes.find((item) => item.path === path);
+    setSelectedPath(path);
+    if (fixtureType) {
+      setDraft(entryToDraft(fixtureType));
+      setDirty(false);
+    }
+  };
+
+  const importGdtf = async () => {
+    const selected = await open({
+      multiple: false,
+      filters: [{ name: "GDTF Fixture Type", extensions: ["gdtf"] }],
+    });
+    if (typeof selected !== "string") {
       return;
     }
 
-    setFixtureTypes((current) =>
-      current.map((fixtureType) =>
-        fixtureType.id === selectedType.id ? { ...fixtureType, ...patch, source: "Custom" } : fixtureType,
-      ),
-    );
-    setLogLine(`Edited ${selectedType.name}`);
-  };
-
-  const updateMode = (modeId: string, patch: Partial<FixtureMode>) => {
-    if (!selectedType || selectedType.locked) {
-      return;
+    setBusy(true);
+    try {
+      const imported = await invoke<FixtureType>("fixture_type_import_gdtf", { path: selected });
+      await refreshLibrary(imported.path);
+      setLogLine(`Imported ${imported.manufacturer} ${imported.name}`);
+    } catch (error) {
+      setLogLine(errorToMessage(error));
+    } finally {
+      setBusy(false);
     }
-
-    setFixtureTypes((current) =>
-      current.map((fixtureType) =>
-        fixtureType.id === selectedType.id
-          ? {
-              ...fixtureType,
-              source: "Custom",
-              modes: fixtureType.modes.map((mode) => (mode.id === modeId ? { ...mode, ...patch } : mode)),
-            }
-          : fixtureType,
-      ),
-    );
-    setLogLine(`Edited mode ${patch.name ?? modeId}`);
   };
 
-  const addType = () => {
-    const fixtureType: FixtureType = {
-      id: `type-${Date.now()}`,
-      name: "New Fixture Type",
-      manufacturer: "Custom",
-      source: "Custom",
-      used: 0,
-      locked: false,
-      modes: [{ id: "default", name: "Default", channels: 16, attributes: "Dimmer, Position, Color" }],
-      attributes: [
-        { id: "dimmer", name: "Dimmer", count: 1, encoderPage: "Dimmer 1 of 1" },
-        { id: "position", name: "Position", count: 4, encoderPage: "Position 1 of 1" },
-      ],
-    };
-
-    setFixtureTypes((current) => [...current, fixtureType]);
-    setSelectedId(fixtureType.id);
-    setSelectedModeId("default");
-    setLogLine("Created new fixture type");
+  const createType = async () => {
+    setBusy(true);
+    try {
+      const created = await invoke<FixtureType>("fixture_type_create", {
+        draft: {
+          ...DEFAULT_DRAFT,
+          name: nextFixtureName(fixtureTypes),
+          longName: nextFixtureName(fixtureTypes),
+        },
+      });
+      await refreshLibrary(created.path);
+      setLogLine(`Created ${created.name}`);
+    } catch (error) {
+      setLogLine(errorToMessage(error));
+    } finally {
+      setBusy(false);
+    }
   };
 
-  const duplicateType = () => {
+  const saveType = async () => {
     if (!selectedType) {
       return;
     }
 
-    const fixtureType = {
-      ...selectedType,
-      id: `type-${Date.now()}`,
-      name: `${selectedType.name} Copy`,
-      source: "Custom" as const,
-      used: 0,
-      locked: false,
-    };
-
-    setFixtureTypes((current) => [...current, fixtureType]);
-    setSelectedId(fixtureType.id);
-    setSelectedModeId(fixtureType.modes[0]?.id ?? "");
-    setLogLine(`Duplicated ${selectedType.name}`);
+    setBusy(true);
+    try {
+      const updated = await invoke<FixtureType>("fixture_type_update", {
+        path: selectedType.path,
+        draft: normalizeDraft(draft),
+      });
+      await refreshLibrary(updated.path);
+      setLogLine(`Saved ${updated.name}`);
+    } catch (error) {
+      setLogLine(errorToMessage(error));
+    } finally {
+      setBusy(false);
+    }
   };
 
-  const deleteType = () => {
-    if (!selectedType || selectedType.locked || selectedType.used > 0) {
+  const deleteType = async () => {
+    if (!selectedType || selectedType.used > 0) {
       return;
     }
 
-    setFixtureTypes((current) => {
-      const next = current.filter((fixtureType) => fixtureType.id !== selectedType.id);
-      setSelectedId(next[0]?.id ?? "");
-      setSelectedModeId(next[0]?.modes[0]?.id ?? "");
-      return next;
-    });
-    setLogLine(`Deleted ${selectedType.name}`);
+    setBusy(true);
+    try {
+      await invoke<void>("fixture_type_delete", { path: selectedType.path });
+      await refreshLibrary();
+      setLogLine(`Deleted ${selectedType.name}`);
+    } catch (error) {
+      setLogLine(errorToMessage(error));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const updateDraft = (patch: Partial<FixtureTypeDraft>) => {
+    setDraft((current) => ({ ...current, ...patch }));
+    setDirty(true);
+  };
+
+  const updateMode = (modeId: string, patch: Partial<FixtureModeDraft>) => {
+    setDraft((current) => ({
+      ...current,
+      modes: current.modes.map((mode) => (mode.id === modeId ? { ...mode, ...patch } : mode)),
+    }));
+    setDirty(true);
   };
 
   const addMode = () => {
-    if (!selectedType || selectedType.locked) {
+    const mode: FixtureModeDraft = {
+      id: `mode-${Date.now()}`,
+      name: `Mode ${draft.modes.length + 1}`,
+      channels: 1,
+      attributes: ["Dimmer"],
+    };
+    setDraft((current) => ({ ...current, modes: [...current.modes, mode] }));
+    setDirty(true);
+  };
+
+  const deleteMode = (modeId: string) => {
+    if (draft.modes.length <= 1) {
       return;
     }
-
-    const mode: FixtureMode = {
-      id: `mode-${Date.now()}`,
-      name: `Mode ${selectedType.modes.length + 1}`,
-      channels: 16,
-      attributes: "Dimmer, Position",
-    };
-
-    setFixtureTypes((current) =>
-      current.map((fixtureType) =>
-        fixtureType.id === selectedType.id
-          ? { ...fixtureType, source: "Custom", modes: [...fixtureType.modes, mode] }
-          : fixtureType,
-      ),
-    );
-    setSelectedModeId(mode.id);
-    setLogLine(`Added mode to ${selectedType.name}`);
+    setDraft((current) => ({ ...current, modes: current.modes.filter((mode) => mode.id !== modeId) }));
+    setDirty(true);
   };
 
   return (
@@ -240,7 +256,7 @@ export function FixtureTypesSettingsPage() {
         display: "grid",
         minHeight: 0,
         height: "100%",
-        gridTemplateRows: "auto minmax(0, 1fr) 116px",
+        gridTemplateRows: "auto minmax(0, 1fr) 136px",
         gap: 10,
       }}
     >
@@ -256,23 +272,27 @@ export function FixtureTypesSettingsPage() {
       >
         <SearchBox value={query} onChange={setQuery} />
         <div style={{ display: "flex", gap: 6 }}>
-          <button type="button" className="lx-btn lx-btn-primary" onClick={addType}>
+          <button type="button" className="lx-btn lx-btn-primary" onClick={() => void createType()} disabled={busy}>
             <FilePlus2 size={13} />
-            新建类型
+            新建 GDTF
           </button>
-          <button type="button" className="lx-btn lx-btn-ghost" onClick={duplicateType} disabled={!selectedType}>
-            <Copy size={13} />
-            复制
-          </button>
-          <button type="button" className="lx-btn lx-btn-ghost" disabled>
+          <button type="button" className="lx-btn lx-btn-ghost" onClick={() => void importGdtf()} disabled={busy}>
             <Import size={13} />
             导入 GDTF
+          </button>
+          <button type="button" className="lx-btn lx-btn-ghost" onClick={() => void refreshLibrary()} disabled={busy}>
+            <RefreshCw size={13} />
+            刷新
+          </button>
+          <button type="button" className="lx-btn lx-btn-action" onClick={() => void saveType()} disabled={busy || !selectedType || !dirty}>
+            <Save size={13} />
+            保存修改
           </button>
           <button
             type="button"
             className="lx-btn lx-btn-ghost"
-            onClick={deleteType}
-            disabled={!selectedType || selectedType.locked || selectedType.used > 0}
+            onClick={() => void deleteType()}
+            disabled={busy || !selectedType || selectedType.used > 0}
           >
             <Trash2 size={13} />
             删除
@@ -284,16 +304,18 @@ export function FixtureTypesSettingsPage() {
         style={{
           display: "grid",
           minHeight: 0,
-          gridTemplateColumns: "minmax(0, 1fr) 330px",
+          gridTemplateColumns: "minmax(0, 1fr) 340px",
           gap: 10,
         }}
       >
-        <FixtureTypeTable
-          fixtureTypes={visibleTypes}
-          selectedId={selectedId}
-          onSelect={selectType}
+        <FixtureTypeTable fixtureTypes={visibleTypes} selectedPath={selectedType?.path ?? ""} onSelect={selectType} />
+        <TypeInspector
+          fixtureType={selectedType}
+          draft={draft}
+          libraryRoot={libraryRoot}
+          dirty={dirty}
+          onChange={updateDraft}
         />
-        <TypeInspector fixtureType={selectedType} onChange={updateSelectedType} />
       </div>
 
       <div
@@ -305,14 +327,13 @@ export function FixtureTypesSettingsPage() {
         }}
       >
         <ModePanel
-          fixtureType={selectedType}
-          selectedModeId={selectedMode?.id ?? ""}
-          onSelectMode={setSelectedModeId}
-          onChangeMode={updateMode}
+          draft={draft}
           onAddMode={addMode}
+          onDeleteMode={deleteMode}
+          onChangeMode={updateMode}
         />
-        <AttributePanel fixtureType={selectedType} />
-        <LibraryStatus fixtureTypes={fixtureTypes} logLine={logLine} />
+        <AttributePanel attributes={draftAttributeGroups} />
+        <LibraryStatus fixtureTypes={fixtureTypes} logLine={busy ? "Working..." : logLine} dirty={dirty} />
       </div>
     </div>
   );
@@ -343,7 +364,7 @@ function SearchBox({
       <input
         value={value}
         onChange={(event) => onChange(event.currentTarget.value)}
-        placeholder="搜索厂商、型号、模式、通道数量"
+        placeholder="搜索厂商、型号、GUID、GDTF 路径"
         style={{
           width: "100%",
           border: "none",
@@ -359,23 +380,21 @@ function SearchBox({
 
 function FixtureTypeTable({
   fixtureTypes,
-  selectedId,
+  selectedPath,
   onSelect,
 }: {
   fixtureTypes: FixtureType[];
-  selectedId: string;
-  onSelect: (id: string) => void;
+  selectedPath: string;
+  onSelect: (path: string) => void;
 }) {
   const columns: Array<DataTableColumn<FixtureType>> = [
     {
       id: "name",
       label: "Name",
-      width: 210,
+      width: 220,
       minWidth: 150,
       render: (fixtureType) => (
-        <span style={{ color: "var(--lx-fg-primary)", fontWeight: 650 }}>
-          {fixtureType.name}
-        </span>
+        <span style={{ color: "var(--lx-fg-primary)", fontWeight: 650 }}>{fixtureType.name}</span>
       ),
     },
     {
@@ -402,16 +421,16 @@ function FixtureTypeTable({
     {
       id: "source",
       label: "Source",
-      width: 100,
+      width: 96,
       minWidth: 82,
-      render: (fixtureType) => fixtureType.source,
+      render: () => "GDTF",
     },
     {
-      id: "used",
-      label: "Used",
-      width: 76,
-      minWidth: 62,
-      render: (fixtureType) => <span className="lx-code">{fixtureType.used}</span>,
+      id: "size",
+      label: "Size",
+      width: 90,
+      minWidth: 72,
+      render: (fixtureType) => <span className="lx-code">{formatBytes(fixtureType.sizeBytes)}</span>,
     },
     {
       id: "state",
@@ -419,8 +438,8 @@ function FixtureTypeTable({
       width: 112,
       minWidth: 96,
       render: (fixtureType) => (
-        <span className={`lx-badge ${getStateClass(fixtureType)}`}>
-          {fixtureType.locked ? "Locked" : fixtureType.source === "Custom" ? "Edited" : "Ready"}
+        <span className={`lx-badge ${fixtureType.locked ? "lx-badge-default" : "lx-badge-success"}`}>
+          {fixtureType.locked ? "Locked" : "Ready"}
         </span>
       ),
     },
@@ -430,24 +449,30 @@ function FixtureTypeTable({
     <ResizableDataTable
       columns={columns}
       rows={fixtureTypes}
-      selectedId={selectedId}
-      getRowId={(fixtureType) => fixtureType.id}
-      onRowClick={(fixtureType) => onSelect(fixtureType.id)}
+      selectedId={selectedPath}
+      getRowId={(fixtureType) => fixtureType.path}
+      onRowClick={(fixtureType) => onSelect(fixtureType.path)}
     />
   );
 }
 
 function TypeInspector({
   fixtureType,
+  draft,
+  libraryRoot,
+  dirty,
   onChange,
 }: {
   fixtureType?: FixtureType;
-  onChange: (patch: Partial<FixtureType>) => void;
+  draft: FixtureTypeDraft;
+  libraryRoot: string;
+  dirty: boolean;
+  onChange: (patch: Partial<FixtureTypeDraft>) => void;
 }) {
   if (!fixtureType) {
     return (
       <div className="lx-panel" style={{ padding: 14, color: "var(--lx-fg-tertiary)" }}>
-        没有选中灯具类型
+        没有 GDTF 灯具类型。请导入或新建。
       </div>
     );
   }
@@ -455,123 +480,119 @@ function TypeInspector({
   return (
     <div className="lx-panel" style={{ display: "grid", minHeight: 0, gridTemplateRows: "auto minmax(0, 1fr)", overflow: "hidden" }}>
       <div className="lx-panel-header">
-        <span>Type Inspector</span>
-        <span className="lx-code">{fixtureType.source}</span>
+        <span>GDTF Inspector</span>
+        <span className={`lx-badge ${dirty ? "lx-badge-warn" : "lx-badge-success"}`}>
+          {dirty ? "Unsaved" : "Synced"}
+        </span>
       </div>
       <div style={{ display: "grid", alignContent: "start", gap: 10, overflow: "auto", padding: 12 }}>
         <Field label="Name">
-          <input
-            className="lx-input lx-input-sm"
-            value={fixtureType.name}
-            readOnly={fixtureType.locked}
-            onChange={(event) => onChange({ name: event.currentTarget.value })}
-          />
+          <input className="lx-input lx-input-sm" value={draft.name} onChange={(event) => onChange({ name: event.currentTarget.value })} />
         </Field>
         <Field label="Maker">
-          <input
+          <input className="lx-input lx-input-sm" value={draft.manufacturer} onChange={(event) => onChange({ manufacturer: event.currentTarget.value })} />
+        </Field>
+        <Field label="Short">
+          <input className="lx-input lx-input-sm" value={draft.shortName} onChange={(event) => onChange({ shortName: event.currentTarget.value })} />
+        </Field>
+        <Field label="Long">
+          <input className="lx-input lx-input-sm" value={draft.longName} onChange={(event) => onChange({ longName: event.currentTarget.value })} />
+        </Field>
+        <Field label="Desc">
+          <textarea
             className="lx-input lx-input-sm"
-            value={fixtureType.manufacturer}
-            readOnly={fixtureType.locked}
-            onChange={(event) => onChange({ manufacturer: event.currentTarget.value })}
+            value={draft.description}
+            onChange={(event) => onChange({ description: event.currentTarget.value })}
+            style={{ minHeight: 54, resize: "vertical", paddingTop: 5 }}
           />
         </Field>
-        <Field label="Source">
-          <input className="lx-input lx-input-sm" value={fixtureType.source} readOnly />
-        </Field>
-        <Field label="Used">
-          <input className="lx-input lx-input-sm" value={fixtureType.used} readOnly />
-        </Field>
         <div className="lx-divider-h" />
-        <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8 }}>
-          <Metric label="Modes" value={fixtureType.modes.length} />
-          <Metric label="Max Ch" value={Math.max(...fixtureType.modes.map((mode) => mode.channels))} />
-          <Metric label="Groups" value={fixtureType.attributes.length} />
-        </div>
-        {fixtureType.locked && (
-          <div className="lx-badge lx-badge-default" style={{ width: "fit-content" }}>
-            System locked
-          </div>
-        )}
+        <InfoRow label="GUID" value={fixtureType.id} />
+        <InfoRow label="Path" value={fixtureType.path} />
+        <InfoRow label="Library" value={libraryRoot} />
       </div>
     </div>
   );
 }
 
 function ModePanel({
-  fixtureType,
-  selectedModeId,
-  onSelectMode,
-  onChangeMode,
+  draft,
   onAddMode,
+  onDeleteMode,
+  onChangeMode,
 }: {
-  fixtureType?: FixtureType;
-  selectedModeId: string;
-  onSelectMode: (id: string) => void;
-  onChangeMode: (id: string, patch: Partial<FixtureMode>) => void;
+  draft: FixtureTypeDraft;
   onAddMode: () => void;
+  onDeleteMode: (id: string) => void;
+  onChangeMode: (id: string, patch: Partial<FixtureModeDraft>) => void;
 }) {
   return (
     <div className="lx-panel" style={{ display: "grid", minHeight: 0, gridTemplateRows: "28px minmax(0, 1fr)", overflow: "hidden" }}>
       <div className="lx-panel-header">
-        <span>模式</span>
-        <button type="button" className="lx-btn lx-btn-sm lx-btn-ghost" onClick={onAddMode} disabled={!fixtureType || fixtureType.locked}>
+        <span>DMX Modes</span>
+        <button type="button" className="lx-btn lx-btn-sm lx-btn-ghost" onClick={onAddMode}>
           <Plus size={11} />
           添加模式
         </button>
       </div>
       <div style={{ overflow: "auto" }}>
-        {fixtureType?.modes.map((mode) => {
-          const selected = mode.id === selectedModeId;
-
-          return (
+        {draft.modes.map((mode) => (
+          <div
+            key={mode.id}
+            style={{
+              display: "grid",
+              gridTemplateColumns: "150px 78px minmax(220px, 1fr) 54px",
+              gap: 8,
+              alignItems: "center",
+              minHeight: 42,
+              borderBottom: "1px solid var(--lx-stroke)",
+              padding: "6px 8px",
+              color: "var(--lx-fg-secondary)",
+            }}
+          >
+            <input
+              className="lx-input lx-input-sm"
+              value={mode.name}
+              onChange={(event) => onChangeMode(mode.id, { name: event.currentTarget.value })}
+            />
+            <input
+              className="lx-input lx-input-sm"
+              type="number"
+              min={1}
+              max={512}
+              value={mode.channels}
+              onChange={(event) => onChangeMode(mode.id, { channels: Number(event.currentTarget.value) })}
+            />
+            <input
+              className="lx-input lx-input-sm"
+              value={mode.attributes.join(", ")}
+              onChange={(event) => onChangeMode(mode.id, { attributes: parseAttributeList(event.currentTarget.value) })}
+              title="逗号分隔 GDTF Attribute 名称，例如 Dimmer, Pan, Tilt, ColorAdd_R"
+            />
             <button
-              key={mode.id}
               type="button"
-              className="lx-table-row"
-              onClick={() => onSelectMode(mode.id)}
-              style={{
-                display: "grid",
-                width: "100%",
-                gridTemplateColumns: "1fr 72px 1.45fr 30px",
-                height: 36,
-                alignItems: "center",
-                border: "none",
-                borderBottom: "1px solid var(--lx-stroke)",
-                background: selected ? "rgba(0,120,212,0.16)" : "transparent",
-                color: selected ? "var(--lx-fg-primary)" : "var(--lx-fg-secondary)",
-                textAlign: "left",
-              }}
+              className="lx-btn lx-btn-sm lx-btn-ghost"
+              onClick={() => onDeleteMode(mode.id)}
+              disabled={draft.modes.length <= 1}
             >
-              <span style={{ color: "var(--lx-fg-primary)", fontWeight: 700 }}>{mode.name}</span>
-              <span className="lx-code">{mode.channels} ch</span>
-              <span>{mode.attributes}</span>
-              <Pencil
-                size={12}
-                style={{ color: fixtureType.locked ? "var(--lx-fg-muted)" : "var(--lx-fg-tertiary)" }}
-                onClick={(event) => {
-                  event.stopPropagation();
-                  if (!fixtureType.locked) {
-                    onChangeMode(mode.id, { channels: mode.channels + 1 });
-                  }
-                }}
-              />
+              删除
             </button>
-          );
-        })}
+          </div>
+        ))}
       </div>
     </div>
   );
 }
 
-function AttributePanel({ fixtureType }: { fixtureType?: FixtureType }) {
+function AttributePanel({ attributes }: { attributes: AttributeGroup[] }) {
   return (
     <div className="lx-panel" style={{ display: "grid", minHeight: 0, gridTemplateRows: "28px minmax(0, 1fr)", overflow: "hidden" }}>
       <div className="lx-panel-header">
         <span>编码器属性分组</span>
-        <span className="lx-code">{fixtureType?.attributes.length ?? 0} groups</span>
+        <span className="lx-code">{attributes.length} groups</span>
       </div>
       <div style={{ display: "grid", alignContent: "start", gap: 8, overflow: "auto", padding: 10 }}>
-        {fixtureType?.attributes.map((item) => (
+        {attributes.map((item) => (
           <div
             key={item.id}
             style={{
@@ -601,23 +622,24 @@ function AttributePanel({ fixtureType }: { fixtureType?: FixtureType }) {
 function LibraryStatus({
   fixtureTypes,
   logLine,
+  dirty,
 }: {
   fixtureTypes: FixtureType[];
   logLine: string;
+  dirty: boolean;
 }) {
-  const custom = fixtureTypes.filter((item) => item.source === "Custom").length;
-  const locked = fixtureTypes.filter((item) => item.locked).length;
-  const used = fixtureTypes.reduce((sum, item) => sum + item.used, 0);
+  const modes = fixtureTypes.reduce((sum, item) => sum + item.modes.length, 0);
+  const channels = fixtureTypes.reduce((sum, item) => sum + Math.max(0, ...item.modes.map((mode) => mode.channels)), 0);
 
   return (
     <div className="lx-panel" style={{ display: "grid", gridTemplateRows: "1fr auto", padding: 10 }}>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 6 }}>
-        <Metric label="Types" value={fixtureTypes.length} />
-        <Metric label="Custom" value={custom} />
-        <Metric label="Used" value={used} />
+        <Metric label="GDTF" value={fixtureTypes.length} />
+        <Metric label="Modes" value={modes} />
+        <Metric label="MaxCh" value={channels} />
       </div>
       <div style={{ display: "flex", alignItems: "center", gap: 6, color: "var(--lx-fg-tertiary)", fontSize: 10 }}>
-        <Check size={12} style={{ color: locked > 0 ? "var(--lx-action-bright)" : "var(--lx-fg-tertiary)" }} />
+        <Check size={12} style={{ color: dirty ? "var(--lx-accent-bright)" : "var(--lx-action-bright)" }} />
         <span className="lx-code">{logLine}</span>
       </div>
     </div>
@@ -642,6 +664,25 @@ function Field({ label, children }: { label: string; children: ReactNode }) {
   );
 }
 
+function InfoRow({ label, value }: { label: string; value: string }) {
+  return (
+    <div
+      style={{
+        display: "grid",
+        gridTemplateColumns: "82px minmax(0, 1fr)",
+        gap: 8,
+        color: "var(--lx-fg-tertiary)",
+        fontSize: 11,
+      }}
+    >
+      <span>{label}</span>
+      <span className="lx-code" style={{ overflow: "hidden", color: "var(--lx-fg-secondary)", textOverflow: "ellipsis", whiteSpace: "nowrap" }} title={value}>
+        {value}
+      </span>
+    </div>
+  );
+}
+
 function Metric({ label, value }: { label: string; value: number }) {
   return (
     <div style={{ border: "1px solid var(--lx-stroke)", borderRadius: "var(--lx-radius-sm)", background: "var(--lx-bg-deep)", padding: "6px 8px" }}>
@@ -651,6 +692,74 @@ function Metric({ label, value }: { label: string; value: number }) {
   );
 }
 
+function entryToDraft(fixtureType: FixtureType): FixtureTypeDraft {
+  return {
+    name: fixtureType.name,
+    manufacturer: fixtureType.manufacturer,
+    shortName: fixtureType.shortName || fixtureType.name,
+    longName: fixtureType.longName || fixtureType.name,
+    description: fixtureType.description,
+    modes: fixtureType.modes.map((mode) => ({
+      id: mode.id,
+      name: mode.name,
+      channels: mode.channels,
+      attributes: mode.attributes.length ? mode.attributes : ["Dimmer"],
+    })),
+  };
+}
+
+function normalizeDraft(value: FixtureTypeDraft): FixtureTypeDraft {
+  return {
+    ...value,
+    name: value.name.trim() || "New Fixture Type",
+    manufacturer: value.manufacturer.trim() || "Custom",
+    shortName: value.shortName.trim() || value.name.trim() || "New",
+    longName: value.longName.trim() || value.name.trim() || "New Fixture Type",
+    modes: value.modes.length
+      ? value.modes.map((mode) => ({
+          ...mode,
+          name: mode.name.trim() || "Default",
+          channels: clampChannelCount(mode.channels),
+          attributes: mode.attributes.length ? mode.attributes : ["Dimmer"],
+        }))
+      : DEFAULT_DRAFT.modes,
+  };
+}
+
+function summarizeDraftAttributes(value: FixtureTypeDraft): AttributeGroup[] {
+  const counts = new Map<string, number>();
+  for (const mode of value.modes) {
+    for (const attribute of mode.attributes) {
+      const group = inferAttributeGroup(attribute);
+      counts.set(group, (counts.get(group) ?? 0) + 1);
+    }
+  }
+
+  return Array.from(counts.entries()).map(([name, count]) => ({
+    id: name.toLowerCase(),
+    name,
+    count,
+    encoderPage: `${name} 1 of ${Math.max(1, Math.ceil(count / 4))}`,
+  }));
+}
+
+function parseAttributeList(value: string) {
+  return value
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function inferAttributeGroup(attribute: string) {
+  const lower = attribute.toLowerCase();
+  if (lower.includes("pan") || lower.includes("tilt") || lower.includes("position")) return "Position";
+  if (lower.includes("color") || lower.includes("colour") || lower.includes("rgb")) return "Color";
+  if (lower.includes("gobo")) return "Gobo";
+  if (lower.includes("beam") || lower.includes("prism") || lower.includes("focus") || lower.includes("zoom") || lower.includes("frost")) return "Beam";
+  if (lower.includes("dim") || lower.includes("shutter") || lower.includes("strobe")) return "Dimmer";
+  return "Control";
+}
+
 function getChannelRange(fixtureType: FixtureType): string {
   const channels = fixtureType.modes.map((mode) => mode.channels);
   const min = Math.min(...channels);
@@ -658,10 +767,22 @@ function getChannelRange(fixtureType: FixtureType): string {
   return min === max ? String(min) : `${min}-${max}`;
 }
 
-function getStateClass(fixtureType: FixtureType): string {
-  if (fixtureType.locked) {
-    return "lx-badge-default";
-  }
+function clampChannelCount(value: number) {
+  if (!Number.isFinite(value)) return 1;
+  return Math.max(1, Math.min(512, Math.floor(value)));
+}
 
-  return fixtureType.source === "Custom" ? "lx-badge-warn" : "lx-badge-success";
+function nextFixtureName(fixtureTypes: FixtureType[]) {
+  return `New Fixture Type ${fixtureTypes.length + 1}`;
+}
+
+function formatBytes(value: number) {
+  if (value < 1024) return `${value} B`;
+  if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`;
+  return `${(value / 1024 / 1024).toFixed(1)} MB`;
+}
+
+function errorToMessage(error: unknown) {
+  if (error instanceof Error) return error.message;
+  return String(error);
 }

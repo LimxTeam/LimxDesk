@@ -27,6 +27,7 @@
 // │ titlebar_is_maximized             │ titlebar                │
 // ============================================================
 
+mod fixture_types;
 mod show;
 mod titlebar;
 mod tray;
@@ -62,6 +63,12 @@ pub fn run() {
             show::show_save_as,
             show::show_delete,
             show::show_current,
+            fixture_types::fixture_type_library_root,
+            fixture_types::fixture_type_scan_library,
+            fixture_types::fixture_type_import_gdtf,
+            fixture_types::fixture_type_create,
+            fixture_types::fixture_type_update,
+            fixture_types::fixture_type_delete,
         ])
         .run(tauri::generate_context!())
         .expect("启动 Tauri 应用失败");

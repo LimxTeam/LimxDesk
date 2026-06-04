@@ -322,7 +322,9 @@ fn path_to_string(path: &Path) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use limxdesk_platform::{LIBRARY_DIR_NAME, SHOW_DIR_NAME};
+    use limxdesk_platform::{
+        FIXTURE_TYPES_DIR_NAME, GDTF_DIR_NAME, LIBRARY_DIR_NAME, SHOW_DIR_NAME,
+    };
     use std::env;
 
     #[test]
@@ -336,6 +338,15 @@ mod tests {
                 .join("LimxDesk")
                 .join(LIBRARY_DIR_NAME)
                 .join(SHOW_DIR_NAME),
+            fixture_types_root: root
+                .join("LimxDesk")
+                .join(LIBRARY_DIR_NAME)
+                .join(FIXTURE_TYPES_DIR_NAME),
+            gdtf_root: root
+                .join("LimxDesk")
+                .join(LIBRARY_DIR_NAME)
+                .join(FIXTURE_TYPES_DIR_NAME)
+                .join(GDTF_DIR_NAME),
         };
         let repository = ShowRepository::new(paths);
 

@@ -10,6 +10,8 @@ use std::{
 pub const APP_DIR_NAME: &str = "LimxDesk";
 pub const LIBRARY_DIR_NAME: &str = "Library";
 pub const SHOW_DIR_NAME: &str = "Show";
+pub const FIXTURE_TYPES_DIR_NAME: &str = "FixtureTypes";
+pub const GDTF_DIR_NAME: &str = "GDTF";
 
 #[derive(Debug)]
 pub enum PlatformError {
@@ -43,6 +45,8 @@ pub struct PlatformPaths {
     pub app_data_root: PathBuf,
     pub library_root: PathBuf,
     pub show_root: PathBuf,
+    pub fixture_types_root: PathBuf,
+    pub gdtf_root: PathBuf,
 }
 
 impl PlatformPaths {
@@ -51,17 +55,22 @@ impl PlatformPaths {
         let app_data_root = program_data_root.join(APP_DIR_NAME);
         let library_root = app_data_root.join(LIBRARY_DIR_NAME);
         let show_root = library_root.join(SHOW_DIR_NAME);
+        let fixture_types_root = library_root.join(FIXTURE_TYPES_DIR_NAME);
+        let gdtf_root = fixture_types_root.join(GDTF_DIR_NAME);
 
         Self {
             program_data_root,
             app_data_root,
             library_root,
             show_root,
+            fixture_types_root,
+            gdtf_root,
         }
     }
 
     pub fn ensure_base_layout(&self) -> PlatformResult<()> {
         fs::create_dir_all(&self.show_root)?;
+        fs::create_dir_all(&self.gdtf_root)?;
         Ok(())
     }
 }
@@ -109,6 +118,19 @@ impl LocalFileSystem {
     pub fn delete_file(&self, path: impl AsRef<Path>) -> PlatformResult<()> {
         fs::remove_file(path)?;
         Ok(())
+    }
+
+    pub fn copy_file(
+        &self,
+        source: impl AsRef<Path>,
+        destination: impl AsRef<Path>,
+    ) -> PlatformResult<u64> {
+        let destination = destination.as_ref();
+        let parent = destination.parent().ok_or_else(|| {
+            PlatformError::InvalidPath(format!("path has no parent: {}", destination.display()))
+        })?;
+        self.ensure_dir(parent)?;
+        Ok(fs::copy(source, destination)?)
     }
 
     pub fn file_size(&self, path: impl AsRef<Path>) -> PlatformResult<u64> {

@@ -1,0 +1,10 @@
+[package]
+name = "limxdesk-fixture-types"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+limxdesk-gdtf = { path = "../limxdesk-gdtf" }
+limxdesk-platform = { path = "../limxdesk-platform" }
+serde = { version = "1", features = ["derive"] }
+uuid = { version = "1", features = ["v4", "serde"] }
