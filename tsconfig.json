@@ -27,6 +27,8 @@
       "@limxdesk/ui/*": ["./packages/ui/src/*"],
       "@limxdesk/console": ["./packages/console/src/index.ts"],
       "@limxdesk/console/*": ["./packages/console/src/*"],
+      "@limxdesk/settings": ["./packages/settings/src/index.ts"],
+      "@limxdesk/settings/*": ["./packages/settings/src/*"],
       "@/*": ["./apps/src/*"]
     }
   },

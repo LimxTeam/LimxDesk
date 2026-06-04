@@ -14,6 +14,7 @@ export default defineConfig({
       "@limxdesk/notifications": path.resolve(__dirname, "./packages/notifications/src/index.ts"),
       "@limxdesk/ui": path.resolve(__dirname, "./packages/ui/src/index.tsx"),
       "@limxdesk/console": path.resolve(__dirname, "./packages/console/src/index.ts"),
+      "@limxdesk/settings": path.resolve(__dirname, "./packages/settings/src/index.ts"),
       "@": path.resolve(__dirname, "./apps/src"),
     },
   },

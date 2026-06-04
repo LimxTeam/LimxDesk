@@ -17,6 +17,7 @@
     "@limxdesk/notifications": "workspace:*",
     "@limxdesk/ui": "workspace:*",
     "@limxdesk/console": "workspace:*",
+    "@limxdesk/settings": "workspace:*",
     "@tauri-apps/api": "^2.11.0",
     "@tauri-apps/plugin-shell": "^2.3.5",
     "@tauri-apps/plugin-dialog": "^2.7.1",

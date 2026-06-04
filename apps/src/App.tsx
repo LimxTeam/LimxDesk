@@ -1,11 +1,16 @@
 import { Titlebar } from "@limxdesk/shell";
 import { DynamicIsland, dynamicIsland } from "@limxdesk/notifications";
 import { ConsoleShell } from "@limxdesk/console";
+import { SettingsApp } from "@limxdesk/settings";
 import { useEffect } from "react";
 
 export default function App() {
+  const mode = new URLSearchParams(window.location.search).get("window");
+
   // 启动时展示灵动岛欢迎通知
   useEffect(() => {
+    if (mode === "settings") return;
+
     dynamicIsland.show({
       type: "success",
       title: "LimxDesk 已就绪",
@@ -13,7 +18,11 @@ export default function App() {
       progress: 1,
       duration: 2400,
     });
-  }, []);
+  }, [mode]);
+
+  if (mode === "settings") {
+    return <SettingsApp />;
+  }
 
   return (
     <div className="flex h-screen w-screen flex-col">

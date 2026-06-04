@@ -3,10 +3,11 @@ import {
   Zap, Settings, FolderOpen, SlidersHorizontal, Group, GitBranch,
   ListOrdered, Monitor, HelpCircle, Filter,
 } from "lucide-react";
+import { openSettingsWindow } from "@limxdesk/settings";
 
 const NAV_ITEMS = [
   { id: "power",   icon: Zap, label: "" },
-  { id: "setup",   icon: Settings, label: "" },
+  { id: "setup",   icon: Settings, label: "", action: () => void openSettingsWindow() },
   { id: "library", icon: FolderOpen, label: "" },
   { id: "faders",  icon: SlidersHorizontal, label: "" },
   { id: "groups",  icon: Group, label: "" },
@@ -36,7 +37,10 @@ export function LeftSidebar() {
         return (
           <button
             key={item.id}
-            onClick={() => setActive(item.id)}
+            onClick={() => {
+              setActive(item.id);
+              item.action?.();
+            }}
             title={item.id}
             style={{
               width: 36,
