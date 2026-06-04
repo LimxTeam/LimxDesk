@@ -21,7 +21,12 @@ export default function App() {
   }, [mode]);
 
   if (mode === "settings") {
-    return <SettingsApp />;
+    return (
+      <>
+        <SettingsApp />
+        <DynamicIsland />
+      </>
+    );
   }
 
   return (

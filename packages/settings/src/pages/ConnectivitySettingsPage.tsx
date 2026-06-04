@@ -1,6 +1,7 @@
 import { useDeferredValue, useEffect, useState } from "react";
 import type { ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { dynamicIsland, type IslandType } from "@limxdesk/notifications";
 import { FloatingDialog } from "@limxdesk/ui";
 import {
   AlertTriangle,
@@ -100,6 +101,7 @@ export function ConnectivitySettingsPage() {
         setShowLoaded(false);
         setFixtures([]);
         setSelectedId("");
+        showPatchNotice("warning", "没有加载秀文件", "请先新建或加载 show 文件");
         setLogLine("No show loaded. Create or load a show file before editing patch.");
         return;
       }
@@ -112,10 +114,12 @@ export function ConnectivitySettingsPage() {
       setSelectedId(nextFixtures[0]?.id ?? "");
       setLogLine(`Loaded ${nextFixtures.length} patched fixture${nextFixtures.length === 1 ? "" : "s"} from show`);
     } catch (error) {
+      const message = errorToMessage(error);
       setShowLoaded(false);
       setFixtures([]);
       setSelectedId("");
-      setLogLine(errorToMessage(error));
+      showPatchNotice("error", "加载配接失败", message, 4200);
+      setLogLine(message);
     } finally {
       setBusy(false);
     }
@@ -132,7 +136,9 @@ export function ConnectivitySettingsPage() {
           : `Loaded ${entries.length} GDTF fixture type${entries.length === 1 ? "" : "s"}`,
       );
     } catch (error) {
-      setLogLine(errorToMessage(error));
+      const message = errorToMessage(error);
+      showPatchNotice("error", "加载灯具类型失败", message, 4200);
+      setLogLine(message);
     } finally {
       setBusy(false);
     }
@@ -141,6 +147,7 @@ export function ConnectivitySettingsPage() {
   const updateSelected = (patch: Partial<PatchFixture>) => {
     if (!selectedFixture) return;
     if (!showLoaded) {
+      showPatchNotice("warning", "无法编辑配接", "请先新建或加载 show 文件");
       setLogLine("No show loaded. Patch changes are blocked.");
       return;
     }
@@ -148,7 +155,9 @@ export function ConnectivitySettingsPage() {
     const nextFixture = normalizeFixture({ ...selectedFixture, ...patch }, fixtureTypes);
     const issues = getFixtureIssues(fixtures, nextFixture);
     if (issues.length > 0) {
-      setLogLine(formatIssueMessage(issues, nextFixture));
+      const message = formatIssueMessage(issues, nextFixture);
+      showPatchNotice("error", "配接冲突", message, 4200);
+      setLogLine(message);
       return;
     }
 
@@ -158,15 +167,11 @@ export function ConnectivitySettingsPage() {
     );
   };
 
-  const applyWizard = (draft: PatchWizardDraft) => {
-    if (!showLoaded) {
-      setLogLine("No show loaded. Patch changes are blocked.");
-      return;
-    }
-
+  const applyWizard = async (draft: PatchWizardDraft) => {
     const fixtureType = fixtureTypes.find((item) => item.path === draft.fixtureTypePath);
     const mode = fixtureType?.modes.find((item) => item.id === draft.modeId) ?? fixtureType?.modes[0];
     if (!fixtureType || !mode) {
+      showPatchNotice("warning", "无法应用配接", "没有可用的 GDTF 灯具类型");
       setLogLine("No GDTF fixture type selected");
       return;
     }
@@ -177,19 +182,24 @@ export function ConnectivitySettingsPage() {
     }));
     const issues = getBatchIssues(fixtures, nextFixtures);
     if (issues.length > 0) {
-      setLogLine(`Cannot patch: ${issues[0]}`);
+      const message = `Cannot patch: ${issues[0]}`;
+      showPatchNotice("error", "配接冲突", issues[0], 4600);
+      setLogLine(message);
       return;
     }
 
     const next = [...fixtures, ...nextFixtures].sort((left, right) => left.fid - right.fid);
-    void commitFixtures(next, `Patched ${nextFixtures.length} ${fixtureType.name} fixture${nextFixtures.length === 1 ? "" : "s"}`);
-    setSelectedId(nextFixtures[0]?.id ?? selectedId);
-    setWizardOpen(false);
+    const saved = await commitFixtures(next, `Patched ${nextFixtures.length} ${fixtureType.name} fixture${nextFixtures.length === 1 ? "" : "s"}`);
+    if (saved) {
+      setSelectedId(nextFixtures[0]?.id ?? selectedId);
+      setWizardOpen(false);
+    }
   };
 
   const duplicateFixture = () => {
     if (!selectedFixture) return;
     if (!showLoaded) {
+      showPatchNotice("warning", "无法复制配接", "请先新建或加载 show 文件");
       setLogLine("No show loaded. Patch changes are blocked.");
       return;
     }
@@ -212,6 +222,7 @@ export function ConnectivitySettingsPage() {
   const deleteFixture = () => {
     if (!selectedFixture) return;
     if (!showLoaded) {
+      showPatchNotice("warning", "无法删除配接", "请先新建或加载 show 文件");
       setLogLine("No show loaded. Patch changes are blocked.");
       return;
     }
@@ -223,6 +234,7 @@ export function ConnectivitySettingsPage() {
 
   const autoPatch = () => {
     if (!showLoaded) {
+      showPatchNotice("warning", "无法自动配接", "请先新建或加载 show 文件");
       setLogLine("No show loaded. Patch changes are blocked.");
       return;
     }
@@ -240,15 +252,42 @@ export function ConnectivitySettingsPage() {
     void commitFixtures(next, "Auto patched unassigned fixtures");
   };
 
-  const commitFixtures = async (nextFixtures: PatchFixture[], message: string) => {
-    setFixtures(nextFixtures);
+  const commitFixtures = async (nextFixtures: PatchFixture[], message: string): Promise<boolean> => {
     setBusy(true);
+    const islandId = dynamicIsland.show({
+      type: "loading",
+      title: "正在保存配接",
+      subtitle: "写入当前 show 文件",
+      glow: true,
+    });
     try {
       await invoke<void>("patch_save_current_show", { fixtures: nextFixtures });
+      setFixtures(nextFixtures);
       setShowLoaded(true);
       setLogLine(message);
+      dynamicIsland.update(islandId, {
+        type: "success",
+        title: "配接已保存",
+        subtitle: message,
+        progress: 1,
+        spinning: false,
+        glow: false,
+      });
+      window.setTimeout(() => dynamicIsland.hide(islandId), 1800);
+      return true;
     } catch (error) {
-      setLogLine(errorToMessage(error));
+      const errorMessage = errorToMessage(error);
+      setLogLine(errorMessage);
+      dynamicIsland.update(islandId, {
+        type: "error",
+        title: "保存配接失败",
+        subtitle: errorMessage,
+        progress: 0,
+        spinning: false,
+        glow: false,
+      });
+      window.setTimeout(() => dynamicIsland.hide(islandId), 4600);
+      return false;
     } finally {
       setBusy(false);
     }
@@ -450,7 +489,7 @@ function PatchWizardDialog({
             <button type="button" className="lx-btn lx-btn-ghost" onClick={onClose}>
               Cancel
             </button>
-            <button type="button" className="lx-btn lx-btn-primary" onClick={() => onApply(normalizeWizardDraft(draft))} disabled={!fixtureType || !mode || issues.length > 0}>
+            <button type="button" className="lx-btn lx-btn-primary" onClick={() => onApply(normalizeWizardDraft(draft))} disabled={!fixtureType || !mode}>
               Apply
             </button>
           </div>
@@ -1053,4 +1092,13 @@ function clampAddress(value: number) {
 function errorToMessage(error: unknown) {
   if (error instanceof Error) return error.message;
   return String(error);
+}
+
+function showPatchNotice(type: IslandType, title: string, subtitle?: string, duration = 2600) {
+  dynamicIsland.show({
+    type,
+    title,
+    subtitle,
+    duration,
+  });
 }
