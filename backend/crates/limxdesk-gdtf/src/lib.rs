@@ -75,6 +75,14 @@ pub struct GdtfModeSummary {
     pub name: String,
     pub channels: u16,
     pub attributes: Vec<String>,
+    pub attribute_details: Vec<GdtfModeAttributeSummary>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GdtfModeAttributeSummary {
+    pub name: String,
+    pub feature_group: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -189,8 +197,9 @@ pub fn parse_description_xml(xml: &str) -> GdtfResult<GdtfFixtureSummary> {
             GdtfError::InvalidArchive("description.xml has no FixtureType".to_string())
         })?;
 
-    let modes = parse_modes(fixture);
-    let attribute_groups = summarize_attributes(fixture, &modes);
+    let features_by_attribute = attribute_feature_map(fixture);
+    let modes = parse_modes(fixture, &features_by_attribute);
+    let attribute_groups = summarize_attributes(&modes);
 
     Ok(GdtfFixtureSummary {
         fixture_type_id: fixture
@@ -223,7 +232,10 @@ pub fn parse_description_xml(xml: &str) -> GdtfResult<GdtfFixtureSummary> {
     })
 }
 
-fn parse_modes(fixture: Node<'_, '_>) -> Vec<GdtfModeSummary> {
+fn parse_modes(
+    fixture: Node<'_, '_>,
+    features_by_attribute: &BTreeMap<String, String>,
+) -> Vec<GdtfModeSummary> {
     let mut modes = Vec::new();
     if let Some(dmx_modes) = fixture
         .children()
@@ -235,7 +247,8 @@ fn parse_modes(fixture: Node<'_, '_>) -> Vec<GdtfModeSummary> {
             .enumerate()
         {
             let mut max_channel = 0_u16;
-            let mut attributes = BTreeSet::new();
+            let mut attributes = Vec::new();
+            let mut seen_attributes = BTreeSet::new();
 
             for dmx_channel in mode
                 .descendants()
@@ -248,7 +261,12 @@ fn parse_modes(fixture: Node<'_, '_>) -> Vec<GdtfModeSummary> {
                 if let Some(attribute) =
                     attribute_from_initial_function(dmx_channel.attribute("InitialFunction"))
                 {
-                    attributes.insert(attribute);
+                    push_mode_attribute(
+                        &mut attributes,
+                        &mut seen_attributes,
+                        features_by_attribute,
+                        attribute,
+                    );
                 }
 
                 for logical_channel in dmx_channel
@@ -258,7 +276,12 @@ fn parse_modes(fixture: Node<'_, '_>) -> Vec<GdtfModeSummary> {
                     if let Some(attribute) =
                         normalize_attribute_link(logical_channel.attribute("Attribute"))
                     {
-                        attributes.insert(attribute);
+                        push_mode_attribute(
+                            &mut attributes,
+                            &mut seen_attributes,
+                            features_by_attribute,
+                            attribute,
+                        );
                     }
 
                     for function in logical_channel
@@ -268,22 +291,37 @@ fn parse_modes(fixture: Node<'_, '_>) -> Vec<GdtfModeSummary> {
                         if let Some(attribute) =
                             normalize_attribute_link(function.attribute("Attribute"))
                         {
-                            attributes.insert(attribute);
+                            push_mode_attribute(
+                                &mut attributes,
+                                &mut seen_attributes,
+                                features_by_attribute,
+                                attribute,
+                            );
                         }
                         if let Some(attribute) =
                             normalize_attribute_link(function.attribute("OriginalAttribute"))
                         {
-                            attributes.insert(attribute);
+                            push_mode_attribute(
+                                &mut attributes,
+                                &mut seen_attributes,
+                                features_by_attribute,
+                                attribute,
+                            );
                         }
                     }
                 }
             }
 
+            let attribute_names = attributes
+                .iter()
+                .map(|attribute| attribute.name.clone())
+                .collect();
             modes.push(GdtfModeSummary {
                 id: format!("mode-{index}"),
                 name: mode.attribute("Name").unwrap_or("Default").to_string(),
                 channels: max_channel,
-                attributes: attributes.into_iter().collect(),
+                attributes: attribute_names,
+                attribute_details: attributes,
             });
         }
     }
@@ -294,40 +332,38 @@ fn parse_modes(fixture: Node<'_, '_>) -> Vec<GdtfModeSummary> {
             name: "Default".to_string(),
             channels: 0,
             attributes: Vec::new(),
+            attribute_details: Vec::new(),
         });
     }
 
     modes
 }
 
-fn summarize_attributes(
-    fixture: Node<'_, '_>,
-    modes: &[GdtfModeSummary],
-) -> Vec<GdtfAttributeGroupSummary> {
-    let mut features_by_attribute = BTreeMap::<String, String>::new();
-
-    if let Some(attributes) = fixture
-        .descendants()
-        .find(|node| node.has_tag_name("Attributes"))
-    {
-        for attribute in attributes
-            .children()
-            .filter(|node| node.has_tag_name("Attribute"))
-        {
-            let name = normalize_attribute_link(attribute.attribute("Name")).unwrap_or_default();
-            let feature = attribute.attribute("Feature").unwrap_or(&name);
-            features_by_attribute.insert(name.to_string(), feature_group_name(feature));
-        }
+fn push_mode_attribute(
+    attributes: &mut Vec<GdtfModeAttributeSummary>,
+    seen_attributes: &mut BTreeSet<String>,
+    features_by_attribute: &BTreeMap<String, String>,
+    attribute: String,
+) {
+    if !seen_attributes.insert(attribute.clone()) {
+        return;
     }
 
+    let feature_group = features_by_attribute
+        .get(&attribute)
+        .cloned()
+        .unwrap_or_else(|| infer_attribute_group(&attribute));
+    attributes.push(GdtfModeAttributeSummary {
+        name: attribute,
+        feature_group,
+    });
+}
+
+fn summarize_attributes(modes: &[GdtfModeSummary]) -> Vec<GdtfAttributeGroupSummary> {
     let mut counts = BTreeMap::<String, u16>::new();
     for mode in modes {
-        for attribute in &mode.attributes {
-            let group = features_by_attribute
-                .get(attribute)
-                .cloned()
-                .unwrap_or_else(|| infer_attribute_group(attribute));
-            *counts.entry(group).or_insert(0) += 1;
+        for attribute in &mode.attribute_details {
+            *counts.entry(attribute.feature_group.clone()).or_insert(0) += 1;
         }
     }
 
@@ -347,6 +383,31 @@ fn summarize_attributes(
             }
         })
         .collect()
+}
+
+fn attribute_feature_map(fixture: Node<'_, '_>) -> BTreeMap<String, String> {
+    let mut features_by_attribute = BTreeMap::<String, String>::new();
+
+    if let Some(attributes) = fixture
+        .descendants()
+        .find(|node| node.has_tag_name("Attributes"))
+    {
+        for attribute in attributes
+            .children()
+            .filter(|node| node.has_tag_name("Attribute"))
+        {
+            let Some(name) = normalize_attribute_link(attribute.attribute("Name")) else {
+                continue;
+            };
+            let feature = attribute
+                .attribute("Feature")
+                .map(feature_group_name)
+                .unwrap_or_else(|| infer_attribute_group(&name));
+            features_by_attribute.insert(name, feature);
+        }
+    }
+
+    features_by_attribute
 }
 
 fn build_description_xml(fixture_type_id: &str, draft: &GdtfFixtureDraft) -> String {
@@ -700,7 +761,12 @@ mod tests {
 </GDTF>"#;
 
         let summary = parse_description_xml(xml).unwrap();
-        assert_eq!(summary.modes[0].attributes, vec!["ColorAdd_R", "Dimmer"]);
+        assert_eq!(summary.modes[0].attributes, vec!["Dimmer", "ColorAdd_R"]);
+        assert_eq!(
+            summary.modes[0].attribute_details[0].feature_group,
+            "Dimmer"
+        );
+        assert_eq!(summary.modes[0].attribute_details[1].feature_group, "Color");
         assert!(summary
             .attribute_groups
             .iter()

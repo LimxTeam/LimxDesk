@@ -56,6 +56,12 @@ interface FixtureTypeMode {
   name: string;
   channels: number;
   attributes: string[];
+  attributeDetails?: FixtureModeAttribute[];
+}
+
+interface FixtureModeAttribute {
+  name: string;
+  featureGroup: string;
 }
 
 interface FixtureSelection {
@@ -69,7 +75,6 @@ interface Programmer {
   preview: ProgrammerBuffer;
   mode: ProgrammerMode;
   blind: boolean;
-  selection?: ProgrammerSelectionContext;
   version: number;
 }
 
@@ -99,18 +104,10 @@ interface ProgrammerScalar {
   text: string | null;
 }
 
-interface ProgrammerSelectionContext {
-  order: Array<{
-    fixtureId: string;
-    orderIndex: number;
-  }>;
-  primaryFixtureId: string | null;
-}
-
 type ProgrammerMode = "live" | "preview";
 type ProgrammerLayer = "absolute" | "relative" | "fade" | "delay";
 type ProgrammerValueSource = "manual" | "preset" | "output";
-type AttributeGroupId = "dimmer" | "position" | "gobo" | "color" | "beam" | "focus";
+type AttributeGroupId = "dimmer" | "position" | "gobo" | "color" | "beam" | "focus" | "control";
 interface ProgrammerSetAttributeRequest {
   attribute: string;
   featureGroup: string;
@@ -128,9 +125,10 @@ const ATTRIBUTE_GROUP_LABELS: Record<AttributeGroupId, string> = {
   color: "Color",
   beam: "Beam",
   focus: "Focus",
+  control: "Control",
 };
 
-const ATTRIBUTE_GROUP_ORDER: AttributeGroupId[] = ["dimmer", "position", "gobo", "color", "beam", "focus"];
+const ATTRIBUTE_GROUP_ORDER: AttributeGroupId[] = ["dimmer", "position", "gobo", "color", "beam", "focus", "control"];
 
 export function ControlPanel() {
   const [activeTab, setActiveTab] = useState("dimmer");
@@ -227,7 +225,7 @@ export function ControlPanel() {
     fixtures.find((fixture) => fixture.id === selectedFixtureId);
   const pageInfo = buildPageInfo(selectedFixture, fixtureTypes, programmer);
   const tabs = buildAttributeTabs(pageInfo);
-  const info = pageInfo[activeTab] ?? pageInfo[tabs[0]?.id] ?? {
+  const info = pageInfo[activeTab] ?? pageInfo[tabs[0]?.id ?? ""] ?? {
     name: "No Attribute",
     encoders: [],
   };
@@ -251,9 +249,9 @@ export function ControlPanel() {
 
   async function refreshRuntimeData(selectionOverride?: FixtureSelection) {
     try {
-      const [document, types, currentSelection, currentProgrammer] = await Promise.all([
+      const types = await invoke<FixtureTypeEntry[]>("fixture_type_scan_current_show");
+      const [document, currentSelection, currentProgrammer] = await Promise.all([
         invoke<PatchDocument | null>("patch_load_current_show"),
-        invoke<FixtureTypeEntry[]>("fixture_type_scan_current_show"),
         invoke<FixtureSelection>("fixture_selection_get"),
         invoke<Programmer>("programmer_get"),
       ]);
@@ -434,23 +432,8 @@ function buildPageInfo(
   fixtureTypes: FixtureTypeEntry[],
   programmer: Programmer,
 ): Record<string, EncoderGroup> {
-  const groups: Record<string, EncoderGroup> = {
-    matricks: {
-      name: "MAtricks",
-      encoders: [],
-    },
-  };
+  const groups: Record<string, EncoderGroup> = {};
   if (!fixture) return groups;
-
-  groups.selection = {
-    name: "Selection",
-    encoders: [
-      { name: "FID", value: String(fixture.fid) },
-      { name: "Fixture", value: fixture.name },
-      { name: "Selected", value: String(programmer.selection?.order.length ?? 1) },
-      { name: "Mode", value: fixture.modeName },
-    ],
-  };
 
   const fixtureType = fixtureTypes.find(
     (item) =>
@@ -460,10 +443,12 @@ function buildPageInfo(
   );
   const mode =
     fixtureType?.modes.find((item) => item.id === fixture.modeId) ??
-    fixtureType?.modes.find((item) => item.name === fixture.modeName);
+    fixtureType?.modes.find((item) => item.name === fixture.modeName) ??
+    fixtureType?.modes.find((item) => item.channels === fixture.channels) ??
+    fixtureType?.modes[0];
   if (!mode) return groups;
 
-  const dynamicGroups = groupAttributes(mode.attributes, fixture, programmer);
+  const dynamicGroups = groupAttributes(resolveModeAttributes(mode), fixture, programmer);
   for (const [id, encoders] of Object.entries(dynamicGroups)) {
     if (encoders.length === 0) continue;
     groups[id] = {
@@ -475,7 +460,7 @@ function buildPageInfo(
   return groups;
 }
 
-function groupAttributes(attributes: string[], fixture: PatchFixture, programmer: Programmer) {
+function groupAttributes(attributes: FixtureModeAttribute[], fixture: PatchFixture, programmer: Programmer) {
   const groups: Record<AttributeGroupId, EncoderParam[]> = {
     dimmer: [],
     position: [],
@@ -483,31 +468,45 @@ function groupAttributes(attributes: string[], fixture: PatchFixture, programmer
     color: [],
     beam: [],
     focus: [],
+    control: [],
   };
 
   for (const attribute of attributes) {
-    const group = inferAttributeTab(attribute);
+    const group = featureGroupToTab(attribute.featureGroup);
     groups[group].push({
-      name: formatAttributeName(attribute),
-      attribute,
-      featureGroup: titleCase(group),
+      name: formatAttributeName(attribute.name),
+      attribute: attribute.name,
+      featureGroup: attribute.featureGroup,
       layer: "absolute",
-      value: resolveProgrammerValue(programmer, fixture.id, attribute) ?? "--",
+      value: resolveProgrammerValue(programmer, fixture.id, attribute.name) ?? "--",
     });
   }
 
   return groups;
 }
 
-function inferAttributeTab(attribute: string): AttributeGroupId {
-  const lower = attribute.toLowerCase();
-  if (lower.includes("pan") || lower.includes("tilt") || lower.includes("position")) return "position";
-  if (lower.includes("gobo")) return "gobo";
-  if (lower.includes("color") || lower.includes("colour") || lower.includes("rgb") || lower.includes("cmy") || lower.includes("cto") || lower.includes("ctb")) return "color";
-  if (lower.includes("focus")) return "focus";
-  if (lower.includes("zoom") || lower.includes("iris") || lower.includes("prism") || lower.includes("frost") || lower.includes("beam")) return "beam";
-  if (lower.includes("dim") || lower.includes("shutter") || lower.includes("strobe")) return "dimmer";
-  return "beam";
+function resolveModeAttributes(mode: FixtureTypeMode): FixtureModeAttribute[] {
+  if (mode.attributeDetails?.length) {
+    return mode.attributeDetails.filter((attribute) => attribute.name.trim());
+  }
+
+  return mode.attributes
+    .filter((attribute) => attribute.trim())
+    .map((attribute) => ({
+      name: attribute,
+      featureGroup: "Control",
+    }));
+}
+
+function featureGroupToTab(featureGroup: string): AttributeGroupId {
+  const normalized = featureGroup.trim().toLowerCase();
+  if (normalized === "dimmer" || normalized === "strobe") return "dimmer";
+  if (normalized === "position") return "position";
+  if (normalized === "gobo") return "gobo";
+  if (normalized === "color" || normalized === "colour") return "color";
+  if (normalized === "focus") return "focus";
+  if (normalized === "beam") return "beam";
+  return "control";
 }
 
 function formatAttributeName(attribute: string) {
@@ -561,12 +560,6 @@ function buildAttributeTabs(pageInfo: Record<string, EncoderGroup>): AttributeTa
       });
     }
   }
-
-  if (pageInfo.selection) {
-    tabs.push({ id: "selection", label: "Selection" });
-  }
-
-  tabs.push({ id: "matricks", label: "MAtricks" });
   return tabs;
 }
 

@@ -5,12 +5,13 @@ use limxdesk_fixture_types::{
 use limxdesk_platform::current_timestamp_millis;
 use limxdesk_showfile::{LoadedShow, ShowRepository};
 use serde::{Deserialize, Serialize};
-use std::{collections::HashMap, fs};
+use std::{collections::HashMap, fs, path::Path};
 use tauri::{AppHandle, State};
 
 const FIXTURE_TYPES_SECTION_KEY: &str = "fixture-types.v1";
 const FIXTURE_TYPES_SECTION_VERSION: u16 = 1;
 const PATCH_SECTION_KEY: &str = "patch.v1";
+const PATCH_SECTION_VERSION: u16 = 1;
 
 #[tauri::command]
 pub fn fixture_type_library_root() -> Result<String, String> {
@@ -63,7 +64,8 @@ pub fn fixture_type_delete(path: String) -> Result<(), String> {
 pub fn fixture_type_scan_current_show(
     state: State<'_, ShowRuntimeState>,
 ) -> Result<Vec<FixtureTypeEntry>, String> {
-    let (show, document) = load_show_fixture_type_document(&state)?;
+    let (show, mut document) = load_show_fixture_type_document(&state)?;
+    let show = migrate_global_fixture_types_into_show(&show, &mut document, &state)?;
     let used_counts = load_fixture_type_usage(&show)?;
     let mut entries = entries_from_document(&document)?;
 
@@ -260,6 +262,76 @@ fn entries_from_document(
             Ok(entry)
         })
         .collect()
+}
+
+fn migrate_global_fixture_types_into_show(
+    show: &LoadedShow,
+    document: &mut ShowFixtureTypeDocument,
+    state: &State<'_, ShowRuntimeState>,
+) -> Result<LoadedShow, String> {
+    let repository = ShowRepository::default_for_current_os();
+    let Some(mut patch_document) = repository
+        .read_section::<limxdesk_patch::PatchDocument>(&show.path, PATCH_SECTION_KEY)
+        .map_err(|error| error.to_string())?
+    else {
+        return Ok(show.clone());
+    };
+
+    let mut migrated = false;
+    let mut saved_show = show.clone();
+    for fixture in &mut patch_document.fixtures {
+        if fixture.fixture_type_path.trim().is_empty()
+            || fixture.fixture_type_path.starts_with("show://")
+            || document.entries.iter().any(|record| {
+                record.path == fixture.fixture_type_path || record.id == fixture.fixture_type_id
+            })
+        {
+            continue;
+        }
+
+        let source_path = Path::new(&fixture.fixture_type_path);
+        if !source_path.exists() {
+            continue;
+        }
+
+        let bytes = fs::read(source_path).map_err(|error| error.to_string())?;
+        let entry = entry_from_show_bytes(&bytes, "", 0)?;
+        let now = current_timestamp_millis().map_err(|error| error.to_string())?;
+        let show_path = show_fixture_type_path(&entry.id);
+        upsert_show_fixture_type(
+            document,
+            ShowFixtureTypeRecord {
+                id: entry.id.clone(),
+                path: show_path.clone(),
+                origin_path: fixture.fixture_type_path.clone(),
+                gdtf_bytes: bytes,
+                created_at_ms: now,
+                updated_at_ms: now,
+            },
+        );
+
+        fixture.fixture_type_id = entry.id;
+        fixture.fixture_type_name = format!("{} {}", entry.manufacturer, entry.name)
+            .trim()
+            .to_string();
+        fixture.fixture_type_path = show_path;
+        migrated = true;
+    }
+
+    if migrated {
+        saved_show = save_show_fixture_type_document(&saved_show, document, state)?;
+        saved_show = repository
+            .write_section(
+                &saved_show.path,
+                PATCH_SECTION_KEY,
+                PATCH_SECTION_VERSION,
+                &limxdesk_patch::normalize_document(patch_document),
+            )
+            .map_err(|error| error.to_string())?;
+        state.set_current(saved_show.clone())?;
+    }
+
+    Ok(saved_show)
 }
 
 fn entry_from_show_bytes(

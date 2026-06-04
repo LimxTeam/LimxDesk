@@ -1,7 +1,7 @@
 use limxdesk_gdtf::{
     create_gdtf, create_gdtf_bytes as create_gdtf_archive_bytes, read_gdtf, read_gdtf_bytes,
     update_gdtf, update_gdtf_bytes as update_gdtf_archive_bytes, GdtfError, GdtfFixtureDraft,
-    GdtfFixtureSummary, GDTF_EXTENSION,
+    GdtfFixtureSummary, GdtfModeAttributeSummary, GDTF_EXTENSION,
 };
 use limxdesk_platform::{LocalFileSystem, PlatformError, PlatformPaths};
 use serde::{Deserialize, Serialize};
@@ -89,6 +89,14 @@ pub struct FixtureModeEntry {
     pub name: String,
     pub channels: u16,
     pub attributes: Vec<String>,
+    pub attribute_details: Vec<FixtureModeAttributeEntry>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FixtureModeAttributeEntry {
+    pub name: String,
+    pub feature_group: String,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -302,6 +310,7 @@ fn entry_from_summary(
             name: mode.name,
             channels: mode.channels,
             attributes: mode.attributes,
+            attribute_details: mode.attribute_details.into_iter().map(Into::into).collect(),
         })
         .collect();
 
@@ -330,6 +339,15 @@ fn entry_from_summary(
         size_bytes,
         modes,
         attributes,
+    }
+}
+
+impl From<GdtfModeAttributeSummary> for FixtureModeAttributeEntry {
+    fn from(value: GdtfModeAttributeSummary) -> Self {
+        Self {
+            name: value.name,
+            feature_group: value.feature_group,
+        }
     }
 }
 
