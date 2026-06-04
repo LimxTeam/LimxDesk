@@ -76,6 +76,7 @@ pub struct GdtfModeSummary {
     pub channels: u16,
     pub attributes: Vec<String>,
     pub attribute_details: Vec<GdtfModeAttributeSummary>,
+    pub sub_fixtures: Vec<GdtfModeSubFixtureSummary>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -83,6 +84,20 @@ pub struct GdtfModeSummary {
 pub struct GdtfModeAttributeSummary {
     pub name: String,
     pub feature_group: String,
+    pub occurrence_count: u16,
+    pub module_ids: Vec<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GdtfModeSubFixtureSummary {
+    pub id: String,
+    pub name: String,
+    pub geometry: String,
+    pub index: u16,
+    pub first_address: Option<u16>,
+    pub channel_count: u16,
+    pub attributes: Vec<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -112,6 +127,14 @@ pub struct GdtfModeDraft {
     pub name: String,
     pub channels: u16,
     pub attributes: Vec<String>,
+}
+
+#[derive(Clone, Debug)]
+struct ChannelAttributeOccurrence {
+    name: String,
+    feature_group: String,
+    geometry: String,
+    offsets: Vec<u16>,
 }
 
 pub fn read_gdtf(path: impl AsRef<Path>) -> GdtfResult<GdtfFixtureSummary> {
@@ -247,71 +270,36 @@ fn parse_modes(
             .enumerate()
         {
             let mut max_channel = 0_u16;
-            let mut attributes = Vec::new();
-            let mut seen_attributes = BTreeSet::new();
+            let mut occurrences = Vec::new();
 
             for dmx_channel in mode
                 .descendants()
                 .filter(|node| node.has_tag_name("DMXChannel"))
             {
-                for offset in parse_offsets(dmx_channel.attribute("Offset").unwrap_or_default()) {
-                    max_channel = max_channel.max(offset);
+                let offsets = parse_offsets(dmx_channel.attribute("Offset").unwrap_or_default());
+                for offset in &offsets {
+                    max_channel = max_channel.max(*offset);
                 }
 
-                if let Some(attribute) =
-                    attribute_from_initial_function(dmx_channel.attribute("InitialFunction"))
-                {
-                    push_mode_attribute(
-                        &mut attributes,
-                        &mut seen_attributes,
-                        features_by_attribute,
-                        attribute,
-                    );
-                }
-
-                for logical_channel in dmx_channel
-                    .children()
-                    .filter(|node| node.has_tag_name("LogicalChannel"))
-                {
-                    if let Some(attribute) =
-                        normalize_attribute_link(logical_channel.attribute("Attribute"))
-                    {
-                        push_mode_attribute(
-                            &mut attributes,
-                            &mut seen_attributes,
-                            features_by_attribute,
-                            attribute,
-                        );
-                    }
-
-                    for function in logical_channel
-                        .children()
-                        .filter(|node| node.has_tag_name("ChannelFunction"))
-                    {
-                        if let Some(attribute) =
-                            normalize_attribute_link(function.attribute("Attribute"))
-                        {
-                            push_mode_attribute(
-                                &mut attributes,
-                                &mut seen_attributes,
-                                features_by_attribute,
-                                attribute,
-                            );
-                        }
-                        if let Some(attribute) =
-                            normalize_attribute_link(function.attribute("OriginalAttribute"))
-                        {
-                            push_mode_attribute(
-                                &mut attributes,
-                                &mut seen_attributes,
-                                features_by_attribute,
-                                attribute,
-                            );
-                        }
-                    }
+                if let Some(attribute) = channel_attribute(dmx_channel) {
+                    let feature_group = features_by_attribute
+                        .get(&attribute)
+                        .cloned()
+                        .unwrap_or_else(|| infer_attribute_group(&attribute));
+                    occurrences.push(ChannelAttributeOccurrence {
+                        name: attribute,
+                        feature_group,
+                        geometry: dmx_channel
+                            .attribute("Geometry")
+                            .unwrap_or_default()
+                            .to_string(),
+                        offsets,
+                    });
                 }
             }
 
+            let sub_fixtures = infer_sub_fixtures(&occurrences);
+            let attributes = summarize_mode_attributes(&occurrences, &sub_fixtures);
             let attribute_names = attributes
                 .iter()
                 .map(|attribute| attribute.name.clone())
@@ -322,6 +310,7 @@ fn parse_modes(
                 channels: max_channel,
                 attributes: attribute_names,
                 attribute_details: attributes,
+                sub_fixtures,
             });
         }
     }
@@ -333,30 +322,193 @@ fn parse_modes(
             channels: 0,
             attributes: Vec::new(),
             attribute_details: Vec::new(),
+            sub_fixtures: Vec::new(),
         });
     }
 
     modes
 }
 
-fn push_mode_attribute(
-    attributes: &mut Vec<GdtfModeAttributeSummary>,
-    seen_attributes: &mut BTreeSet<String>,
-    features_by_attribute: &BTreeMap<String, String>,
-    attribute: String,
-) {
-    if !seen_attributes.insert(attribute.clone()) {
-        return;
+fn channel_attribute(dmx_channel: Node<'_, '_>) -> Option<String> {
+    for logical_channel in dmx_channel
+        .children()
+        .filter(|node| node.has_tag_name("LogicalChannel"))
+    {
+        if let Some(attribute) = normalize_attribute_link(logical_channel.attribute("Attribute")) {
+            return Some(attribute);
+        }
+
+        for function in logical_channel
+            .children()
+            .filter(|node| node.has_tag_name("ChannelFunction"))
+        {
+            if let Some(attribute) = normalize_attribute_link(function.attribute("Attribute")) {
+                return Some(attribute);
+            }
+            if let Some(attribute) =
+                normalize_attribute_link(function.attribute("OriginalAttribute"))
+            {
+                return Some(attribute);
+            }
+        }
     }
 
-    let feature_group = features_by_attribute
-        .get(&attribute)
-        .cloned()
-        .unwrap_or_else(|| infer_attribute_group(&attribute));
-    attributes.push(GdtfModeAttributeSummary {
-        name: attribute,
-        feature_group,
-    });
+    attribute_from_initial_function(dmx_channel.attribute("InitialFunction"))
+}
+
+fn summarize_mode_attributes(
+    occurrences: &[ChannelAttributeOccurrence],
+    sub_fixtures: &[GdtfModeSubFixtureSummary],
+) -> Vec<GdtfModeAttributeSummary> {
+    let mut attributes = Vec::new();
+    let mut seen = BTreeSet::new();
+
+    for occurrence in occurrences {
+        if !seen.insert(occurrence.name.clone()) {
+            continue;
+        }
+
+        let module_ids = sub_fixtures
+            .iter()
+            .filter(|module| {
+                module
+                    .attributes
+                    .iter()
+                    .any(|item| item == &occurrence.name)
+            })
+            .map(|module| module.id.clone())
+            .collect::<Vec<_>>();
+        let occurrence_count = occurrences
+            .iter()
+            .filter(|item| item.name == occurrence.name)
+            .count()
+            .min(u16::MAX as usize) as u16;
+
+        attributes.push(GdtfModeAttributeSummary {
+            name: occurrence.name.clone(),
+            feature_group: occurrence.feature_group.clone(),
+            occurrence_count,
+            module_ids,
+        });
+    }
+
+    attributes
+}
+
+fn infer_sub_fixtures(
+    occurrences: &[ChannelAttributeOccurrence],
+) -> Vec<GdtfModeSubFixtureSummary> {
+    if occurrences.is_empty() {
+        return Vec::new();
+    }
+
+    let mut geometry_order = Vec::<String>::new();
+    for occurrence in occurrences {
+        let geometry = occurrence.geometry.trim();
+        if !geometry.is_empty() && !geometry_order.iter().any(|item| item == geometry) {
+            geometry_order.push(geometry.to_string());
+        }
+    }
+
+    if geometry_order.len() > 1 {
+        return geometry_order
+            .into_iter()
+            .enumerate()
+            .map(|(index, geometry)| {
+                let group = occurrences
+                    .iter()
+                    .filter(|occurrence| occurrence.geometry == geometry)
+                    .cloned()
+                    .collect::<Vec<_>>();
+                sub_fixture_from_occurrences(index, &geometry, &geometry, &group)
+            })
+            .collect();
+    }
+
+    let anchor = occurrences
+        .iter()
+        .find(|candidate| {
+            occurrences
+                .iter()
+                .filter(|occurrence| occurrence.name == candidate.name)
+                .count()
+                > 1
+        })
+        .map(|occurrence| occurrence.name.clone());
+    let Some(anchor) = anchor else {
+        return Vec::new();
+    };
+
+    let starts = occurrences
+        .iter()
+        .enumerate()
+        .filter_map(|(index, occurrence)| (occurrence.name == anchor).then_some(index))
+        .collect::<Vec<_>>();
+    if starts.len() <= 1 {
+        return Vec::new();
+    }
+
+    starts
+        .iter()
+        .enumerate()
+        .map(|(module_index, start)| {
+            let end = starts
+                .get(module_index + 1)
+                .copied()
+                .unwrap_or(occurrences.len());
+            let group = &occurrences[*start..end];
+            sub_fixture_from_occurrences(
+                module_index,
+                &format!("Module {}", module_index + 1),
+                group
+                    .first()
+                    .map(|occurrence| occurrence.geometry.as_str())
+                    .unwrap_or_default(),
+                group,
+            )
+        })
+        .collect()
+}
+
+fn sub_fixture_from_occurrences(
+    zero_based_index: usize,
+    name: &str,
+    geometry: &str,
+    occurrences: &[ChannelAttributeOccurrence],
+) -> GdtfModeSubFixtureSummary {
+    let mut seen = BTreeSet::new();
+    let attributes = occurrences
+        .iter()
+        .filter_map(|occurrence| {
+            if seen.insert(occurrence.name.clone()) {
+                Some(occurrence.name.clone())
+            } else {
+                None
+            }
+        })
+        .collect::<Vec<_>>();
+    let first_address = occurrences
+        .iter()
+        .flat_map(|occurrence| occurrence.offsets.iter().copied())
+        .min();
+    let max_address = occurrences
+        .iter()
+        .flat_map(|occurrence| occurrence.offsets.iter().copied())
+        .max();
+    let channel_count = first_address
+        .zip(max_address)
+        .map(|(first, last)| last.saturating_sub(first).saturating_add(1))
+        .unwrap_or_else(|| occurrences.len().min(u16::MAX as usize) as u16);
+
+    GdtfModeSubFixtureSummary {
+        id: format!("module-{}", zero_based_index + 1),
+        name: name.to_string(),
+        geometry: geometry.to_string(),
+        index: (zero_based_index + 1).min(u16::MAX as usize) as u16,
+        first_address,
+        channel_count,
+        attributes,
+    }
 }
 
 fn summarize_attributes(modes: &[GdtfModeSummary]) -> Vec<GdtfAttributeGroupSummary> {
@@ -771,6 +923,48 @@ mod tests {
             .attribute_groups
             .iter()
             .any(|group| group.name == "Dimmer"));
+    }
+
+    #[test]
+    fn merges_repeated_matrix_attributes_and_infers_sub_fixtures() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<GDTF DataVersion="1.2">
+  <FixtureType FixtureTypeID="222" Manufacturer="Test" Name="Matrix">
+    <AttributeDefinitions>
+      <Attributes>
+        <Attribute Feature="Dimmer.Dimmer" Name="Dimmer"/>
+        <Attribute Feature="Color.Color" Name="ColorAdd_R"/>
+        <Attribute Feature="Color.Color" Name="ColorAdd_G"/>
+      </Attributes>
+    </AttributeDefinitions>
+    <DMXModes>
+      <DMXMode Name="Default" Geometry="Body">
+        <DMXChannels>
+          <DMXChannel Geometry="Body" Offset="1"><LogicalChannel Attribute="Dimmer"/></DMXChannel>
+          <DMXChannel Geometry="Body" Offset="2"><LogicalChannel Attribute="ColorAdd_R"/></DMXChannel>
+          <DMXChannel Geometry="Body" Offset="3"><LogicalChannel Attribute="ColorAdd_G"/></DMXChannel>
+          <DMXChannel Geometry="Body" Offset="4"><LogicalChannel Attribute="Dimmer"/></DMXChannel>
+          <DMXChannel Geometry="Body" Offset="5"><LogicalChannel Attribute="ColorAdd_R"/></DMXChannel>
+          <DMXChannel Geometry="Body" Offset="6"><LogicalChannel Attribute="ColorAdd_G"/></DMXChannel>
+        </DMXChannels>
+      </DMXMode>
+    </DMXModes>
+  </FixtureType>
+</GDTF>"#;
+
+        let summary = parse_description_xml(xml).unwrap();
+        let mode = &summary.modes[0];
+        assert_eq!(mode.attributes, vec!["Dimmer", "ColorAdd_R", "ColorAdd_G"]);
+        assert_eq!(mode.attribute_details[0].occurrence_count, 2);
+        assert_eq!(
+            mode.attribute_details[0].module_ids,
+            vec!["module-1", "module-2"]
+        );
+        assert_eq!(mode.sub_fixtures.len(), 2);
+        assert_eq!(mode.sub_fixtures[0].index, 1);
+        assert_eq!(mode.sub_fixtures[0].first_address, Some(1));
+        assert_eq!(mode.sub_fixtures[1].index, 2);
+        assert_eq!(mode.sub_fixtures[1].first_address, Some(4));
     }
 
     #[test]

@@ -23,31 +23,71 @@ interface PatchFixture {
   tiltInvert: boolean;
 }
 
+interface FixtureTypeEntry {
+  id: string;
+  name: string;
+  manufacturer: string;
+  path: string;
+  modes: FixtureTypeMode[];
+}
+
+interface FixtureTypeMode {
+  id: string;
+  name: string;
+  channels: number;
+  attributes: string[];
+  subFixtures?: FixtureModeSubFixture[];
+}
+
+interface FixtureModeSubFixture {
+  id: string;
+  name: string;
+  geometry: string;
+  index: number;
+  firstAddress: number | null;
+  channelCount: number;
+  attributes: string[];
+}
+
 interface FixtureSelection {
   fixtureIds: string[];
   primaryFixtureId: string | null;
   version: number;
 }
 
+interface FixtureSheetRow {
+  id: string;
+  fixture: PatchFixture;
+  fidLabel: string;
+  name: string;
+  patchLabel: string;
+  channels: number;
+  isSubFixture: boolean;
+  subFixtureName: string;
+}
+
 export function FixtureSheetWindow() {
   const [fixtures, setFixtures] = useState<PatchFixture[]>([]);
+  const [fixtureTypes, setFixtureTypes] = useState<FixtureTypeEntry[]>([]);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [primaryId, setPrimaryId] = useState("");
   const [anchorId, setAnchorId] = useState("");
   const [query, setQuery] = useState("");
   const [status, setStatus] = useState("Ready");
 
-  const visibleFixtures = useMemo(() => {
+  const rows = useMemo(() => buildRows(fixtures, fixtureTypes), [fixtures, fixtureTypes]);
+  const visibleRows = useMemo(() => {
     const needle = query.trim().toLowerCase();
-    if (!needle) return fixtures;
-    return fixtures.filter((fixture) =>
-      `${fixture.fid} ${fixture.name} ${fixture.fixtureTypeName} ${fixture.modeName} ${formatPatch(fixture)} ${fixture.stage}`
+    if (!needle) return rows;
+    return rows.filter((row) =>
+      `${row.fidLabel} ${row.name} ${row.subFixtureName} ${row.fixture.fixtureTypeName} ${row.fixture.modeName} ${row.patchLabel} ${row.fixture.stage}`
         .toLowerCase()
         .includes(needle),
     );
-  }, [fixtures, query]);
+  }, [query, rows]);
 
   useEffect(() => {
+    void loadFixtureTypes();
     void loadPatch();
     void loadSelection();
   }, []);
@@ -60,11 +100,16 @@ export function FixtureSheetWindow() {
       const patchChanged = await listen("patch:changed", () => {
         void loadPatch();
       });
+      const fixtureTypesChanged = await listen("fixture-types:changed", () => {
+        void loadFixtureTypes();
+      });
       const showLoaded = await listen("show:loaded", () => {
+        void loadFixtureTypes();
         void loadPatch();
       });
       const showDeleted = await listen("show:deleted", () => {
         setFixtures([]);
+        setFixtureTypes([]);
         setSelectedIds([]);
         setPrimaryId("");
         setAnchorId("");
@@ -80,12 +125,13 @@ export function FixtureSheetWindow() {
 
       if (!active) {
         patchChanged();
+        fixtureTypesChanged();
         showLoaded();
         showDeleted();
         selectionChanged();
         return;
       }
-      unlisteners.push(patchChanged, showLoaded, showDeleted, selectionChanged);
+      unlisteners.push(patchChanged, fixtureTypesChanged, showLoaded, showDeleted, selectionChanged);
     };
 
     void register();
@@ -100,9 +146,9 @@ export function FixtureSheetWindow() {
       const document = await invoke<PatchDocument | null>("patch_load_current_show");
       const nextFixtures = document?.fixtures ?? [];
       setFixtures(nextFixtures);
-      setSelectedIds((current) => current.filter((id) => nextFixtures.some((fixture) => fixture.id === id)));
-      setPrimaryId((current) => (nextFixtures.some((fixture) => fixture.id === current) ? current : ""));
-      setAnchorId((current) => (nextFixtures.some((fixture) => fixture.id === current) ? current : ""));
+      setSelectedIds((current) => current.filter((id) => nextFixtures.some((fixture) => fixture.id === parentFixtureId(id))));
+      setPrimaryId((current) => (nextFixtures.some((fixture) => fixture.id === parentFixtureId(current)) ? current : ""));
+      setAnchorId((current) => (nextFixtures.some((fixture) => fixture.id === parentFixtureId(current)) ? current : ""));
       setStatus(`${nextFixtures.length} fixture${nextFixtures.length === 1 ? "" : "s"}`);
     } catch {
       setFixtures([]);
@@ -110,6 +156,15 @@ export function FixtureSheetWindow() {
       setPrimaryId("");
       setAnchorId("");
       setStatus("No show loaded");
+    }
+  }
+
+  async function loadFixtureTypes() {
+    try {
+      const types = await invoke<FixtureTypeEntry[]>("fixture_type_scan_current_show");
+      setFixtureTypes(types);
+    } catch {
+      setFixtureTypes([]);
     }
   }
 
@@ -126,27 +181,27 @@ export function FixtureSheetWindow() {
     }
   }
 
-  function selectFixture(event: React.MouseEvent<HTMLTableRowElement>, fixture: PatchFixture) {
+  function selectFixture(event: React.MouseEvent<HTMLTableRowElement>, row: FixtureSheetRow) {
     const additive = event.ctrlKey || event.metaKey;
     const range = event.shiftKey && anchorId;
     const mode = range ? (additive ? "add" : "replace") : additive ? "toggle" : "replace";
-    const fixtureIds = range ? getRangeFixtureIds(visibleFixtures, anchorId, fixture.id) : [fixture.id];
+    const fixtureIds = range ? getRangeFixtureIds(visibleRows, anchorId, row.id) : [row.id];
 
-    setAnchorId(fixture.id);
-    setPrimaryId(fixture.id);
+    setAnchorId(row.id);
+    setPrimaryId(row.id);
     setSelectedIds((current) => {
       if (range) return mergeUnique(additive ? current : [], fixtureIds);
       if (additive) {
-        return current.includes(fixture.id)
-          ? current.filter((id) => id !== fixture.id)
-          : [...current, fixture.id];
+        return current.includes(row.id)
+          ? current.filter((id) => id !== row.id)
+          : [...current, row.id];
       }
-      return [fixture.id];
+      return [row.id];
     });
 
     void invoke("fixture_selection_select", {
       fixtureIds,
-      primaryFixtureId: fixture.id,
+      primaryFixtureId: row.id,
       mode,
     });
   }
@@ -188,7 +243,7 @@ export function FixtureSheetWindow() {
           }}
         />
         <span className="lx-code" style={{ color: "var(--lx-fg-tertiary)", whiteSpace: "nowrap" }}>
-          {visibleFixtures.length}/{fixtures.length}
+          {visibleRows.length}/{rows.length}
         </span>
       </div>
 
@@ -226,13 +281,14 @@ export function FixtureSheetWindow() {
             </tr>
           </thead>
           <tbody>
-            {visibleFixtures.map((fixture) => {
-              const selected = selectedIds.includes(fixture.id);
-              const primary = fixture.id === primaryId;
+            {visibleRows.map((row) => {
+              const fixture = row.fixture;
+              const selected = selectedIds.includes(row.id);
+              const primary = row.id === primaryId;
               return (
                 <tr
-                  key={fixture.id}
-                  onClick={(event) => selectFixture(event, fixture)}
+                  key={row.id}
+                  onClick={(event) => selectFixture(event, row)}
                   style={{
                     height: 28,
                     background: primary
@@ -244,12 +300,12 @@ export function FixtureSheetWindow() {
                     cursor: "pointer",
                   }}
                 >
-                  <BodyCell mono>{fixture.fid}</BodyCell>
-                  <BodyCell strong>{fixture.name}</BodyCell>
+                  <BodyCell mono>{row.fidLabel}</BodyCell>
+                  <BodyCell strong={!row.isSubFixture}>{row.name}</BodyCell>
                   <BodyCell>{fixture.fixtureTypeName}</BodyCell>
                   <BodyCell>{fixture.modeName}</BodyCell>
-                  <BodyCell mono>{formatPatch(fixture)}</BodyCell>
-                  <BodyCell mono>{fixture.channels}</BodyCell>
+                  <BodyCell mono>{row.patchLabel}</BodyCell>
+                  <BodyCell mono>{row.channels}</BodyCell>
                   <BodyCell>{fixture.stage}</BodyCell>
                   <BodyCell>
                     <StateBadge fixture={fixture} />
@@ -260,7 +316,7 @@ export function FixtureSheetWindow() {
           </tbody>
         </table>
 
-        {visibleFixtures.length === 0 && (
+        {visibleRows.length === 0 && (
           <div
             style={{
               display: "grid",
@@ -294,13 +350,59 @@ export function FixtureSheetWindow() {
   );
 }
 
-function getRangeFixtureIds(fixtures: PatchFixture[], anchorId: string, targetId: string) {
-  const anchorIndex = fixtures.findIndex((fixture) => fixture.id === anchorId);
-  const targetIndex = fixtures.findIndex((fixture) => fixture.id === targetId);
+function buildRows(fixtures: PatchFixture[], fixtureTypes: FixtureTypeEntry[]): FixtureSheetRow[] {
+  const rows: FixtureSheetRow[] = [];
+  for (const fixture of fixtures) {
+    rows.push({
+      id: fixture.id,
+      fixture,
+      fidLabel: String(fixture.fid),
+      name: fixture.name,
+      patchLabel: formatPatch(fixture),
+      channels: fixture.channels,
+      isSubFixture: false,
+      subFixtureName: "",
+    });
+
+    const mode = findModeForFixture(fixture, fixtureTypes);
+    for (const subFixture of mode?.subFixtures ?? []) {
+      rows.push({
+        id: `${fixture.id}::sub:${subFixture.id}`,
+        fixture,
+        fidLabel: `${fixture.fid}.${subFixture.index}`,
+        name: `  ${subFixture.name}`,
+        patchLabel: formatSubPatch(fixture, subFixture),
+        channels: subFixture.channelCount,
+        isSubFixture: true,
+        subFixtureName: subFixture.name,
+      });
+    }
+  }
+  return rows;
+}
+
+function findModeForFixture(fixture: PatchFixture, fixtureTypes: FixtureTypeEntry[]) {
+  const fixtureType = fixtureTypes.find(
+    (item) =>
+      item.path === fixture.fixtureTypePath ||
+      item.id === fixture.fixtureTypeId ||
+      `${item.manufacturer} ${item.name}`.trim() === fixture.fixtureTypeName,
+  );
+  return (
+    fixtureType?.modes.find((mode) => mode.id === fixture.modeId) ??
+    fixtureType?.modes.find((mode) => mode.name === fixture.modeName) ??
+    fixtureType?.modes.find((mode) => mode.channels === fixture.channels) ??
+    fixtureType?.modes[0]
+  );
+}
+
+function getRangeFixtureIds(rows: FixtureSheetRow[], anchorId: string, targetId: string) {
+  const anchorIndex = rows.findIndex((row) => row.id === anchorId);
+  const targetIndex = rows.findIndex((row) => row.id === targetId);
   if (anchorIndex < 0 || targetIndex < 0) return [targetId];
   const start = Math.min(anchorIndex, targetIndex);
   const end = Math.max(anchorIndex, targetIndex);
-  return fixtures.slice(start, end + 1).map((fixture) => fixture.id);
+  return rows.slice(start, end + 1).map((row) => row.id);
 }
 
 function mergeUnique(left: string[], right: string[]) {
@@ -384,4 +486,16 @@ function StateBadge({ fixture }: { fixture: PatchFixture }) {
 function formatPatch(fixture: PatchFixture) {
   if (fixture.universe === null || fixture.address === null) return "-";
   return `${fixture.universe}.${String(fixture.address).padStart(3, "0")}`;
+}
+
+function formatSubPatch(fixture: PatchFixture, subFixture: FixtureModeSubFixture) {
+  if (fixture.universe === null || fixture.address === null || subFixture.firstAddress === null) {
+    return "-";
+  }
+  const address = fixture.address + subFixture.firstAddress - 1;
+  return `${fixture.universe}.${String(address).padStart(3, "0")}`;
+}
+
+function parentFixtureId(id: string) {
+  return id.split("::sub:")[0] ?? id;
 }

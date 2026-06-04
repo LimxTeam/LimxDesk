@@ -57,11 +57,24 @@ interface FixtureTypeMode {
   channels: number;
   attributes: string[];
   attributeDetails?: FixtureModeAttribute[];
+  subFixtures?: FixtureModeSubFixture[];
 }
 
 interface FixtureModeAttribute {
   name: string;
   featureGroup: string;
+  occurrenceCount?: number;
+  moduleIds?: string[];
+}
+
+interface FixtureModeSubFixture {
+  id: string;
+  name: string;
+  geometry: string;
+  index: number;
+  firstAddress: number | null;
+  channelCount: number;
+  attributes: string[];
 }
 
 interface FixtureSelection {
@@ -221,9 +234,9 @@ export function ControlPanel() {
   }, []);
 
   const selectedFixture =
-    fixtures.find((fixture) => fixture.id === selection.primaryFixtureId) ??
-    fixtures.find((fixture) => fixture.id === selectedFixtureId);
-  const pageInfo = buildPageInfo(selectedFixture, fixtureTypes, programmer);
+    fixtures.find((fixture) => fixture.id === parentFixtureId(selection.primaryFixtureId ?? "")) ??
+    fixtures.find((fixture) => fixture.id === parentFixtureId(selectedFixtureId));
+  const pageInfo = buildPageInfo(selectedFixture, selection.primaryFixtureId ?? selectedFixtureId, fixtureTypes, programmer);
   const tabs = buildAttributeTabs(pageInfo);
   const info = pageInfo[activeTab] ?? pageInfo[tabs[0]?.id ?? ""] ?? {
     name: "No Attribute",
@@ -429,6 +442,7 @@ export function ControlPanel() {
 
 function buildPageInfo(
   fixture: PatchFixture | undefined,
+  selectedId: string,
   fixtureTypes: FixtureTypeEntry[],
   programmer: Programmer,
 ): Record<string, EncoderGroup> {
@@ -448,7 +462,7 @@ function buildPageInfo(
     fixtureType?.modes[0];
   if (!mode) return groups;
 
-  const dynamicGroups = groupAttributes(resolveModeAttributes(mode), fixture, programmer);
+  const dynamicGroups = groupAttributes(resolveModeAttributes(mode, selectedSubFixtureId(selectedId)), fixture, selectedId, programmer);
   for (const [id, encoders] of Object.entries(dynamicGroups)) {
     if (encoders.length === 0) continue;
     groups[id] = {
@@ -460,7 +474,12 @@ function buildPageInfo(
   return groups;
 }
 
-function groupAttributes(attributes: FixtureModeAttribute[], fixture: PatchFixture, programmer: Programmer) {
+function groupAttributes(
+  attributes: FixtureModeAttribute[],
+  fixture: PatchFixture,
+  selectedId: string,
+  programmer: Programmer,
+) {
   const groups: Record<AttributeGroupId, EncoderParam[]> = {
     dimmer: [],
     position: [],
@@ -478,24 +497,33 @@ function groupAttributes(attributes: FixtureModeAttribute[], fixture: PatchFixtu
       attribute: attribute.name,
       featureGroup: attribute.featureGroup,
       layer: "absolute",
-      value: resolveProgrammerValue(programmer, fixture.id, attribute.name) ?? "--",
+      value: resolveProgrammerValue(programmer, selectedId || fixture.id, attribute.name) ?? "--",
     });
   }
 
   return groups;
 }
 
-function resolveModeAttributes(mode: FixtureTypeMode): FixtureModeAttribute[] {
-  if (mode.attributeDetails?.length) {
-    return mode.attributeDetails.filter((attribute) => attribute.name.trim());
+function resolveModeAttributes(mode: FixtureTypeMode, subFixtureId: string): FixtureModeAttribute[] {
+  const attributes = mode.attributeDetails?.length
+    ? mode.attributeDetails.filter((attribute) => attribute.name.trim())
+    : mode.attributes
+        .filter((attribute) => attribute.trim())
+        .map((attribute) => ({
+          name: attribute,
+          featureGroup: "Control",
+        }));
+
+  if (!subFixtureId) {
+    return attributes;
   }
 
-  return mode.attributes
-    .filter((attribute) => attribute.trim())
-    .map((attribute) => ({
-      name: attribute,
-      featureGroup: "Control",
-    }));
+  const subFixture = mode.subFixtures?.find((item) => item.id === subFixtureId);
+  if (!subFixture) {
+    return attributes;
+  }
+
+  return attributes.filter((attribute) => subFixture.attributes.includes(attribute.name));
 }
 
 function featureGroupToTab(featureGroup: string): AttributeGroupId {
@@ -543,10 +571,19 @@ function formatProgrammerScalar(value: ProgrammerScalar, attribute: string) {
 
 function resolveSelectedFixtureId(selection: FixtureSelection, fixtures: PatchFixture[]) {
   const preferred = selection.primaryFixtureId ?? selection.fixtureIds[0] ?? "";
-  if (preferred && fixtures.some((fixture) => fixture.id === preferred)) {
+  const parentId = parentFixtureId(preferred);
+  if (preferred && fixtures.some((fixture) => fixture.id === parentId)) {
     return preferred;
   }
   return "";
+}
+
+function parentFixtureId(id: string) {
+  return id.split("::sub:")[0] ?? id;
+}
+
+function selectedSubFixtureId(id: string) {
+  return id.includes("::sub:") ? id.split("::sub:")[1] ?? "" : "";
 }
 
 function buildAttributeTabs(pageInfo: Record<string, EncoderGroup>): AttributeTab[] {

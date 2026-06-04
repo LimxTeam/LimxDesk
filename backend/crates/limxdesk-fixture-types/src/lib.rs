@@ -1,7 +1,7 @@
 use limxdesk_gdtf::{
     create_gdtf, create_gdtf_bytes as create_gdtf_archive_bytes, read_gdtf, read_gdtf_bytes,
     update_gdtf, update_gdtf_bytes as update_gdtf_archive_bytes, GdtfError, GdtfFixtureDraft,
-    GdtfFixtureSummary, GdtfModeAttributeSummary, GDTF_EXTENSION,
+    GdtfFixtureSummary, GdtfModeAttributeSummary, GdtfModeSubFixtureSummary, GDTF_EXTENSION,
 };
 use limxdesk_platform::{LocalFileSystem, PlatformError, PlatformPaths};
 use serde::{Deserialize, Serialize};
@@ -90,6 +90,7 @@ pub struct FixtureModeEntry {
     pub channels: u16,
     pub attributes: Vec<String>,
     pub attribute_details: Vec<FixtureModeAttributeEntry>,
+    pub sub_fixtures: Vec<FixtureModeSubFixtureEntry>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -97,6 +98,20 @@ pub struct FixtureModeEntry {
 pub struct FixtureModeAttributeEntry {
     pub name: String,
     pub feature_group: String,
+    pub occurrence_count: u16,
+    pub module_ids: Vec<String>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FixtureModeSubFixtureEntry {
+    pub id: String,
+    pub name: String,
+    pub geometry: String,
+    pub index: u16,
+    pub first_address: Option<u16>,
+    pub channel_count: u16,
+    pub attributes: Vec<String>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -311,6 +326,7 @@ fn entry_from_summary(
             channels: mode.channels,
             attributes: mode.attributes,
             attribute_details: mode.attribute_details.into_iter().map(Into::into).collect(),
+            sub_fixtures: mode.sub_fixtures.into_iter().map(Into::into).collect(),
         })
         .collect();
 
@@ -347,6 +363,22 @@ impl From<GdtfModeAttributeSummary> for FixtureModeAttributeEntry {
         Self {
             name: value.name,
             feature_group: value.feature_group,
+            occurrence_count: value.occurrence_count,
+            module_ids: value.module_ids,
+        }
+    }
+}
+
+impl From<GdtfModeSubFixtureSummary> for FixtureModeSubFixtureEntry {
+    fn from(value: GdtfModeSubFixtureSummary) -> Self {
+        Self {
+            id: value.id,
+            name: value.name,
+            geometry: value.geometry,
+            index: value.index,
+            first_address: value.first_address,
+            channel_count: value.channel_count,
+            attributes: value.attributes,
         }
     }
 }
