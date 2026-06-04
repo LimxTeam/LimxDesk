@@ -1,7 +1,7 @@
 import { useDeferredValue, useEffect, useState } from "react";
 import type { ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { emit, listen } from "@tauri-apps/api/event";
+import { listen } from "@tauri-apps/api/event";
 import { dynamicIsland, type IslandType } from "@limxdesk/notifications";
 import { FloatingDialog } from "@limxdesk/ui";
 import {
@@ -1121,12 +1121,9 @@ function showPatchNotice(type: IslandType, title: string, subtitle?: string, dur
 }
 
 function emitFixtureSelection(fixture: PatchFixture) {
-  return emit("fixture-selection:changed", {
-    id: fixture.id,
-    fid: fixture.fid,
-    name: fixture.name,
-    fixtureTypePath: fixture.fixtureTypePath,
-    fixtureTypeId: fixture.fixtureTypeId,
-    modeId: fixture.modeId,
+  return invoke("fixture_selection_select", {
+    fixtureIds: [fixture.id],
+    primaryFixtureId: fixture.id,
+    mode: "replace",
   });
 }

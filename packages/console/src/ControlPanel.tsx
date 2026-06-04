@@ -54,13 +54,10 @@ interface FixtureTypeMode {
   attributes: string[];
 }
 
-interface FixtureSelectionPayload {
-  id: string;
-  fid: number;
-  name: string;
-  fixtureTypePath: string;
-  fixtureTypeId: string;
-  modeId: string;
+interface FixtureSelection {
+  fixtureIds: string[];
+  primaryFixtureId: string | null;
+  version: number;
 }
 
 const ENCODERS_PER_PAGE = 4;
@@ -124,6 +121,7 @@ export function ControlPanel() {
 
   useEffect(() => {
     void refreshShowData();
+    void refreshSelection();
   }, []);
 
   useEffect(() => {
@@ -131,11 +129,12 @@ export function ControlPanel() {
     const unlisteners: Array<() => void> = [];
 
     const register = async () => {
-      const selectionChanged = await listen<FixtureSelectionPayload>(
+      const selectionChanged = await listen<FixtureSelection>(
         "fixture-selection:changed",
         (event) => {
-          setSelectedFixtureId(event.payload.id);
-          void refreshShowData(event.payload.id);
+          const primaryId = event.payload.primaryFixtureId ?? "";
+          setSelectedFixtureId(primaryId);
+          void refreshShowData(primaryId);
         },
       );
       const patchChanged = await listen("patch:changed", () => {
@@ -199,6 +198,15 @@ export function ControlPanel() {
     } catch {
       setFixtures([]);
       setFixtureTypes([]);
+      setSelectedFixtureId("");
+    }
+  }
+
+  async function refreshSelection() {
+    try {
+      const selection = await invoke<FixtureSelection>("fixture_selection_get");
+      setSelectedFixtureId(selection.primaryFixtureId ?? "");
+    } catch {
       setSelectedFixtureId("");
     }
   }

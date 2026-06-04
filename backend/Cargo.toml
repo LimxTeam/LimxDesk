@@ -12,6 +12,7 @@
 [workspace]
 members = [
     ".",
+    "crates/limxdesk-fixture-selection",
     "crates/limxdesk-fixture-types",
     "crates/limxdesk-gdtf",
     "crates/limxdesk-patch",
@@ -43,6 +44,7 @@ tauri-build = { version = "2", features = [] }
 # ── 0. LimxDesk 核心模块 ──────────────────────────────────
 limxdesk-platform = { path = "crates/limxdesk-platform" }
 limxdesk-showfile = { path = "crates/limxdesk-showfile" }
+limxdesk-fixture-selection = { path = "crates/limxdesk-fixture-selection" }
 limxdesk-fixture-types = { path = "crates/limxdesk-fixture-types" }
 limxdesk-patch = { path = "crates/limxdesk-patch" }
 

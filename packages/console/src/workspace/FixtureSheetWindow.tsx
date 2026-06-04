@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { emit, listen } from "@tauri-apps/api/event";
+import { listen } from "@tauri-apps/api/event";
 
 interface PatchDocument {
   fixtures: PatchFixture[];
@@ -23,6 +23,12 @@ interface PatchFixture {
   tiltInvert: boolean;
 }
 
+interface FixtureSelection {
+  fixtureIds: string[];
+  primaryFixtureId: string | null;
+  version: number;
+}
+
 export function FixtureSheetWindow() {
   const [fixtures, setFixtures] = useState<PatchFixture[]>([]);
   const [selectedId, setSelectedId] = useState("");
@@ -41,6 +47,7 @@ export function FixtureSheetWindow() {
 
   useEffect(() => {
     void loadPatch();
+    void loadSelection();
   }, []);
 
   useEffect(() => {
@@ -59,10 +66,10 @@ export function FixtureSheetWindow() {
         setSelectedId("");
         setStatus("No show loaded");
       });
-      const selectionChanged = await listen<{ id: string }>(
+      const selectionChanged = await listen<FixtureSelection>(
         "fixture-selection:changed",
         (event) => {
-          setSelectedId(event.payload.id);
+          setSelectedId(event.payload.primaryFixtureId ?? "");
         },
       );
 
@@ -101,15 +108,21 @@ export function FixtureSheetWindow() {
     }
   }
 
+  async function loadSelection() {
+    try {
+      const selection = await invoke<FixtureSelection>("fixture_selection_get");
+      setSelectedId(selection.primaryFixtureId ?? "");
+    } catch {
+      setSelectedId("");
+    }
+  }
+
   function selectFixture(fixture: PatchFixture) {
     setSelectedId(fixture.id);
-    void emit("fixture-selection:changed", {
-      id: fixture.id,
-      fid: fixture.fid,
-      name: fixture.name,
-      fixtureTypePath: fixture.fixtureTypePath,
-      fixtureTypeId: fixture.fixtureTypeId,
-      modeId: fixture.modeId,
+    void invoke("fixture_selection_select", {
+      fixtureIds: [fixture.id],
+      primaryFixtureId: fixture.id,
+      mode: "replace",
     });
   }
 

@@ -6,6 +6,7 @@ version = 4
 name = "LimxDesk"
 version = "0.1.0"
 dependencies = [
+ "limxdesk-fixture-selection",
  "limxdesk-fixture-types",
  "limxdesk-patch",
  "limxdesk-platform",
@@ -1813,6 +1814,13 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f02ab6bace2054fb888a3c16f990117b579d14a3088e472d63c6011fa185c9d3"
 dependencies = [
  "libc",
+]
+
+[[package]]
+name = "limxdesk-fixture-selection"
+version = "0.1.0"
+dependencies = [
+ "serde",
 ]
 
 [[package]]

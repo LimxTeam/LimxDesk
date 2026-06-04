@@ -28,6 +28,7 @@
 // ============================================================
 
 mod events;
+mod fixture_selection;
 mod fixture_types;
 mod layout;
 mod patch;
@@ -42,6 +43,7 @@ pub fn run() {
     init_tracing();
 
     tauri::Builder::default()
+        .manage(fixture_selection::FixtureSelectionState::default())
         .manage(show::ShowRuntimeState::default())
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
@@ -77,6 +79,9 @@ pub fn run() {
             fixture_types::fixture_type_create_in_show,
             fixture_types::fixture_type_update_in_show,
             fixture_types::fixture_type_delete_from_show,
+            fixture_selection::fixture_selection_get,
+            fixture_selection::fixture_selection_select,
+            fixture_selection::fixture_selection_clear,
             patch::patch_load_current_show,
             patch::patch_save_current_show,
             patch::patch_apply_wizard,
