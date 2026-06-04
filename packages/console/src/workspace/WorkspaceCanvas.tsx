@@ -1,4 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { AddWindowDialog } from "./AddWindowDialog";
 import { GridWindowFrame } from "./GridWindowFrame";
 import {
@@ -34,10 +36,14 @@ export function WorkspaceCanvas() {
     addWindow,
     updateWindowRect,
     removeWindow,
+    replaceWindows,
     selectWindow,
     isCellOccupied,
   } = useWorkspaceLayout();
   const containerRef = useRef<HTMLDivElement>(null);
+  const loadedRef = useRef(false);
+  const savingRef = useRef(false);
+  const suppressNextSaveRef = useRef(false);
   const [containerSize, setContainerSize] = useState({ width: 0, height: 0 });
   const [hoverCell, setHoverCell] = useState<GridCell | null>(null);
   const [activeDrag, setActiveDrag] = useState<ActiveDrag | null>(null);
@@ -52,6 +58,58 @@ export function WorkspaceCanvas() {
 
   const cellWidth = containerSize.width / WORKSPACE_GRID_COLS || 0;
   const cellHeight = containerSize.height / WORKSPACE_GRID_ROWS || 0;
+
+  useEffect(() => {
+    void loadLayoutFromShow();
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    const unlisteners: Array<() => void> = [];
+
+    const register = async () => {
+      const layoutChanged = await listen("layout:changed", () => {
+        if (savingRef.current) return;
+        void loadLayoutFromShow();
+      });
+      const showLoaded = await listen("show:loaded", () => {
+        void loadLayoutFromShow();
+      });
+      const showDeleted = await listen("show:deleted", () => {
+        suppressNextSaveRef.current = true;
+        loadedRef.current = false;
+        replaceWindows([]);
+      });
+
+      if (!active) {
+        layoutChanged();
+        showLoaded();
+        showDeleted();
+        return;
+      }
+      unlisteners.push(layoutChanged, showLoaded, showDeleted);
+    };
+
+    void register();
+    return () => {
+      active = false;
+      unlisteners.forEach((unlisten) => unlisten());
+    };
+  }, [replaceWindows]);
+
+  useEffect(() => {
+    if (!loadedRef.current) return;
+    if (suppressNextSaveRef.current) {
+      suppressNextSaveRef.current = false;
+      return;
+    }
+
+    const timeout = window.setTimeout(() => {
+      void saveLayoutToShow(windows);
+    }, 220);
+
+    return () => window.clearTimeout(timeout);
+  }, [windows]);
 
   useEffect(() => {
     const element = containerRef.current;
@@ -166,6 +224,34 @@ export function WorkspaceCanvas() {
     });
   }
 
+  async function loadLayoutFromShow() {
+    try {
+      const document = await invoke<LayoutDocument | null>("layout_load_current_show");
+      suppressNextSaveRef.current = true;
+      replaceWindows(document?.windows.map(layoutWindowToWorkspaceWindow) ?? []);
+      loadedRef.current = true;
+    } catch {
+      suppressNextSaveRef.current = true;
+      replaceWindows([]);
+      loadedRef.current = false;
+    }
+  }
+
+  async function saveLayoutToShow(nextWindows: WorkspaceWindow[]) {
+    try {
+      savingRef.current = true;
+      await invoke("layout_save_current_show", {
+        windows: nextWindows.map(workspaceWindowToLayoutWindow),
+      });
+    } catch {
+      // Layout edits are local until a show is loaded.
+    } finally {
+      window.setTimeout(() => {
+        savingRef.current = false;
+      }, 120);
+    }
+  }
+
   return (
     <div
       ref={containerRef}
@@ -256,4 +342,39 @@ export function WorkspaceCanvas() {
       />
     </div>
   );
+}
+
+interface LayoutDocument {
+  windows: LayoutWindow[];
+}
+
+interface LayoutWindow {
+  id: string;
+  windowType: WorkspaceWindow["type"];
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+function layoutWindowToWorkspaceWindow(window: LayoutWindow): WorkspaceWindow {
+  return {
+    id: window.id,
+    type: window.windowType,
+    x: window.x,
+    y: window.y,
+    w: window.w,
+    h: window.h,
+  };
+}
+
+function workspaceWindowToLayoutWindow(window: WorkspaceWindow): LayoutWindow {
+  return {
+    id: window.id,
+    windowType: window.type,
+    x: window.x,
+    y: window.y,
+    w: window.w,
+    h: window.h,
+  };
 }

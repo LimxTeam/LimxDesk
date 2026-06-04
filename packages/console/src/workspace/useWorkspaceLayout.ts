@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { getWorkspaceWindowItem } from "./windowCatalog";
 import type { GridCell, GridRect, WorkspaceWindow, WorkspaceWindowType } from "./types";
 
@@ -60,6 +60,14 @@ export function useWorkspaceLayout() {
   const [pendingAddCell, setPendingAddCell] = useState<GridCell | null>(null);
   const nextIdRef = useRef(1);
 
+  useEffect(() => {
+    const maxNumericId = windows.reduce((max, window) => {
+      const match = /^window_(\d+)$/.exec(window.id);
+      return match ? Math.max(max, Number(match[1])) : max;
+    }, 0);
+    nextIdRef.current = Math.max(nextIdRef.current, maxNumericId + 1);
+  }, [windows]);
+
   const requestAddWindowAtCell = useCallback((x: number, y: number) => {
     setPendingAddCell({ x, y });
   }, []);
@@ -119,6 +127,13 @@ export function useWorkspaceLayout() {
     [windows],
   );
 
+  const replaceWindows = useCallback((nextWindows: WorkspaceWindow[]) => {
+    setWindows(nextWindows.map((window) => ({ ...window, ...clampRectToGrid(window) })));
+    setSelectedWindowId((selected) =>
+      nextWindows.some((window) => window.id === selected) ? selected : null,
+    );
+  }, []);
+
   return {
     windows,
     selectedWindowId,
@@ -128,6 +143,7 @@ export function useWorkspaceLayout() {
     addWindow,
     updateWindowRect,
     removeWindow,
+    replaceWindows,
     selectWindow: setSelectedWindowId,
     isCellOccupied,
   };

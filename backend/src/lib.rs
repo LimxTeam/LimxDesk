@@ -29,6 +29,7 @@
 
 mod events;
 mod fixture_types;
+mod layout;
 mod patch;
 mod show;
 mod titlebar;
@@ -83,6 +84,8 @@ pub fn run() {
             patch::patch_delete_fixture,
             patch::patch_duplicate_fixture,
             patch::patch_auto_patch,
+            layout::layout_load_current_show,
+            layout::layout_save_current_show,
         ])
         .run(tauri::generate_context!())
         .expect("启动 Tauri 应用失败");

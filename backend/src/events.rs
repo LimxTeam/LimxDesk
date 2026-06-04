@@ -8,6 +8,7 @@ pub const SHOW_DELETED: &str = "show:deleted";
 pub const SHOW_CHANGED: &str = "show:changed";
 pub const FIXTURE_TYPES_CHANGED: &str = "fixture-types:changed";
 pub const PATCH_CHANGED: &str = "patch:changed";
+pub const LAYOUT_CHANGED: &str = "layout:changed";
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -45,6 +46,11 @@ pub fn emit_fixture_types_changed(app: &AppHandle, show: &LoadedShow) {
 
 pub fn emit_patch_changed(app: &AppHandle, show: &LoadedShow) {
     emit_show(app, PATCH_CHANGED, show);
+    emit_show(app, SHOW_CHANGED, show);
+}
+
+pub fn emit_layout_changed(app: &AppHandle, show: &LoadedShow) {
+    emit_show(app, LAYOUT_CHANGED, show);
     emit_show(app, SHOW_CHANGED, show);
 }
 
