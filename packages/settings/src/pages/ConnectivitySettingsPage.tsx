@@ -1,7 +1,7 @@
 import { useDeferredValue, useEffect, useState } from "react";
 import type { ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { listen } from "@tauri-apps/api/event";
+import { emit, listen } from "@tauri-apps/api/event";
 import { dynamicIsland, type IslandType } from "@limxdesk/notifications";
 import { FloatingDialog } from "@limxdesk/ui";
 import {
@@ -157,9 +157,16 @@ export function ConnectivitySettingsPage() {
       const nextFixtures = Array.isArray(document.fixtures)
         ? document.fixtures.map((fixture) => normalizeFixture(fixture, fixtureTypes))
         : [];
+      const nextSelectedId = selectedId && nextFixtures.some((fixture) => fixture.id === selectedId)
+        ? selectedId
+        : nextFixtures[0]?.id ?? "";
+      const nextSelectedFixture = nextFixtures.find((fixture) => fixture.id === nextSelectedId);
       setShowLoaded(true);
       setFixtures(nextFixtures);
-      setSelectedId(nextFixtures[0]?.id ?? "");
+      setSelectedId(nextSelectedId);
+      if (nextSelectedFixture) {
+        void emitFixtureSelection(nextSelectedFixture);
+      }
       setLogLine(`Loaded ${nextFixtures.length} patched fixture${nextFixtures.length === 1 ? "" : "s"} from show`);
     } catch (error) {
       const message = errorToMessage(error);
@@ -204,6 +211,11 @@ export function ConnectivitySettingsPage() {
       () => invoke<PatchCommandResult>("patch_update_fixture", { id: selectedFixture.id, patch }),
       "正在保存配接",
     );
+  };
+
+  const selectFixture = (fixture: PatchFixture) => {
+    setSelectedId(fixture.id);
+    void emitFixtureSelection(fixture);
   };
 
   const applyWizard = async (draft: PatchWizardDraft) => {
@@ -360,7 +372,7 @@ export function ConnectivitySettingsPage() {
           gap: 10,
         }}
       >
-        <PatchTable fixtures={visibleFixtures} allFixtures={fixtures} selectedId={selectedId} onSelect={setSelectedId} />
+        <PatchTable fixtures={visibleFixtures} allFixtures={fixtures} selectedId={selectedId} onSelect={selectFixture} />
         <Inspector fixture={selectedFixture} fixtureTypes={fixtureTypes} disabled={!showLoaded || busy} onChange={updateSelected} />
       </div>
 
@@ -592,7 +604,7 @@ function PatchTable({
   fixtures: PatchFixture[];
   allFixtures: PatchFixture[];
   selectedId: string;
-  onSelect: (id: string) => void;
+  onSelect: (fixture: PatchFixture) => void;
 }) {
   const columns: Array<DataTableColumn<PatchFixture>> = [
     {
@@ -623,7 +635,7 @@ function PatchTable({
       rows={fixtures}
       selectedId={selectedId}
       getRowId={(fixture) => fixture.id}
-      onRowClick={(fixture) => onSelect(fixture.id)}
+      onRowClick={onSelect}
     />
   );
 }
@@ -1105,5 +1117,16 @@ function showPatchNotice(type: IslandType, title: string, subtitle?: string, dur
     title,
     subtitle,
     duration,
+  });
+}
+
+function emitFixtureSelection(fixture: PatchFixture) {
+  return emit("fixture-selection:changed", {
+    id: fixture.id,
+    fid: fixture.fid,
+    name: fixture.name,
+    fixtureTypePath: fixture.fixtureTypePath,
+    fixtureTypeId: fixture.fixtureTypeId,
+    modeId: fixture.modeId,
   });
 }
