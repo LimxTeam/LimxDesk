@@ -1,3 +1,4 @@
+import { FixtureSheetWindow } from "./FixtureSheetWindow";
 import { getWorkspaceWindowItem } from "./windowCatalog";
 import type { WorkspaceWindow } from "./types";
 
@@ -7,6 +8,10 @@ export interface WindowSurfaceProps {
 
 export function WindowSurface({ window }: WindowSurfaceProps) {
   const item = getWorkspaceWindowItem(window.type);
+
+  if (window.type === "fixture-sheet") {
+    return <FixtureSheetWindow />;
+  }
 
   return (
     <div
