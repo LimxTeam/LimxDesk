@@ -70,6 +70,11 @@ pub fn run() {
             fixture_types::fixture_type_create,
             fixture_types::fixture_type_update,
             fixture_types::fixture_type_delete,
+            fixture_types::fixture_type_scan_current_show,
+            fixture_types::fixture_type_import_gdtf_to_show,
+            fixture_types::fixture_type_create_in_show,
+            fixture_types::fixture_type_update_in_show,
+            fixture_types::fixture_type_delete_from_show,
             patch::patch_load_current_show,
             patch::patch_save_current_show,
         ])

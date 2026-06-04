@@ -2,6 +2,7 @@ import { useDeferredValue, useEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
+import { dynamicIsland } from "@limxdesk/notifications";
 import {
   Check,
   FilePlus2,
@@ -36,7 +37,7 @@ interface FixtureType {
   shortName: string;
   longName: string;
   description: string;
-  source: "Gdtf" | "Custom";
+  source: "Gdtf" | "Custom" | "Show" | "BuiltIn";
   used: number;
   locked: boolean;
   path: string;
@@ -111,7 +112,7 @@ export function FixtureTypesSettingsPage() {
     try {
       const [root, entries] = await Promise.all([
         invoke<string>("fixture_type_library_root"),
-        invoke<FixtureType[]>("fixture_type_scan_library"),
+        invoke<FixtureType[]>("fixture_type_scan_current_show"),
       ]);
       setLibraryRoot(root);
       setFixtureTypes(entries);
@@ -124,9 +125,19 @@ export function FixtureTypesSettingsPage() {
             : entries[0]?.path ?? "";
       setSelectedPath(nextSelected);
       setDirty(false);
-      setLogLine(`Scanned ${entries.length} GDTF fixture type${entries.length === 1 ? "" : "s"}`);
+      setLogLine(`Loaded ${entries.length} show fixture type${entries.length === 1 ? "" : "s"}`);
     } catch (error) {
-      setLogLine(errorToMessage(error));
+      const message = errorToMessage(error);
+      dynamicIsland.show({
+        type: "warning",
+        title: "灯具类型不可用",
+        subtitle: message,
+        duration: 3600,
+      });
+      setFixtureTypes([]);
+      setSelectedPath("");
+      setDirty(false);
+      setLogLine(message);
     } finally {
       setBusy(false);
     }
@@ -152,11 +163,15 @@ export function FixtureTypesSettingsPage() {
 
     setBusy(true);
     try {
-      const imported = await invoke<FixtureType>("fixture_type_import_gdtf", { path: selected });
+      const imported = await invoke<FixtureType>("fixture_type_import_gdtf_to_show", { path: selected });
       await refreshLibrary(imported.path);
-      setLogLine(`Imported ${imported.manufacturer} ${imported.name}`);
+      const message = `Imported ${imported.manufacturer} ${imported.name}`;
+      dynamicIsland.show({ type: "success", title: "灯具类型已导入 show", subtitle: message, duration: 2200 });
+      setLogLine(message);
     } catch (error) {
-      setLogLine(errorToMessage(error));
+      const message = errorToMessage(error);
+      dynamicIsland.show({ type: "error", title: "导入灯具类型失败", subtitle: message, duration: 4600 });
+      setLogLine(message);
     } finally {
       setBusy(false);
     }
@@ -165,7 +180,7 @@ export function FixtureTypesSettingsPage() {
   const createType = async () => {
     setBusy(true);
     try {
-      const created = await invoke<FixtureType>("fixture_type_create", {
+      const created = await invoke<FixtureType>("fixture_type_create_in_show", {
         draft: {
           ...DEFAULT_DRAFT,
           name: nextFixtureName(fixtureTypes),
@@ -173,9 +188,13 @@ export function FixtureTypesSettingsPage() {
         },
       });
       await refreshLibrary(created.path);
-      setLogLine(`Created ${created.name}`);
+      const message = `Created ${created.name}`;
+      dynamicIsland.show({ type: "success", title: "灯具类型已创建", subtitle: message, duration: 2200 });
+      setLogLine(message);
     } catch (error) {
-      setLogLine(errorToMessage(error));
+      const message = errorToMessage(error);
+      dynamicIsland.show({ type: "error", title: "创建灯具类型失败", subtitle: message, duration: 4600 });
+      setLogLine(message);
     } finally {
       setBusy(false);
     }
@@ -188,14 +207,18 @@ export function FixtureTypesSettingsPage() {
 
     setBusy(true);
     try {
-      const updated = await invoke<FixtureType>("fixture_type_update", {
+      const updated = await invoke<FixtureType>("fixture_type_update_in_show", {
         path: selectedType.path,
         draft: normalizeDraft(draft),
       });
       await refreshLibrary(updated.path);
-      setLogLine(`Saved ${updated.name}`);
+      const message = `Saved ${updated.name}`;
+      dynamicIsland.show({ type: "success", title: "灯具类型已保存到 show", subtitle: message, duration: 2200 });
+      setLogLine(message);
     } catch (error) {
-      setLogLine(errorToMessage(error));
+      const message = errorToMessage(error);
+      dynamicIsland.show({ type: "error", title: "保存灯具类型失败", subtitle: message, duration: 4600 });
+      setLogLine(message);
     } finally {
       setBusy(false);
     }
@@ -208,11 +231,15 @@ export function FixtureTypesSettingsPage() {
 
     setBusy(true);
     try {
-      await invoke<void>("fixture_type_delete", { path: selectedType.path });
+      await invoke<void>("fixture_type_delete_from_show", { path: selectedType.path });
       await refreshLibrary();
-      setLogLine(`Deleted ${selectedType.name}`);
+      const message = `Deleted ${selectedType.name}`;
+      dynamicIsland.show({ type: "success", title: "灯具类型已从 show 删除", subtitle: message, duration: 2200 });
+      setLogLine(message);
     } catch (error) {
-      setLogLine(errorToMessage(error));
+      const message = errorToMessage(error);
+      dynamicIsland.show({ type: "error", title: "删除灯具类型失败", subtitle: message, duration: 4600 });
+      setLogLine(message);
     } finally {
       setBusy(false);
     }
@@ -274,11 +301,11 @@ export function FixtureTypesSettingsPage() {
         <div style={{ display: "flex", gap: 6 }}>
           <button type="button" className="lx-btn lx-btn-primary" onClick={() => void createType()} disabled={busy}>
             <FilePlus2 size={13} />
-            新建 GDTF
+            新建到 Show
           </button>
           <button type="button" className="lx-btn lx-btn-ghost" onClick={() => void importGdtf()} disabled={busy}>
             <Import size={13} />
-            导入 GDTF
+            导入到 Show
           </button>
           <button type="button" className="lx-btn lx-btn-ghost" onClick={() => void refreshLibrary()} disabled={busy}>
             <RefreshCw size={13} />
@@ -423,7 +450,7 @@ function FixtureTypeTable({
       label: "Source",
       width: 96,
       minWidth: 82,
-      render: () => "GDTF",
+      render: (fixtureType) => fixtureType.source,
     },
     {
       id: "size",
@@ -472,7 +499,7 @@ function TypeInspector({
   if (!fixtureType) {
     return (
       <div className="lx-panel" style={{ padding: 14, color: "var(--lx-fg-tertiary)" }}>
-        没有 GDTF 灯具类型。请导入或新建。
+        当前 show 没有灯具类型。请导入或新建。
       </div>
     );
   }
@@ -480,7 +507,7 @@ function TypeInspector({
   return (
     <div className="lx-panel" style={{ display: "grid", minHeight: 0, gridTemplateRows: "auto minmax(0, 1fr)", overflow: "hidden" }}>
       <div className="lx-panel-header">
-        <span>GDTF Inspector</span>
+        <span>Show Fixture Type Inspector</span>
         <span className={`lx-badge ${dirty ? "lx-badge-warn" : "lx-badge-success"}`}>
           {dirty ? "Unsaved" : "Synced"}
         </span>
@@ -509,6 +536,7 @@ function TypeInspector({
         <div className="lx-divider-h" />
         <InfoRow label="GUID" value={fixtureType.id} />
         <InfoRow label="Path" value={fixtureType.path} />
+        <InfoRow label="Source" value={fixtureType.source} />
         <InfoRow label="Library" value={libraryRoot} />
       </div>
     </div>
@@ -634,7 +662,7 @@ function LibraryStatus({
   return (
     <div className="lx-panel" style={{ display: "grid", gridTemplateRows: "1fr auto", padding: 10 }}>
       <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 6 }}>
-        <Metric label="GDTF" value={fixtureTypes.length} />
+        <Metric label="ShowFT" value={fixtureTypes.length} />
         <Metric label="Modes" value={modes} />
         <Metric label="MaxCh" value={channels} />
       </div>

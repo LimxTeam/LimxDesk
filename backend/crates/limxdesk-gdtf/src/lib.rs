@@ -111,6 +111,11 @@ pub fn read_gdtf(path: impl AsRef<Path>) -> GdtfResult<GdtfFixtureSummary> {
     parse_description_xml(&xml)
 }
 
+pub fn read_gdtf_bytes(bytes: &[u8]) -> GdtfResult<GdtfFixtureSummary> {
+    let xml = read_description_xml_from_bytes(bytes)?;
+    parse_description_xml(&xml)
+}
+
 pub fn create_gdtf(
     path: impl AsRef<Path>,
     draft: &GdtfFixtureDraft,
@@ -119,6 +124,12 @@ pub fn create_gdtf(
     let xml = build_description_xml(&fixture_type_id, draft);
     write_gdtf_archive(path, &xml)?;
     parse_description_xml(&xml)
+}
+
+pub fn create_gdtf_bytes(draft: &GdtfFixtureDraft) -> GdtfResult<Vec<u8>> {
+    let fixture_type_id = Uuid::new_v4().to_string().to_uppercase();
+    let xml = build_description_xml(&fixture_type_id, draft);
+    write_gdtf_archive_to_bytes(&xml)
 }
 
 pub fn update_gdtf(
@@ -133,9 +144,27 @@ pub fn update_gdtf(
     parse_description_xml(&xml)
 }
 
+pub fn update_gdtf_bytes(bytes: &[u8], draft: &GdtfFixtureDraft) -> GdtfResult<Vec<u8>> {
+    let existing = read_description_xml_from_bytes(bytes)?;
+    let existing_summary = parse_description_xml(&existing)?;
+    let xml = build_description_xml(&existing_summary.fixture_type_id, draft);
+    rewrite_gdtf_archive_to_bytes(bytes, &xml)
+}
+
 pub fn read_description_xml(path: impl AsRef<Path>) -> GdtfResult<String> {
     let file = File::open(path)?;
     let mut archive = ZipArchive::new(file)?;
+    read_description_xml_from_archive(&mut archive)
+}
+
+pub fn read_description_xml_from_bytes(bytes: &[u8]) -> GdtfResult<String> {
+    let mut archive = ZipArchive::new(Cursor::new(bytes))?;
+    read_description_xml_from_archive(&mut archive)
+}
+
+fn read_description_xml_from_archive<R: Read + std::io::Seek>(
+    archive: &mut ZipArchive<R>,
+) -> GdtfResult<String> {
     let mut description = archive.by_name(DESCRIPTION_XML).map_err(|_| {
         GdtfError::InvalidArchive("GDTF archive has no description.xml".to_string())
     })?;
@@ -425,12 +454,31 @@ fn write_gdtf_archive(path: impl AsRef<Path>, description_xml: &str) -> GdtfResu
     Ok(())
 }
 
+fn write_gdtf_archive_to_bytes(description_xml: &str) -> GdtfResult<Vec<u8>> {
+    let mut output = Cursor::new(Vec::new());
+    {
+        let mut writer = ZipWriter::new(&mut output);
+        writer.start_file(DESCRIPTION_XML, FileOptions::default())?;
+        writer.write_all(description_xml.as_bytes())?;
+        writer.finish()?;
+    }
+    Ok(output.into_inner())
+}
+
 fn rewrite_gdtf_archive(path: impl AsRef<Path>, description_xml: &str) -> GdtfResult<()> {
     let path = path.as_ref();
     let mut source_bytes = Vec::new();
     File::open(path)?.read_to_end(&mut source_bytes)?;
-    let mut source = ZipArchive::new(Cursor::new(source_bytes))?;
+    let bytes = rewrite_gdtf_archive_to_bytes(&source_bytes, description_xml)?;
+    std::fs::write(path, bytes)?;
+    Ok(())
+}
 
+fn rewrite_gdtf_archive_to_bytes(
+    source_bytes: &[u8],
+    description_xml: &str,
+) -> GdtfResult<Vec<u8>> {
+    let mut source = ZipArchive::new(Cursor::new(source_bytes))?;
     let mut output = Cursor::new(Vec::new());
     {
         let mut writer = ZipWriter::new(&mut output);
@@ -449,8 +497,7 @@ fn rewrite_gdtf_archive(path: impl AsRef<Path>, description_xml: &str) -> GdtfRe
         writer.finish()?;
     }
 
-    std::fs::write(path, output.into_inner())?;
-    Ok(())
+    Ok(output.into_inner())
 }
 
 fn parse_offsets(value: &str) -> Vec<u16> {
@@ -568,5 +615,37 @@ mod tests {
             .attribute_groups
             .iter()
             .any(|group| group.name == "Color"));
+    }
+
+    #[test]
+    fn creates_and_updates_gdtf_from_memory() {
+        let draft = GdtfFixtureDraft {
+            name: "Memory Fixture".to_string(),
+            manufacturer: "LimxDesk".to_string(),
+            short_name: "MEM".to_string(),
+            long_name: "Memory Fixture".to_string(),
+            description: "Fixture".to_string(),
+            modes: vec![GdtfModeDraft {
+                id: "basic".to_string(),
+                name: "Basic".to_string(),
+                channels: 3,
+                attributes: vec!["Dimmer".to_string()],
+            }],
+        };
+
+        let bytes = create_gdtf_bytes(&draft).unwrap();
+        let summary = read_gdtf_bytes(&bytes).unwrap();
+        assert_eq!(summary.name, "Memory Fixture");
+
+        let updated = update_gdtf_bytes(
+            &bytes,
+            &GdtfFixtureDraft {
+                name: "Memory Fixture Edited".to_string(),
+                ..draft
+            },
+        )
+        .unwrap();
+        let summary = read_gdtf_bytes(&updated).unwrap();
+        assert_eq!(summary.name, "Memory Fixture Edited");
     }
 }

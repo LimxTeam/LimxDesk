@@ -128,12 +128,12 @@ export function ConnectivitySettingsPage() {
   const refreshFixtureTypes = async () => {
     setBusy(true);
     try {
-      const entries = await invoke<FixtureTypeEntry[]>("fixture_type_scan_library");
+      const entries = await invoke<FixtureTypeEntry[]>("fixture_type_scan_current_show");
       setFixtureTypes(entries);
       setLogLine((current) =>
         current.startsWith("No show loaded") || current.startsWith("Loaded ")
           ? current
-          : `Loaded ${entries.length} GDTF fixture type${entries.length === 1 ? "" : "s"}`,
+          : `Loaded ${entries.length} show fixture type${entries.length === 1 ? "" : "s"}`,
       );
     } catch (error) {
       const message = errorToMessage(error);
@@ -356,7 +356,7 @@ export function ConnectivitySettingsPage() {
       >
         <StageFilter value={stageFilter} onChange={setStageFilter} stats={stats} />
         <UniverseStrip universes={universes} />
-        <StatusPanel stats={stats} logLine={!showLoaded ? logLine : fixtureTypes.length === 0 ? "No GDTF fixture types. Import one first." : logLine} />
+        <StatusPanel stats={stats} logLine={!showLoaded ? logLine : fixtureTypes.length === 0 ? "No show fixture types. Import one first." : logLine} />
       </div>
 
       <PatchWizardDialog

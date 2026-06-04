@@ -1,6 +1,7 @@
 use limxdesk_gdtf::{
-    create_gdtf, read_gdtf, update_gdtf, GdtfError, GdtfFixtureDraft, GdtfFixtureSummary,
-    GDTF_EXTENSION,
+    create_gdtf, create_gdtf_bytes as create_gdtf_archive_bytes, read_gdtf, read_gdtf_bytes,
+    update_gdtf, update_gdtf_bytes as update_gdtf_archive_bytes, GdtfError, GdtfFixtureDraft,
+    GdtfFixtureSummary, GDTF_EXTENSION,
 };
 use limxdesk_platform::{LocalFileSystem, PlatformError, PlatformPaths};
 use serde::{Deserialize, Serialize};
@@ -99,10 +100,12 @@ pub struct FixtureAttributeGroupEntry {
     pub encoder_page: String,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 pub enum FixtureTypeSource {
     Gdtf,
     Custom,
+    Show,
+    BuiltIn,
 }
 
 #[derive(Clone, Debug)]
@@ -196,11 +199,38 @@ impl FixtureTypeRepository {
         Ok(())
     }
 
+    pub fn entry_from_gdtf_bytes(
+        bytes: &[u8],
+        path: impl AsRef<str>,
+        source: FixtureTypeSource,
+    ) -> FixtureTypeResult<FixtureTypeEntry> {
+        let summary = read_gdtf_bytes(bytes)?;
+        Ok(entry_from_summary(
+            summary,
+            path.as_ref(),
+            bytes.len() as u64,
+            source,
+        ))
+    }
+
+    pub fn create_gdtf_bytes(draft: FixtureTypeDraft) -> FixtureTypeResult<Vec<u8>> {
+        Ok(create_gdtf_archive_bytes(&draft.into())?)
+    }
+
+    pub fn update_gdtf_bytes(bytes: &[u8], draft: FixtureTypeDraft) -> FixtureTypeResult<Vec<u8>> {
+        Ok(update_gdtf_archive_bytes(bytes, &draft.into())?)
+    }
+
     fn entry_from_path(&self, path: &Path) -> FixtureTypeResult<FixtureTypeEntry> {
         self.validate_library_path(path)?;
         let summary = read_gdtf(path)?;
         let size_bytes = self.fs.file_size(path)?;
-        Ok(entry_from_summary(summary, path, size_bytes))
+        Ok(entry_from_summary(
+            summary,
+            &path_to_string(path),
+            size_bytes,
+            FixtureTypeSource::Gdtf,
+        ))
     }
 
     fn unique_filename(&self, manufacturer: &str, name: &str) -> String {
@@ -260,8 +290,9 @@ impl From<FixtureModeDraft> for limxdesk_gdtf::GdtfModeDraft {
 
 fn entry_from_summary(
     summary: GdtfFixtureSummary,
-    path: &Path,
+    path: &str,
     size_bytes: u64,
+    source: FixtureTypeSource,
 ) -> FixtureTypeEntry {
     let modes = summary
         .modes
@@ -292,10 +323,10 @@ fn entry_from_summary(
         short_name: summary.short_name,
         long_name: summary.long_name,
         description: summary.description,
-        source: FixtureTypeSource::Gdtf,
+        source,
         used: 0,
         locked: false,
-        path: path_to_string(path),
+        path: path.to_string(),
         size_bytes,
         modes,
         attributes,
