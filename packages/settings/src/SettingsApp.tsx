@@ -138,10 +138,10 @@ export function SettingsApp() {
           style={{
             minWidth: 0,
             minHeight: 0,
-            overflow: "auto",
+            overflow: "hidden",
             padding: 18,
-            display: "flex",
-            flexDirection: "column",
+            display: "grid",
+            gridTemplateRows: "auto minmax(0, 1fr)",
             gap: 14,
           }}
         >
@@ -164,7 +164,7 @@ export function SettingsApp() {
                 {section.caption}
               </span>
             </div>
-            <span className="lx-badge lx-badge-info">UI Draft</span>
+            <span className="lx-badge lx-badge-success">Local UI</span>
           </div>
 
           {activeSection === "patch" ? (
