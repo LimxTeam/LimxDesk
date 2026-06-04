@@ -10,6 +10,8 @@ import {
   Search,
   Trash2,
 } from "lucide-react";
+import { ResizableDataTable } from "../components/ResizableDataTable";
+import type { DataTableColumn } from "../components/ResizableDataTable";
 
 interface FixtureMode {
   id: string;
@@ -364,63 +366,74 @@ function FixtureTypeTable({
   selectedId: string;
   onSelect: (id: string) => void;
 }) {
-  return (
-    <div className="lx-panel" style={{ display: "grid", minHeight: 0, gridTemplateRows: "34px minmax(0, 1fr)", overflow: "hidden" }}>
-      <div style={tableHeaderStyle}>
-        {["Name", "Manufacturer", "Modes", "Channels", "Source", "Used", "State"].map((cell) => (
-          <span key={cell} style={{ padding: "0 9px" }}>
-            {cell}
-          </span>
-        ))}
-      </div>
-      <div style={{ overflow: "auto" }}>
-        {fixtureTypes.map((fixtureType) => {
-          const selected = fixtureType.id === selectedId;
-          const channels = getChannelRange(fixtureType);
+  const columns: Array<DataTableColumn<FixtureType>> = [
+    {
+      id: "name",
+      label: "Name",
+      width: 210,
+      minWidth: 150,
+      render: (fixtureType) => (
+        <span style={{ color: "var(--lx-fg-primary)", fontWeight: 650 }}>
+          {fixtureType.name}
+        </span>
+      ),
+    },
+    {
+      id: "manufacturer",
+      label: "Manufacturer",
+      width: 150,
+      minWidth: 110,
+      render: (fixtureType) => fixtureType.manufacturer,
+    },
+    {
+      id: "modes",
+      label: "Modes",
+      width: 76,
+      minWidth: 62,
+      render: (fixtureType) => <span className="lx-code">{fixtureType.modes.length}</span>,
+    },
+    {
+      id: "channels",
+      label: "Channels",
+      width: 118,
+      minWidth: 90,
+      render: (fixtureType) => <span className="lx-code">{getChannelRange(fixtureType)}</span>,
+    },
+    {
+      id: "source",
+      label: "Source",
+      width: 100,
+      minWidth: 82,
+      render: (fixtureType) => fixtureType.source,
+    },
+    {
+      id: "used",
+      label: "Used",
+      width: 76,
+      minWidth: 62,
+      render: (fixtureType) => <span className="lx-code">{fixtureType.used}</span>,
+    },
+    {
+      id: "state",
+      label: "State",
+      width: 112,
+      minWidth: 96,
+      render: (fixtureType) => (
+        <span className={`lx-badge ${getStateClass(fixtureType)}`}>
+          {fixtureType.locked ? "Locked" : fixtureType.source === "Custom" ? "Edited" : "Ready"}
+        </span>
+      ),
+    },
+  ];
 
-          return (
-            <button
-              key={fixtureType.id}
-              type="button"
-              onClick={() => onSelect(fixtureType.id)}
-              className="lx-table-row"
-              style={{
-                display: "grid",
-                width: "100%",
-                gridTemplateColumns: "1.35fr 0.8fr 62px 90px 82px 62px 84px",
-                height: 38,
-                alignItems: "center",
-                border: "none",
-                borderBottom: "1px solid var(--lx-stroke)",
-                background: selected ? "rgba(0,120,212,0.16)" : "transparent",
-                color: selected ? "var(--lx-fg-primary)" : "var(--lx-fg-secondary)",
-                textAlign: "left",
-              }}
-            >
-              <span style={{ padding: "0 9px", color: "var(--lx-fg-primary)", fontWeight: 650 }}>
-                {fixtureType.name}
-              </span>
-              <span style={{ padding: "0 9px" }}>{fixtureType.manufacturer}</span>
-              <span className="lx-code" style={{ padding: "0 9px" }}>
-                {fixtureType.modes.length}
-              </span>
-              <span className="lx-code" style={{ padding: "0 9px" }}>
-                {channels}
-              </span>
-              <span style={{ padding: "0 9px" }}>{fixtureType.source}</span>
-              <span className="lx-code" style={{ padding: "0 9px" }}>
-                {fixtureType.used}
-              </span>
-              <span style={{ padding: "0 9px" }}>
-                <span className={`lx-badge ${getStateClass(fixtureType)}`}>
-                  {fixtureType.locked ? "Locked" : fixtureType.source === "Custom" ? "Edited" : "Ready"}
-                </span>
-              </span>
-            </button>
-          );
-        })}
-      </div>
-    </div>
+  return (
+    <ResizableDataTable
+      columns={columns}
+      rows={fixtureTypes}
+      selectedId={selectedId}
+      getRowId={(fixtureType) => fixtureType.id}
+      onRowClick={(fixtureType) => onSelect(fixtureType.id)}
+    />
   );
 }
 
@@ -652,16 +665,3 @@ function getStateClass(fixtureType: FixtureType): string {
 
   return fixtureType.source === "Custom" ? "lx-badge-warn" : "lx-badge-success";
 }
-
-const tableHeaderStyle = {
-  display: "grid",
-  gridTemplateColumns: "1.35fr 0.8fr 62px 90px 82px 62px 84px",
-  alignItems: "center",
-  borderBottom: "1px solid rgba(240,157,28,0.35)",
-  background: "rgba(0,0,0,0.22)",
-  color: "var(--lx-fg-secondary)",
-  fontSize: 11,
-  fontWeight: 700,
-  letterSpacing: "0.04em",
-  textTransform: "uppercase",
-} as const;

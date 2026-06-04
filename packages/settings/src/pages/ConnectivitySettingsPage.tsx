@@ -9,6 +9,8 @@ import {
   Trash2,
   WandSparkles,
 } from "lucide-react";
+import { ResizableDataTable } from "../components/ResizableDataTable";
+import type { DataTableColumn } from "../components/ResizableDataTable";
 
 type PatchState = "patched" | "overlap" | "unpatched";
 
@@ -315,59 +317,74 @@ function PatchTable({
   selectedId: string;
   onSelect: (id: string) => void;
 }) {
-  return (
-    <div className="lx-panel" style={{ display: "grid", minHeight: 0, gridTemplateRows: "34px minmax(0, 1fr)", overflow: "hidden" }}>
-      <div style={tableHeaderStyle}>
-        {["FID", "Name", "Fixture Type", "Mode", "Patch", "Stage", "State"].map((cell) => (
-          <span key={cell} style={{ padding: "0 9px" }}>
-            {cell}
-          </span>
-        ))}
-      </div>
-      <div style={{ overflow: "auto" }}>
-        {fixtures.map((fixture) => {
-          const selected = fixture.id === selectedId;
-          const state = getPatchState(allFixtures, fixture);
+  const columns: Array<DataTableColumn<PatchFixture>> = [
+    {
+      id: "fid",
+      label: "FID",
+      width: 72,
+      minWidth: 56,
+      render: (fixture) => (
+        <span className="lx-code" style={{ color: "var(--lx-fg-primary)" }}>
+          {fixture.fid}
+        </span>
+      ),
+    },
+    {
+      id: "name",
+      label: "Name",
+      width: 190,
+      minWidth: 130,
+      render: (fixture) => (
+        <span style={{ color: "var(--lx-fg-primary)", fontWeight: 650 }}>
+          {fixture.name}
+        </span>
+      ),
+    },
+    {
+      id: "fixtureType",
+      label: "Fixture Type",
+      width: 190,
+      minWidth: 140,
+      render: (fixture) => fixture.fixtureType,
+    },
+    {
+      id: "mode",
+      label: "Mode",
+      width: 150,
+      minWidth: 110,
+      render: (fixture) => fixture.mode,
+    },
+    {
+      id: "patch",
+      label: "Patch",
+      width: 96,
+      minWidth: 76,
+      render: (fixture) => <span className="lx-code">{fixture.patch}</span>,
+    },
+    {
+      id: "stage",
+      label: "Stage",
+      width: 110,
+      minWidth: 86,
+      render: (fixture) => fixture.stage,
+    },
+    {
+      id: "state",
+      label: "State",
+      width: 116,
+      minWidth: 100,
+      render: (fixture) => <StateBadge state={getPatchState(allFixtures, fixture)} />,
+    },
+  ];
 
-          return (
-            <button
-              key={fixture.id}
-              type="button"
-              onClick={() => onSelect(fixture.id)}
-              className="lx-table-row"
-              style={{
-                display: "grid",
-                width: "100%",
-                gridTemplateColumns: "64px 1.15fr 1.15fr 0.95fr 86px 90px 94px",
-                height: 38,
-                alignItems: "center",
-                border: "none",
-                borderBottom: "1px solid var(--lx-stroke)",
-                background: selected ? "rgba(0,120,212,0.16)" : "transparent",
-                color: selected ? "var(--lx-fg-primary)" : "var(--lx-fg-secondary)",
-                textAlign: "left",
-              }}
-            >
-              <span className="lx-code" style={{ padding: "0 9px", color: "var(--lx-fg-primary)" }}>
-                {fixture.fid}
-              </span>
-              <span style={{ padding: "0 9px", color: "var(--lx-fg-primary)", fontWeight: 650 }}>
-                {fixture.name}
-              </span>
-              <span style={{ padding: "0 9px" }}>{fixture.fixtureType}</span>
-              <span style={{ padding: "0 9px" }}>{fixture.mode}</span>
-              <span className="lx-code" style={{ padding: "0 9px" }}>
-                {fixture.patch}
-              </span>
-              <span style={{ padding: "0 9px" }}>{fixture.stage}</span>
-              <span style={{ padding: "0 9px" }}>
-                <StateBadge state={state} />
-              </span>
-            </button>
-          );
-        })}
-      </div>
-    </div>
+  return (
+    <ResizableDataTable
+      columns={columns}
+      rows={fixtures}
+      selectedId={selectedId}
+      getRowId={(fixture) => fixture.id}
+      onRowClick={(fixture) => onSelect(fixture.id)}
+    />
   );
 }
 
@@ -661,16 +678,3 @@ function normalizePatch(value: string): string {
   const trimmed = value.trim();
   return trimmed.length === 0 ? "-" : trimmed;
 }
-
-const tableHeaderStyle = {
-  display: "grid",
-  gridTemplateColumns: "64px 1.15fr 1.15fr 0.95fr 86px 90px 94px",
-  alignItems: "center",
-  borderBottom: "1px solid rgba(240,157,28,0.35)",
-  background: "rgba(0,0,0,0.22)",
-  color: "var(--lx-fg-secondary)",
-  fontSize: 11,
-  fontWeight: 700,
-  letterSpacing: "0.04em",
-  textTransform: "uppercase",
-} as const;
