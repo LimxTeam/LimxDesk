@@ -3,6 +3,7 @@ use serde::{Deserialize, Serialize};
 use std::{
     ffi::OsStr,
     fmt, fs,
+    io::ErrorKind,
     path::{Path, PathBuf},
 };
 use uuid::Uuid;
@@ -12,6 +13,7 @@ use crate::codec::{decode_container, encode_container};
 pub const SHOW_EXTENSION: &str = "limxdsek";
 pub const SHOW_FORMAT_VERSION: u16 = 1;
 const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
+const ACTIVE_SHOW_FILE_NAME: &str = "active-show.json";
 
 #[derive(Debug)]
 pub enum ShowFileError {
@@ -97,6 +99,14 @@ pub struct LoadedShow {
     pub manifest: ShowManifest,
     pub path: String,
     pub size_bytes: u64,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ActiveShowPointer {
+    show_id: Uuid,
+    path: String,
+    updated_at_ms: u64,
 }
 
 #[derive(Clone, Debug)]
@@ -270,6 +280,56 @@ impl ShowRepository {
         Ok(())
     }
 
+    pub fn activate(&self, loaded: &LoadedShow) -> ShowFileResult<()> {
+        self.ensure_library()?;
+        let pointer = ActiveShowPointer {
+            show_id: loaded.manifest.id,
+            path: loaded.path.clone(),
+            updated_at_ms: current_timestamp_millis()?,
+        };
+        let bytes = serde_json::to_vec_pretty(&pointer)?;
+        self.fs.atomic_write(self.active_show_path(), &bytes)?;
+        Ok(())
+    }
+
+    pub fn load_active(&self) -> ShowFileResult<Option<LoadedShow>> {
+        self.ensure_library()?;
+        let path = self.active_show_path();
+        if !path.exists() {
+            return Ok(None);
+        }
+
+        let bytes = self.fs.read(&path)?;
+        let pointer: ActiveShowPointer = serde_json::from_slice(&bytes)?;
+        let loaded = match self.load(&pointer.path) {
+            Ok(loaded) => loaded,
+            Err(ShowFileError::Platform(PlatformError::Io(error)))
+                if error.kind() == ErrorKind::NotFound =>
+            {
+                self.clear_active()?;
+                return Ok(None);
+            }
+            Err(error) => return Err(error),
+        };
+        if loaded.manifest.id != pointer.show_id {
+            return Err(ShowFileError::InvalidFormat(format!(
+                "active show pointer id mismatch: {}",
+                pointer.path
+            )));
+        }
+
+        Ok(Some(loaded))
+    }
+
+    pub fn clear_active(&self) -> ShowFileResult<()> {
+        self.ensure_library()?;
+        let path = self.active_show_path();
+        if path.exists() {
+            self.fs.delete_file(path)?;
+        }
+        Ok(())
+    }
+
     fn load_path(&self, path: &Path) -> ShowFileResult<LoadedShow> {
         self.validate_show_path(path)?;
         let container = self.read_container(path)?;
@@ -309,6 +369,10 @@ impl ShowRepository {
         }
 
         candidate
+    }
+
+    fn active_show_path(&self) -> PathBuf {
+        self.paths.app_data_root.join(ACTIVE_SHOW_FILE_NAME)
     }
 
     fn validate_show_path(&self, path: &Path) -> ShowFileResult<()> {
@@ -420,6 +484,11 @@ mod tests {
         let loaded = repository.load(&created.path).unwrap();
         assert_eq!(loaded.manifest.id, created.manifest.id);
 
+        repository.activate(&loaded).unwrap();
+        let active = repository.load_active().unwrap().unwrap();
+        assert_eq!(active.manifest.id, loaded.manifest.id);
+        assert_eq!(active.path, loaded.path);
+
         let saved = repository.save(&created.path).unwrap();
         assert!(saved.manifest.modified_at_ms >= loaded.manifest.modified_at_ms);
 
@@ -445,6 +514,9 @@ mod tests {
         let listed = repository.list().unwrap();
         assert_eq!(listed.len(), 1);
         assert_eq!(listed[0].id, copied.manifest.id);
+
+        repository.clear_active().unwrap();
+        assert!(repository.load_active().unwrap().is_none());
 
         fs::remove_dir_all(root).unwrap();
     }
