@@ -28,6 +28,7 @@
 // ============================================================
 
 mod fixture_types;
+mod patch;
 mod show;
 mod titlebar;
 mod tray;
@@ -69,6 +70,8 @@ pub fn run() {
             fixture_types::fixture_type_create,
             fixture_types::fixture_type_update,
             fixture_types::fixture_type_delete,
+            patch::patch_load_current_show,
+            patch::patch_save_current_show,
         ])
         .run(tauri::generate_context!())
         .expect("启动 Tauri 应用失败");

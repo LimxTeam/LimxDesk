@@ -60,6 +60,10 @@ interface PatchWizardDraft {
   stage: string;
 }
 
+interface PatchDocument {
+  fixtures: unknown;
+}
+
 const STAGES = ["Main", "Stage B", "Previs"];
 
 export function ConnectivitySettingsPage() {
@@ -71,6 +75,7 @@ export function ConnectivitySettingsPage() {
   const [logLine, setLogLine] = useState("Ready");
   const [wizardOpen, setWizardOpen] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [showLoaded, setShowLoaded] = useState(false);
   const deferredQuery = useDeferredValue(query.trim().toLowerCase());
 
   const selectedFixture = fixtures.find((fixture) => fixture.id === selectedId) ?? fixtures[0];
@@ -84,14 +89,48 @@ export function ConnectivitySettingsPage() {
 
   useEffect(() => {
     void refreshFixtureTypes();
+    void loadPatchFromShow();
   }, []);
+
+  const loadPatchFromShow = async () => {
+    setBusy(true);
+    try {
+      const document = await invoke<PatchDocument | null>("patch_load_current_show");
+      if (!document) {
+        setShowLoaded(false);
+        setFixtures([]);
+        setSelectedId("");
+        setLogLine("No show loaded. Create or load a show file before editing patch.");
+        return;
+      }
+
+      const nextFixtures = Array.isArray(document.fixtures)
+        ? (document.fixtures as PatchFixture[]).map((fixture) => normalizeFixture(fixture, fixtureTypes))
+        : [];
+      setShowLoaded(true);
+      setFixtures(nextFixtures);
+      setSelectedId(nextFixtures[0]?.id ?? "");
+      setLogLine(`Loaded ${nextFixtures.length} patched fixture${nextFixtures.length === 1 ? "" : "s"} from show`);
+    } catch (error) {
+      setShowLoaded(false);
+      setFixtures([]);
+      setSelectedId("");
+      setLogLine(errorToMessage(error));
+    } finally {
+      setBusy(false);
+    }
+  };
 
   const refreshFixtureTypes = async () => {
     setBusy(true);
     try {
       const entries = await invoke<FixtureTypeEntry[]>("fixture_type_scan_library");
       setFixtureTypes(entries);
-      setLogLine(`Loaded ${entries.length} GDTF fixture type${entries.length === 1 ? "" : "s"}`);
+      setLogLine((current) =>
+        current.startsWith("No show loaded") || current.startsWith("Loaded ")
+          ? current
+          : `Loaded ${entries.length} GDTF fixture type${entries.length === 1 ? "" : "s"}`,
+      );
     } catch (error) {
       setLogLine(errorToMessage(error));
     } finally {
@@ -101,6 +140,10 @@ export function ConnectivitySettingsPage() {
 
   const updateSelected = (patch: Partial<PatchFixture>) => {
     if (!selectedFixture) return;
+    if (!showLoaded) {
+      setLogLine("No show loaded. Patch changes are blocked.");
+      return;
+    }
 
     const nextFixture = normalizeFixture({ ...selectedFixture, ...patch }, fixtureTypes);
     const issues = getFixtureIssues(fixtures, nextFixture);
@@ -109,10 +152,18 @@ export function ConnectivitySettingsPage() {
       return;
     }
 
-    setFixtures((current) => current.map((fixture) => (fixture.id === selectedFixture.id ? nextFixture : fixture)));
+    void commitFixtures(
+      fixtures.map((fixture) => (fixture.id === selectedFixture.id ? nextFixture : fixture)),
+      `Saved fixture ${nextFixture.fid}`,
+    );
   };
 
   const applyWizard = (draft: PatchWizardDraft) => {
+    if (!showLoaded) {
+      setLogLine("No show loaded. Patch changes are blocked.");
+      return;
+    }
+
     const fixtureType = fixtureTypes.find((item) => item.path === draft.fixtureTypePath);
     const mode = fixtureType?.modes.find((item) => item.id === draft.modeId) ?? fixtureType?.modes[0];
     if (!fixtureType || !mode) {
@@ -130,14 +181,18 @@ export function ConnectivitySettingsPage() {
       return;
     }
 
-    setFixtures((current) => [...current, ...nextFixtures].sort((left, right) => left.fid - right.fid));
+    const next = [...fixtures, ...nextFixtures].sort((left, right) => left.fid - right.fid);
+    void commitFixtures(next, `Patched ${nextFixtures.length} ${fixtureType.name} fixture${nextFixtures.length === 1 ? "" : "s"}`);
     setSelectedId(nextFixtures[0]?.id ?? selectedId);
     setWizardOpen(false);
-    setLogLine(`Patched ${nextFixtures.length} ${fixtureType.name} fixture${nextFixtures.length === 1 ? "" : "s"}`);
   };
 
   const duplicateFixture = () => {
     if (!selectedFixture) return;
+    if (!showLoaded) {
+      setLogLine("No show loaded. Patch changes are blocked.");
+      return;
+    }
 
     const nextFid = getNextFid(fixtures);
     const fixture = {
@@ -149,37 +204,54 @@ export function ConnectivitySettingsPage() {
       address: null,
     };
 
-    setFixtures((current) => [...current, fixture].sort((left, right) => left.fid - right.fid));
+    const next = [...fixtures, fixture].sort((left, right) => left.fid - right.fid);
+    void commitFixtures(next, `Duplicated fixture ${selectedFixture.fid}`);
     setSelectedId(fixture.id);
-    setLogLine(`Duplicated fixture ${selectedFixture.fid}`);
   };
 
   const deleteFixture = () => {
     if (!selectedFixture) return;
+    if (!showLoaded) {
+      setLogLine("No show loaded. Patch changes are blocked.");
+      return;
+    }
 
-    setFixtures((current) => {
-      const next = current.filter((fixture) => fixture.id !== selectedFixture.id);
-      setSelectedId(next[0]?.id ?? "");
-      return next;
-    });
-    setLogLine(`Deleted fixture ${selectedFixture.fid}`);
+    const next = fixtures.filter((fixture) => fixture.id !== selectedFixture.id);
+    setSelectedId(next[0]?.id ?? "");
+    void commitFixtures(next, `Deleted fixture ${selectedFixture.fid}`);
   };
 
   const autoPatch = () => {
-    setFixtures((current) => {
-      const patched = current.filter((fixture) => fixture.universe !== null && fixture.address !== null);
-      const next = current.map((fixture) => {
-        if (fixture.universe !== null && fixture.address !== null) return fixture;
+    if (!showLoaded) {
+      setLogLine("No show loaded. Patch changes are blocked.");
+      return;
+    }
 
-        const candidate = findNextFreePatch(patched, fixture.channels, 1, 1);
-        const nextFixture = { ...fixture, universe: candidate.universe, address: candidate.address };
-        patched.push(nextFixture);
-        return nextFixture;
-      });
+    const patched = fixtures.filter((fixture) => fixture.universe !== null && fixture.address !== null);
+    const next = fixtures.map((fixture) => {
+      if (fixture.universe !== null && fixture.address !== null) return fixture;
 
-      return next;
+      const candidate = findNextFreePatch(patched, fixture.channels, 1, 1);
+      const nextFixture = { ...fixture, universe: candidate.universe, address: candidate.address };
+      patched.push(nextFixture);
+      return nextFixture;
     });
-    setLogLine("Auto patched unassigned fixtures");
+
+    void commitFixtures(next, "Auto patched unassigned fixtures");
+  };
+
+  const commitFixtures = async (nextFixtures: PatchFixture[], message: string) => {
+    setFixtures(nextFixtures);
+    setBusy(true);
+    try {
+      await invoke<void>("patch_save_current_show", { fixtures: nextFixtures });
+      setShowLoaded(true);
+      setLogLine(message);
+    } catch (error) {
+      setLogLine(errorToMessage(error));
+    } finally {
+      setBusy(false);
+    }
   };
 
   return (
@@ -204,19 +276,19 @@ export function ConnectivitySettingsPage() {
       >
         <SearchBox value={query} onChange={setQuery} />
         <div style={{ display: "flex", gap: 6 }}>
-          <button type="button" className="lx-btn lx-btn-primary" onClick={() => setWizardOpen(true)} disabled={busy || fixtureTypes.length === 0}>
+          <button type="button" className="lx-btn lx-btn-primary" onClick={() => setWizardOpen(true)} disabled={busy || !showLoaded || fixtureTypes.length === 0}>
             <Plus size={13} />
             添加配接
           </button>
-          <button type="button" className="lx-btn lx-btn-ghost" onClick={duplicateFixture} disabled={!selectedFixture}>
+          <button type="button" className="lx-btn lx-btn-ghost" onClick={duplicateFixture} disabled={!showLoaded || !selectedFixture}>
             <Copy size={13} />
             复制
           </button>
-          <button type="button" className="lx-btn lx-btn-ghost" onClick={autoPatch} disabled={fixtures.length === 0}>
+          <button type="button" className="lx-btn lx-btn-ghost" onClick={autoPatch} disabled={!showLoaded || fixtures.length === 0}>
             <WandSparkles size={13} />
             自动配接
           </button>
-          <button type="button" className="lx-btn lx-btn-ghost" onClick={deleteFixture} disabled={!selectedFixture}>
+          <button type="button" className="lx-btn lx-btn-ghost" onClick={deleteFixture} disabled={!showLoaded || !selectedFixture}>
             <Trash2 size={13} />
             删除
           </button>
@@ -232,7 +304,7 @@ export function ConnectivitySettingsPage() {
         }}
       >
         <PatchTable fixtures={visibleFixtures} allFixtures={fixtures} selectedId={selectedId} onSelect={setSelectedId} />
-        <Inspector fixture={selectedFixture} fixtureTypes={fixtureTypes} onChange={updateSelected} />
+        <Inspector fixture={selectedFixture} fixtureTypes={fixtureTypes} disabled={!showLoaded || busy} onChange={updateSelected} />
       </div>
 
       <div
@@ -245,7 +317,7 @@ export function ConnectivitySettingsPage() {
       >
         <StageFilter value={stageFilter} onChange={setStageFilter} stats={stats} />
         <UniverseStrip universes={universes} />
-        <StatusPanel stats={stats} logLine={fixtureTypes.length === 0 ? "No GDTF fixture types. Import one first." : logLine} />
+        <StatusPanel stats={stats} logLine={!showLoaded ? logLine : fixtureTypes.length === 0 ? "No GDTF fixture types. Import one first." : logLine} />
       </div>
 
       <PatchWizardDialog
@@ -502,10 +574,12 @@ function PatchTable({
 function Inspector({
   fixture,
   fixtureTypes,
+  disabled,
   onChange,
 }: {
   fixture?: PatchFixture;
   fixtureTypes: FixtureTypeEntry[];
+  disabled: boolean;
   onChange: (patch: Partial<PatchFixture>) => void;
 }) {
   if (!fixture) {
@@ -523,15 +597,16 @@ function Inspector({
       </div>
       <div style={{ display: "grid", alignContent: "start", gap: 10, overflow: "auto", padding: 12 }}>
         <Field label="FID">
-          <input className="lx-input lx-input-sm" type="number" value={fixture.fid} onChange={(event) => onChange({ fid: Number(event.currentTarget.value) })} />
+          <input className="lx-input lx-input-sm" type="number" value={fixture.fid} disabled={disabled} onChange={(event) => onChange({ fid: Number(event.currentTarget.value) })} />
         </Field>
         <Field label="Name">
-          <input className="lx-input lx-input-sm" value={fixture.name} onChange={(event) => onChange({ name: event.currentTarget.value })} />
+          <input className="lx-input lx-input-sm" value={fixture.name} disabled={disabled} onChange={(event) => onChange({ name: event.currentTarget.value })} />
         </Field>
         <Field label="Fixture Type">
           <select
             className="lx-input lx-input-sm"
             value={fixture.fixtureTypePath}
+            disabled={disabled}
             onChange={(event) => {
               const nextType = fixtureTypes.find((item) => item.path === event.currentTarget.value);
               const nextMode = nextType?.modes[0];
@@ -556,6 +631,7 @@ function Inspector({
           <select
             className="lx-input lx-input-sm"
             value={fixture.modeId}
+            disabled={disabled}
             onChange={(event) => {
               const nextMode = modes.find((mode) => mode.id === event.currentTarget.value);
               if (nextMode) onChange({ modeId: nextMode.id, modeName: nextMode.name, channels: nextMode.channels });
@@ -567,19 +643,19 @@ function Inspector({
           </select>
         </Field>
         <Field label="Universe">
-          <input className="lx-input lx-input-sm" type="number" min={1} value={fixture.universe ?? ""} onChange={(event) => onChange({ universe: nullableNumber(event.currentTarget.value) })} />
+          <input className="lx-input lx-input-sm" type="number" min={1} value={fixture.universe ?? ""} disabled={disabled} onChange={(event) => onChange({ universe: nullableNumber(event.currentTarget.value) })} />
         </Field>
         <Field label="Address">
-          <input className="lx-input lx-input-sm" type="number" min={1} max={512} value={fixture.address ?? ""} onChange={(event) => onChange({ address: nullableNumber(event.currentTarget.value) })} />
+          <input className="lx-input lx-input-sm" type="number" min={1} max={512} value={fixture.address ?? ""} disabled={disabled} onChange={(event) => onChange({ address: nullableNumber(event.currentTarget.value) })} />
         </Field>
         <Field label="Stage">
-          <select className="lx-input lx-input-sm" value={fixture.stage} onChange={(event) => onChange({ stage: event.currentTarget.value })}>
+          <select className="lx-input lx-input-sm" value={fixture.stage} disabled={disabled} onChange={(event) => onChange({ stage: event.currentTarget.value })}>
             {STAGES.map((stage) => <option key={stage}>{stage}</option>)}
           </select>
         </Field>
         <div className="lx-divider-h" />
-        <ToggleRow label="Pan Invert" checked={fixture.panInvert} onChange={(panInvert) => onChange({ panInvert })} />
-        <ToggleRow label="Tilt Invert" checked={fixture.tiltInvert} onChange={(tiltInvert) => onChange({ tiltInvert })} />
+        <ToggleRow label="Pan Invert" checked={fixture.panInvert} disabled={disabled} onChange={(panInvert) => onChange({ panInvert })} />
+        <ToggleRow label="Tilt Invert" checked={fixture.tiltInvert} disabled={disabled} onChange={(tiltInvert) => onChange({ tiltInvert })} />
       </div>
     </div>
   );
@@ -603,10 +679,11 @@ function WizardField({ label, children }: { label: string; children: ReactNode }
   );
 }
 
-function ToggleRow({ label, checked, onChange }: { label: string; checked: boolean; onChange: (checked: boolean) => void }) {
+function ToggleRow({ label, checked, disabled, onChange }: { label: string; checked: boolean; disabled?: boolean; onChange: (checked: boolean) => void }) {
   return (
     <button
       type="button"
+      disabled={disabled}
       onClick={() => onChange(!checked)}
       style={{
         display: "flex",
@@ -616,7 +693,7 @@ function ToggleRow({ label, checked, onChange }: { label: string; checked: boole
         border: "1px solid var(--lx-stroke)",
         borderRadius: "var(--lx-radius-sm)",
         background: checked ? "var(--lx-primary-dim)" : "var(--lx-bg-deep)",
-        color: checked ? "var(--lx-primary-bright)" : "var(--lx-fg-secondary)",
+        color: disabled ? "var(--lx-fg-disabled)" : checked ? "var(--lx-primary-bright)" : "var(--lx-fg-secondary)",
         padding: "0 10px",
       }}
     >

@@ -7,6 +7,25 @@ pub struct ShowRuntimeState {
     current: Mutex<Option<LoadedShow>>,
 }
 
+impl ShowRuntimeState {
+    pub(crate) fn current(&self) -> Result<Option<LoadedShow>, String> {
+        let current = self
+            .current
+            .lock()
+            .map_err(|_| "show runtime state lock poisoned".to_string())?;
+        Ok(current.clone())
+    }
+
+    pub(crate) fn set_current(&self, loaded: LoadedShow) -> Result<(), String> {
+        let mut current = self
+            .current
+            .lock()
+            .map_err(|_| "show runtime state lock poisoned".to_string())?;
+        *current = Some(loaded);
+        Ok(())
+    }
+}
+
 #[tauri::command]
 pub fn show_library_root() -> Result<String, String> {
     let repository = ShowRepository::default_for_current_os();
@@ -29,7 +48,7 @@ pub fn show_create(name: String, state: State<'_, ShowRuntimeState>) -> Result<L
     let loaded = ShowRepository::default_for_current_os()
         .create(name)
         .map_err(|error| error.to_string())?;
-    set_current_show(&state, loaded.clone())?;
+    state.set_current(loaded.clone())?;
     Ok(loaded)
 }
 
@@ -38,7 +57,7 @@ pub fn show_load(path: String, state: State<'_, ShowRuntimeState>) -> Result<Loa
     let loaded = ShowRepository::default_for_current_os()
         .load(path)
         .map_err(|error| error.to_string())?;
-    set_current_show(&state, loaded.clone())?;
+    state.set_current(loaded.clone())?;
     Ok(loaded)
 }
 
@@ -47,7 +66,7 @@ pub fn show_save(path: String, state: State<'_, ShowRuntimeState>) -> Result<Loa
     let loaded = ShowRepository::default_for_current_os()
         .save(path)
         .map_err(|error| error.to_string())?;
-    set_current_show(&state, loaded.clone())?;
+    state.set_current(loaded.clone())?;
     Ok(loaded)
 }
 
@@ -60,7 +79,7 @@ pub fn show_save_as(
     let loaded = ShowRepository::default_for_current_os()
         .save_as(source_path, name)
         .map_err(|error| error.to_string())?;
-    set_current_show(&state, loaded.clone())?;
+    state.set_current(loaded.clone())?;
     Ok(loaded)
 }
 
@@ -84,18 +103,5 @@ pub fn show_delete(path: String, state: State<'_, ShowRuntimeState>) -> Result<(
 
 #[tauri::command]
 pub fn show_current(state: State<'_, ShowRuntimeState>) -> Result<Option<LoadedShow>, String> {
-    let current = state
-        .current
-        .lock()
-        .map_err(|_| "show runtime state lock poisoned".to_string())?;
-    Ok(current.clone())
-}
-
-fn set_current_show(state: &State<'_, ShowRuntimeState>, loaded: LoadedShow) -> Result<(), String> {
-    let mut current = state
-        .current
-        .lock()
-        .map_err(|_| "show runtime state lock poisoned".to_string())?;
-    *current = Some(loaded);
-    Ok(())
+    state.current()
 }

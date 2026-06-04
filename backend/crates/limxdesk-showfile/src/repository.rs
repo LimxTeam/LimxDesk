@@ -180,6 +180,65 @@ impl ShowRepository {
         self.load_path(path)
     }
 
+    pub fn read_section<T>(
+        &self,
+        path: impl AsRef<Path>,
+        key: impl AsRef<str>,
+    ) -> ShowFileResult<Option<T>>
+    where
+        T: for<'de> Deserialize<'de>,
+    {
+        self.ensure_library()?;
+
+        let path = path.as_ref();
+        self.validate_show_path(path)?;
+        let container = self.read_container(path)?;
+        let key = key.as_ref();
+        let Some(section) = container.sections.iter().find(|section| section.key == key) else {
+            return Ok(None);
+        };
+
+        Ok(Some(serde_json::from_slice(&section.payload)?))
+    }
+
+    pub fn write_section<T>(
+        &self,
+        path: impl AsRef<Path>,
+        key: impl Into<String>,
+        version: u16,
+        value: &T,
+    ) -> ShowFileResult<LoadedShow>
+    where
+        T: Serialize,
+    {
+        self.ensure_library()?;
+
+        let path = path.as_ref();
+        self.validate_show_path(path)?;
+        let key = key.into();
+        let payload = serde_json::to_vec(value)?;
+        let mut container = self.read_container(path)?;
+
+        if let Some(section) = container
+            .sections
+            .iter_mut()
+            .find(|section| section.key == key)
+        {
+            section.version = version;
+            section.payload = payload;
+        } else {
+            container.sections.push(ShowSection {
+                key,
+                version,
+                payload,
+            });
+        }
+
+        container.manifest.modified_at_ms = current_timestamp_millis()?;
+        self.write_container(path, &container)?;
+        self.load_path(path)
+    }
+
     pub fn save_as(
         &self,
         source_path: impl AsRef<Path>,
@@ -363,6 +422,20 @@ mod tests {
 
         let saved = repository.save(&created.path).unwrap();
         assert!(saved.manifest.modified_at_ms >= loaded.manifest.modified_at_ms);
+
+        let section_value = serde_json::json!({
+            "fixtures": [
+                { "fid": 1, "name": "Dimmer 1", "universe": 1, "address": 1 }
+            ]
+        });
+        repository
+            .write_section(&created.path, "patch.v1", 1, &section_value)
+            .unwrap();
+        let restored: serde_json::Value = repository
+            .read_section(&created.path, "patch.v1")
+            .unwrap()
+            .unwrap();
+        assert_eq!(restored["fixtures"][0]["fid"], 1);
 
         let copied = repository.save_as(&created.path, "Copied Show").unwrap();
         assert_ne!(copied.manifest.id, created.manifest.id);
