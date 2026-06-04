@@ -1,4 +1,4 @@
-use crate::events;
+use crate::{events, programmer::ProgrammerState};
 use limxdesk_fixture_selection::{FixtureSelection, FixtureSelectionMode};
 use std::sync::Mutex;
 use tauri::{AppHandle, State};
@@ -9,7 +9,7 @@ pub struct FixtureSelectionState {
 }
 
 impl FixtureSelectionState {
-    fn current(&self) -> Result<FixtureSelection, String> {
+    pub(crate) fn current(&self) -> Result<FixtureSelection, String> {
         let selection = self
             .current
             .lock()
@@ -17,7 +17,10 @@ impl FixtureSelectionState {
         Ok(selection.clone())
     }
 
-    fn set_current(&self, selection: FixtureSelection) -> Result<FixtureSelection, String> {
+    pub(crate) fn set_current(
+        &self,
+        selection: FixtureSelection,
+    ) -> Result<FixtureSelection, String> {
         let mut current = self
             .current
             .lock()
@@ -40,22 +43,30 @@ pub fn fixture_selection_select(
     primary_fixture_id: Option<String>,
     mode: FixtureSelectionMode,
     state: State<'_, FixtureSelectionState>,
+    programmer_state: State<'_, ProgrammerState>,
     app: AppHandle,
 ) -> Result<FixtureSelection, String> {
     let current = state.current()?;
     let next = current.select(fixture_ids, primary_fixture_id, mode);
     let next = state.set_current(next)?;
+    let programmer = programmer_state.current()?.sync_selection(&next);
+    let programmer = programmer_state.set_current(programmer)?;
     events::emit_fixture_selection_changed(&app, &next);
+    events::emit_programmer_changed(&app, &programmer);
     Ok(next)
 }
 
 #[tauri::command]
 pub fn fixture_selection_clear(
     state: State<'_, FixtureSelectionState>,
+    programmer_state: State<'_, ProgrammerState>,
     app: AppHandle,
 ) -> Result<FixtureSelection, String> {
     let current = state.current()?;
     let next = state.set_current(current.clear())?;
+    let programmer = programmer_state.current()?.sync_selection(&next);
+    let programmer = programmer_state.set_current(programmer)?;
     events::emit_fixture_selection_changed(&app, &next);
+    events::emit_programmer_changed(&app, &programmer);
     Ok(next)
 }

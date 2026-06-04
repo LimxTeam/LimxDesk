@@ -32,6 +32,7 @@ mod fixture_selection;
 mod fixture_types;
 mod layout;
 mod patch;
+mod programmer;
 mod show;
 mod titlebar;
 mod tray;
@@ -44,6 +45,7 @@ pub fn run() {
 
     tauri::Builder::default()
         .manage(fixture_selection::FixtureSelectionState::default())
+        .manage(programmer::ProgrammerState::default())
         .manage(show::ShowRuntimeState::default())
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
@@ -82,6 +84,16 @@ pub fn run() {
             fixture_selection::fixture_selection_get,
             fixture_selection::fixture_selection_select,
             fixture_selection::fixture_selection_clear,
+            programmer::programmer_get,
+            programmer::programmer_set_mode,
+            programmer::programmer_set_blind,
+            programmer::programmer_sync_selection,
+            programmer::programmer_apply_selection_tool,
+            programmer::programmer_select_part,
+            programmer::programmer_set_attribute_for_selection,
+            programmer::programmer_clear,
+            programmer::programmer_store_values,
+            programmer::programmer_reset,
             patch::patch_load_current_show,
             patch::patch_save_current_show,
             patch::patch_apply_wizard,

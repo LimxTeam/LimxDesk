@@ -291,8 +291,9 @@ export function ConnectivitySettingsPage() {
     try {
       const result = await command();
       const nextFixtures = result.document.fixtures.map((fixture) => normalizeFixture(fixture, fixtureTypes));
+      const nextSelectedId = result.selectedId ?? (nextFixtures.some((fixture) => fixture.id === selectedId) ? selectedId : "");
       setFixtures(nextFixtures);
-      setSelectedId(result.selectedId ?? nextFixtures[0]?.id ?? "");
+      setSelectedId(nextSelectedId);
       setShowLoaded(true);
       setLogLine(result.message);
       dynamicIsland.update(islandId, {

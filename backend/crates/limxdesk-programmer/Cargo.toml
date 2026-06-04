@@ -1,0 +1,8 @@
+[package]
+name = "limxdesk-programmer"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+limxdesk-fixture-selection = { path = "../limxdesk-fixture-selection" }
+serde = { version = "1", features = ["derive"] }

@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { AttributeTabBar } from "./components/AttributeTabBar";
@@ -11,6 +11,9 @@ import { EncoderInfoBar } from "./components/EncoderInfoBar";
 interface EncoderParam {
   name: string;
   value: string;
+  attribute?: string;
+  featureGroup?: string;
+  layer?: ProgrammerLayer;
 }
 
 interface EncoderGroup {
@@ -58,6 +61,51 @@ interface FixtureSelection {
   fixtureIds: string[];
   primaryFixtureId: string | null;
   version: number;
+}
+
+interface Programmer {
+  live: ProgrammerBuffer;
+  preview: ProgrammerBuffer;
+  mode: ProgrammerMode;
+  blind: boolean;
+  version: number;
+}
+
+interface ProgrammerBuffer {
+  selectedPartId: number;
+  parts: ProgrammerPart[];
+}
+
+interface ProgrammerPart {
+  id: number;
+  label: string | null;
+  values: ProgrammerValue[];
+}
+
+interface ProgrammerValue {
+  fixtureId: string;
+  attribute: string;
+  featureGroup: string;
+  layer: ProgrammerLayer;
+  value: ProgrammerScalar;
+  active: boolean;
+  source: ProgrammerValueSource;
+}
+
+interface ProgrammerScalar {
+  numeric: number | null;
+  text: string | null;
+}
+
+type ProgrammerMode = "live" | "preview";
+type ProgrammerLayer = "absolute" | "relative" | "fade" | "delay";
+type ProgrammerValueSource = "manual" | "preset" | "output";
+interface ProgrammerSetAttributeRequest {
+  attribute: string;
+  featureGroup: string;
+  layer: ProgrammerLayer;
+  value: ProgrammerScalar;
+  source: ProgrammerValueSource;
 }
 
 const ENCODERS_PER_PAGE = 4;
@@ -118,10 +166,22 @@ export function ControlPanel() {
   const [fixtures, setFixtures] = useState<PatchFixture[]>([]);
   const [fixtureTypes, setFixtureTypes] = useState<FixtureTypeEntry[]>([]);
   const [selectedFixtureId, setSelectedFixtureId] = useState("");
+  const [selection, setSelection] = useState<FixtureSelection>({
+    fixtureIds: [],
+    primaryFixtureId: null,
+    version: 0,
+  });
+  const [programmer, setProgrammer] = useState<Programmer>({
+    live: { selectedPartId: 0, parts: [] },
+    preview: { selectedPartId: 0, parts: [] },
+    mode: "live",
+    blind: false,
+    version: 0,
+  });
+  const selectedFixtureIdRef = useRef("");
 
   useEffect(() => {
-    void refreshShowData();
-    void refreshSelection();
+    void refreshRuntimeData();
   }, []);
 
   useEffect(() => {
@@ -129,38 +189,53 @@ export function ControlPanel() {
     const unlisteners: Array<() => void> = [];
 
     const register = async () => {
-      const selectionChanged = await listen<FixtureSelection>(
-        "fixture-selection:changed",
-        (event) => {
-          const primaryId = event.payload.primaryFixtureId ?? "";
-          setSelectedFixtureId(primaryId);
-          void refreshShowData(primaryId);
-        },
-      );
+      const selectionChanged = await listen<FixtureSelection>("fixture-selection:changed", (event) => {
+        setSelection(event.payload);
+        const nextSelectedId = event.payload.primaryFixtureId ?? "";
+        selectedFixtureIdRef.current = nextSelectedId;
+        setSelectedFixtureId(nextSelectedId);
+      });
+      const programmerChanged = await listen<Programmer>("programmer:changed", (event) => {
+        setProgrammer(event.payload);
+      });
       const patchChanged = await listen("patch:changed", () => {
-        void refreshShowData(selectedFixtureId);
+        void refreshRuntimeData();
       });
       const fixtureTypesChanged = await listen("fixture-types:changed", () => {
-        void refreshShowData(selectedFixtureId);
+        void refreshRuntimeData();
       });
       const showLoaded = await listen("show:loaded", () => {
-        void refreshShowData();
+        void refreshRuntimeData();
       });
       const showDeleted = await listen("show:deleted", () => {
         setFixtures([]);
         setFixtureTypes([]);
+        selectedFixtureIdRef.current = "";
         setSelectedFixtureId("");
+        setSelection({
+          fixtureIds: [],
+          primaryFixtureId: null,
+          version: 0,
+        });
+        setProgrammer({
+          live: { selectedPartId: 0, parts: [] },
+          preview: { selectedPartId: 0, parts: [] },
+          mode: "live",
+          blind: false,
+          version: 0,
+        });
       });
 
       if (!active) {
         selectionChanged();
+        programmerChanged();
         patchChanged();
         fixtureTypesChanged();
         showLoaded();
         showDeleted();
         return;
       }
-      unlisteners.push(selectionChanged, patchChanged, fixtureTypesChanged, showLoaded, showDeleted);
+      unlisteners.push(selectionChanged, programmerChanged, patchChanged, fixtureTypesChanged, showLoaded, showDeleted);
     };
 
     void register();
@@ -168,11 +243,12 @@ export function ControlPanel() {
       active = false;
       unlisteners.forEach((unlisten) => unlisten());
     };
-  }, [selectedFixtureId]);
+  }, []);
 
   const selectedFixture =
-    fixtures.find((fixture) => fixture.id === selectedFixtureId) ?? fixtures[0];
-  const pageInfo = buildPageInfo(selectedFixture, fixtureTypes);
+    fixtures.find((fixture) => fixture.id === selection.primaryFixtureId) ??
+    fixtures.find((fixture) => fixture.id === selectedFixtureId);
+  const pageInfo = buildPageInfo(selectedFixture, fixtureTypes, programmer);
   const info = pageInfo[activeTab] ?? pageInfo.dimmer;
   const totalPages = Math.max(1, Math.ceil(info.encoders.length / ENCODERS_PER_PAGE));
   const currentPage = Math.min(pageByTab[activeTab] ?? 0, totalPages - 1);
@@ -181,33 +257,43 @@ export function ControlPanel() {
   const visibleEncoders = info.encoders.slice(pageStart, pageStart + ENCODERS_PER_PAGE);
   const canPaginate = totalPages > 1;
 
-  async function refreshShowData(preferredFixtureId = selectedFixtureId) {
+  useEffect(() => {
+    selectedFixtureIdRef.current = selectedFixtureId;
+  }, [selectedFixtureId]);
+
+  async function refreshRuntimeData() {
     try {
-      const [document, types] = await Promise.all([
+      const [document, types, currentSelection, currentProgrammer] = await Promise.all([
         invoke<PatchDocument | null>("patch_load_current_show"),
         invoke<FixtureTypeEntry[]>("fixture_type_scan_current_show"),
+        invoke<FixtureSelection>("fixture_selection_get"),
+        invoke<Programmer>("programmer_get"),
       ]);
       const nextFixtures = document?.fixtures ?? [];
       setFixtures(nextFixtures);
       setFixtureTypes(types);
-      setSelectedFixtureId((current) => {
-        const preferred = preferredFixtureId || current;
-        if (nextFixtures.some((fixture) => fixture.id === preferred)) return preferred;
-        return nextFixtures[0]?.id ?? "";
-      });
+      setSelection(currentSelection);
+      setProgrammer(currentProgrammer);
+      const nextSelectedId = resolveSelectedFixtureId(currentSelection, nextFixtures);
+      selectedFixtureIdRef.current = nextSelectedId;
+      setSelectedFixtureId(nextSelectedId);
     } catch {
       setFixtures([]);
       setFixtureTypes([]);
+      selectedFixtureIdRef.current = "";
       setSelectedFixtureId("");
-    }
-  }
-
-  async function refreshSelection() {
-    try {
-      const selection = await invoke<FixtureSelection>("fixture_selection_get");
-      setSelectedFixtureId(selection.primaryFixtureId ?? "");
-    } catch {
-      setSelectedFixtureId("");
+      setSelection({
+        fixtureIds: [],
+        primaryFixtureId: null,
+        version: 0,
+      });
+      setProgrammer({
+        live: { selectedPartId: 0, parts: [] },
+        preview: { selectedPartId: 0, parts: [] },
+        mode: "live",
+        blind: false,
+        version: 0,
+      });
     }
   }
 
@@ -218,6 +304,31 @@ export function ControlPanel() {
       ...prev,
       [activeTab]: ((prev[activeTab] ?? 0) + 1) % totalPages,
     }));
+  }
+
+  function handleEncoderRotation(encoder: EncoderParam, rotation: number) {
+    if (!selectedFixtureIdRef.current || !encoder.attribute || !encoder.featureGroup || !encoder.layer) return;
+    const value = deriveProgrammerValue(encoder.attribute, rotation);
+    void invoke<Programmer>("programmer_set_attribute_for_selection", {
+      request: {
+        attribute: encoder.attribute,
+        featureGroup: encoder.featureGroup,
+        layer: encoder.layer,
+        value,
+        source: "manual",
+      } satisfies ProgrammerSetAttributeRequest,
+      }).catch((error) => {
+      console.error("Failed to update programmer", error);
+    });
+  }
+
+  function handleCommandButton(label: string) {
+    if (label !== "Clear") return;
+    void invoke("programmer_clear", { target: "contextual" })
+      .then(() => refreshRuntimeData())
+      .catch((error) => {
+        console.error("Failed to clear programmer", error);
+      });
   }
 
   return (
@@ -288,6 +399,7 @@ export function ControlPanel() {
                 key={`${info.name}-${enc.name}-${currentPage}-${i}`}
                 paramName={enc.name}
                 value={enc.value}
+                onRotationChange={(rotation) => handleEncoderRotation(enc, rotation)}
               />
             ))}
           </div>
@@ -301,9 +413,7 @@ export function ControlPanel() {
             flexShrink: 0,
           }}
         >
-          <CommandButtonPanel
-            onButtonPress={(label) => console.log("Button pressed:", label)}
-          />
+          <CommandButtonPanel onButtonPress={handleCommandButton} />
         </div>
       </div>
     </div>
@@ -313,6 +423,7 @@ export function ControlPanel() {
 function buildPageInfo(
   fixture: PatchFixture | undefined,
   fixtureTypes: FixtureTypeEntry[],
+  programmer: Programmer,
 ): Record<string, EncoderGroup> {
   const groups = cloneFallbackPageInfo();
   if (!fixture) return groups;
@@ -331,7 +442,7 @@ function buildPageInfo(
   const mode = fixtureType?.modes.find((item) => item.id === fixture.modeId);
   if (!mode) return groups;
 
-  const dynamicGroups = groupAttributes(mode.attributes);
+  const dynamicGroups = groupAttributes(mode.attributes, fixture, programmer);
   for (const [id, encoders] of Object.entries(dynamicGroups)) {
     if (encoders.length === 0) continue;
     groups[id] = {
@@ -343,7 +454,7 @@ function buildPageInfo(
   return groups;
 }
 
-function groupAttributes(attributes: string[]) {
+function groupAttributes(attributes: string[], fixture: PatchFixture, programmer: Programmer) {
   const groups: Record<string, EncoderParam[]> = {
     dimmer: [],
     position: [],
@@ -357,7 +468,10 @@ function groupAttributes(attributes: string[]) {
     const group = inferAttributeTab(attribute);
     groups[group].push({
       name: formatAttributeName(attribute),
-      value: defaultAttributeValue(attribute),
+      attribute,
+      featureGroup: titleCase(group),
+      layer: "absolute",
+      value: resolveProgrammerValue(programmer, fixture.id, attribute) ?? defaultAttributeValue(attribute),
     });
   }
 
@@ -391,16 +505,71 @@ function formatAttributeName(attribute: string) {
     .replace(/\b(\w)/g, (match) => match.toUpperCase());
 }
 
+function resolveProgrammerValue(programmer: Programmer, fixtureId: string, attribute: string) {
+  const buffer = programmer.mode === "preview" ? programmer.preview : programmer.live;
+  const values = buffer.parts.flatMap((part) => part.values);
+  const match = values.find(
+    (value) => value.fixtureId === fixtureId && value.attribute === attribute && value.active,
+  );
+  if (!match) return null;
+  return formatProgrammerScalar(match.value, attribute);
+}
+
+function formatProgrammerScalar(value: ProgrammerScalar, attribute: string) {
+  if (value.text && value.text.trim()) return value.text;
+  if (typeof value.numeric === "number" && Number.isFinite(value.numeric)) {
+    const lower = attribute.toLowerCase();
+    if (lower.includes("pan") || lower.includes("tilt") || lower.includes("rotate") || lower.includes("rot")) {
+      return `${value.numeric.toFixed(1)}°`;
+    }
+    if (lower.includes("gobo")) {
+      return value.numeric.toFixed(0);
+    }
+    return `${value.numeric.toFixed(0)}%`;
+  }
+  return "--";
+}
+
 function cloneFallbackPageInfo() {
   return Object.fromEntries(
     Object.entries(FALLBACK_PAGE_INFO).map(([key, group]) => [
       key,
       {
         name: group.name,
-        encoders: group.encoders.map((encoder) => ({ ...encoder })),
+        encoders: group.encoders.map((encoder) => ({
+          ...encoder,
+          attribute: "",
+          featureGroup: group.name,
+          layer: "absolute" as ProgrammerLayer,
+        })),
       },
     ]),
   ) as Record<string, EncoderGroup>;
+}
+
+function resolveSelectedFixtureId(selection: FixtureSelection, fixtures: PatchFixture[]) {
+  const preferred = selection.primaryFixtureId ?? selection.fixtureIds[0] ?? "";
+  if (preferred && fixtures.some((fixture) => fixture.id === preferred)) {
+    return preferred;
+  }
+  return "";
+}
+
+function deriveProgrammerValue(attribute: string, rotation: number): ProgrammerScalar {
+  const lower = attribute.toLowerCase();
+  if (lower.includes("pan") || lower.includes("tilt") || lower.includes("rotate") || lower.includes("rot")) {
+    const value = rotation - 180;
+    return {
+      numeric: value,
+      text: `${value.toFixed(1)}°`,
+    };
+  }
+
+  const percent = Math.max(0, Math.min(100, Math.round((rotation / 360) * 100)));
+  return {
+    numeric: percent,
+    text: `${percent}%`,
+  };
 }
 
 function formatPatch(fixture: PatchFixture) {

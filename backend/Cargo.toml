@@ -16,6 +16,7 @@ members = [
     "crates/limxdesk-fixture-types",
     "crates/limxdesk-gdtf",
     "crates/limxdesk-patch",
+    "crates/limxdesk-programmer",
     "crates/limxdesk-platform",
     "crates/limxdesk-showfile",
 ]
@@ -47,6 +48,7 @@ limxdesk-showfile = { path = "crates/limxdesk-showfile" }
 limxdesk-fixture-selection = { path = "crates/limxdesk-fixture-selection" }
 limxdesk-fixture-types = { path = "crates/limxdesk-fixture-types" }
 limxdesk-patch = { path = "crates/limxdesk-patch" }
+limxdesk-programmer = { path = "crates/limxdesk-programmer" }
 
 # ── 1. Tauri 框架与插件 ───────────────────────────────────
 tauri = { version = "2", features = ["tray-icon"] }

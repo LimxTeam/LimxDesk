@@ -95,11 +95,7 @@ export function FixtureSheetWindow() {
       const document = await invoke<PatchDocument | null>("patch_load_current_show");
       const nextFixtures = document?.fixtures ?? [];
       setFixtures(nextFixtures);
-      setSelectedId((current) =>
-        nextFixtures.some((fixture) => fixture.id === current)
-          ? current
-          : nextFixtures[0]?.id ?? "",
-      );
+      setSelectedId((current) => (nextFixtures.some((fixture) => fixture.id === current) ? current : ""));
       setStatus(`${nextFixtures.length} fixture${nextFixtures.length === 1 ? "" : "s"}`);
     } catch {
       setFixtures([]);

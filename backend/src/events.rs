@@ -10,6 +10,7 @@ pub const FIXTURE_TYPES_CHANGED: &str = "fixture-types:changed";
 pub const PATCH_CHANGED: &str = "patch:changed";
 pub const LAYOUT_CHANGED: &str = "layout:changed";
 pub const FIXTURE_SELECTION_CHANGED: &str = "fixture-selection:changed";
+pub const PROGRAMMER_CHANGED: &str = "programmer:changed";
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -60,6 +61,13 @@ where
     T: Serialize + Clone,
 {
     let _ = app.emit(FIXTURE_SELECTION_CHANGED, selection.clone());
+}
+
+pub fn emit_programmer_changed<T>(app: &AppHandle, programmer: &T)
+where
+    T: Serialize + Clone,
+{
+    let _ = app.emit(PROGRAMMER_CHANGED, programmer.clone());
 }
 
 fn emit_show(app: &AppHandle, event: &str, show: &LoadedShow) {

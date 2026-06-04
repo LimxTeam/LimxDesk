@@ -10,6 +10,7 @@ dependencies = [
  "limxdesk-fixture-types",
  "limxdesk-patch",
  "limxdesk-platform",
+ "limxdesk-programmer",
  "limxdesk-showfile",
  "serde",
  "serde_json",
@@ -1855,6 +1856,14 @@ dependencies = [
 name = "limxdesk-platform"
 version = "0.1.0"
 dependencies = [
+ "serde",
+]
+
+[[package]]
+name = "limxdesk-programmer"
+version = "0.1.0"
+dependencies = [
+ "limxdesk-fixture-selection",
  "serde",
 ]
 
