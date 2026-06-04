@@ -3,6 +3,7 @@ export { LeftSidebar } from "./LeftSidebar";
 export { RightSidebar } from "./RightSidebar";
 export { CommandBar } from "./CommandBar";
 export { ControlPanel } from "./ControlPanel";
+export { WorkspaceCanvas } from "./workspace/WorkspaceCanvas";
 
 /* ── 组件化子组件（可独立导入复用） ── */
 export { AttributeTabBar } from "./components/AttributeTabBar";

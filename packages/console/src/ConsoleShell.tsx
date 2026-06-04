@@ -8,6 +8,7 @@ import { LeftSidebar } from "./LeftSidebar";
 import { RightSidebar } from "./RightSidebar";
 import { CommandBar } from "./CommandBar";
 import { ControlPanel } from "./ControlPanel";
+import { WorkspaceCanvas } from "./workspace/WorkspaceCanvas";
 
 /** 侧边栏宽度过渡 */
 const SLIDE = "width 0.22s cubic-bezier(0.32, 0.72, 0, 1)";
@@ -38,7 +39,7 @@ export function ConsoleShell({ children }: { children?: React.ReactNode }) {
 
         {/* 画布 */}
         <div style={{ flex: 1, background: "var(--lx-bg-void)", overflow: "hidden", minWidth: 0 }}>
-          {children}
+          {children ?? <WorkspaceCanvas />}
         </div>
 
         {/* 右栏 — 宽度动画缩到 0 */}
