@@ -27,6 +27,7 @@
 // │ titlebar_is_maximized             │ titlebar                │
 // ============================================================
 
+mod show;
 mod titlebar;
 mod tray;
 mod window;
@@ -37,6 +38,7 @@ pub fn run() {
     init_tracing();
 
     tauri::Builder::default()
+        .manage(show::ShowRuntimeState::default())
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
@@ -52,6 +54,14 @@ pub fn run() {
             titlebar::titlebar_maximize,
             titlebar::titlebar_close,
             titlebar::titlebar_is_maximized,
+            show::show_library_root,
+            show::show_scan_library,
+            show::show_create,
+            show::show_load,
+            show::show_save,
+            show::show_save_as,
+            show::show_delete,
+            show::show_current,
         ])
         .run(tauri::generate_context!())
         .expect("启动 Tauri 应用失败");

@@ -1,0 +1,13 @@
+[package]
+name = "limxdesk-showfile"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+aes-gcm = "0.10"
+limxdesk-platform = { path = "../limxdesk-platform" }
+rand = "0.8"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+uuid = { version = "1", features = ["v4", "serde"] }

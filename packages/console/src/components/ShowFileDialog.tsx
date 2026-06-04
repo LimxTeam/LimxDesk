@@ -1,26 +1,42 @@
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import {
   Clock3,
   Copy,
-  FileDown,
   FilePlus2,
   FolderOpen,
   HardDrive,
   Play,
+  RefreshCw,
   Save,
   Search,
   Trash2,
 } from "lucide-react";
 import { FloatingDialog } from "@limxdesk/ui";
 
-interface ShowFile {
+interface ShowFileEntry {
   id: string;
   name: string;
   path: string;
-  modified: string;
-  version: string;
-  locked?: boolean;
+  createdAtMs: number;
+  modifiedAtMs: number;
+  sizeBytes: number;
+  formatVersion: number;
+  appVersion: string;
+}
+
+interface LoadedShow {
+  manifest: {
+    id: string;
+    name: string;
+    formatVersion: number;
+    createdAtMs: number;
+    modifiedAtMs: number;
+    appVersion: string;
+  };
+  path: string;
+  sizeBytes: number;
 }
 
 export interface ShowFileDialogProps {
@@ -28,124 +44,142 @@ export interface ShowFileDialogProps {
   onClose: () => void;
 }
 
-const INITIAL_SHOWS: ShowFile[] = [
-  {
-    id: "show-1",
-    name: "NewShow_2026_06_04",
-    path: "C:/Shows/NewShow_2026_06_04.lxshow",
-    modified: "Today 23:18",
-    version: "0.1",
-  },
-  {
-    id: "show-2",
-    name: "Festival_Main_Rig",
-    path: "D:/ShowData/Festival_Main_Rig.lxshow",
-    modified: "Yesterday 19:42",
-    version: "0.1",
-  },
-  {
-    id: "show-3",
-    name: "House_Template",
-    path: "C:/Shows/Templates/House_Template.lxshow",
-    modified: "2026-05-30",
-    version: "0.1",
-    locked: true,
-  },
-];
-
 const OPERATIONS = [
   { id: "new", label: "新建", icon: FilePlus2, tone: "primary" },
   { id: "open", label: "打开", icon: FolderOpen, tone: "default" },
   { id: "load", label: "加载", icon: Play, tone: "action" },
   { id: "save", label: "保存", icon: Save, tone: "default" },
   { id: "saveAs", label: "另存为", icon: Copy, tone: "default" },
-  { id: "export", label: "导出", icon: FileDown, tone: "default" },
   { id: "delete", label: "删除", icon: Trash2, tone: "danger" },
 ] as const;
 
 type OperationId = (typeof OPERATIONS)[number]["id"];
 
 export function ShowFileDialog({ open, onClose }: ShowFileDialogProps) {
-  const [shows, setShows] = useState(INITIAL_SHOWS);
-  const [selectedId, setSelectedId] = useState(INITIAL_SHOWS[0]?.id ?? "");
+  const [shows, setShows] = useState<ShowFileEntry[]>([]);
+  const [selectedPath, setSelectedPath] = useState("");
+  const [currentShow, setCurrentShow] = useState<LoadedShow | null>(null);
   const [query, setQuery] = useState("");
   const [operation, setOperation] = useState<OperationId>("load");
-  const [draftName, setDraftName] = useState("Untitled_Show");
-  const [targetPath, setTargetPath] = useState("C:/Shows");
+  const [draftName, setDraftName] = useState(defaultShowName());
+  const [libraryRoot, setLibraryRoot] = useState("C:/ProgramData/LimxDesk/Library/Show");
   const [activity, setActivity] = useState("Ready");
+  const [busy, setBusy] = useState(false);
 
-  const selectedShow = shows.find((show) => show.id === selectedId) ?? shows[0];
-  const visibleShows = shows.filter((show) =>
-    `${show.name} ${show.path}`.toLowerCase().includes(query.trim().toLowerCase()),
-  );
+  const selectedShow = shows.find((show) => show.path === selectedPath) ?? shows[0] ?? null;
+  const filteredShows = useMemo(() => {
+    const normalizedQuery = query.trim().toLowerCase();
+    if (!normalizedQuery) return shows;
+    return shows.filter((show) =>
+      `${show.name} ${show.path} ${show.id}`.toLowerCase().includes(normalizedQuery),
+    );
+  }, [query, shows]);
 
-  const executeOperation = () => {
-    switch (operation) {
-      case "new": {
-        const show: ShowFile = {
-          id: `show-${Date.now()}`,
-          name: draftName.trim() || "Untitled_Show",
-          path: `${targetPath.replace(/\/$/, "")}/${draftName.trim() || "Untitled_Show"}.lxshow`,
-          modified: "Now",
-          version: "0.1",
-        };
-        setShows((current) => [show, ...current]);
-        setSelectedId(show.id);
-        setActivity(`Created ${show.name}`);
-        break;
+  useEffect(() => {
+    if (!open) return;
+    void refreshShows();
+    void refreshCurrentShow();
+  }, [open]);
+
+  const refreshShows = async (preferredPath?: string) => {
+    setBusy(true);
+    try {
+      const [root, entries] = await Promise.all([
+        invoke<string>("show_library_root"),
+        invoke<ShowFileEntry[]>("show_scan_library"),
+      ]);
+      setLibraryRoot(root);
+      setShows(entries);
+
+      const nextSelected =
+        preferredPath && entries.some((show) => show.path === preferredPath)
+          ? preferredPath
+          : selectedPath && entries.some((show) => show.path === selectedPath)
+            ? selectedPath
+            : entries[0]?.path ?? "";
+      setSelectedPath(nextSelected);
+      setActivity(`Scanned ${entries.length} show file${entries.length === 1 ? "" : "s"}`);
+    } catch (error) {
+      setActivity(errorToMessage(error));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const refreshCurrentShow = async () => {
+    try {
+      setCurrentShow(await invoke<LoadedShow | null>("show_current"));
+    } catch {
+      setCurrentShow(null);
+    }
+  };
+
+  const executeOperation = async () => {
+    setBusy(true);
+    try {
+      switch (operation) {
+        case "new": {
+          const loaded = await invoke<LoadedShow>("show_create", { name: draftName });
+          setCurrentShow(loaded);
+          setDraftName(defaultShowName());
+          await refreshShows(loaded.path);
+          setActivity(`Created and loaded ${loaded.manifest.name}`);
+          break;
+        }
+        case "open":
+        case "load": {
+          if (!selectedShow) {
+            setActivity("No show selected");
+            break;
+          }
+          const loaded = await invoke<LoadedShow>("show_load", { path: selectedShow.path });
+          setCurrentShow(loaded);
+          setActivity(`${operation === "open" ? "Opened" : "Loaded"} ${loaded.manifest.name}`);
+          break;
+        }
+        case "save": {
+          if (!selectedShow) {
+            setActivity("No show selected");
+            break;
+          }
+          const loaded = await invoke<LoadedShow>("show_save", { path: selectedShow.path });
+          setCurrentShow(loaded);
+          await refreshShows(loaded.path);
+          setActivity(`Saved ${loaded.manifest.name}`);
+          break;
+        }
+        case "saveAs": {
+          if (!selectedShow) {
+            setActivity("No show selected");
+            break;
+          }
+          const saveAsName = draftName.trim() || `${selectedShow.name}_Copy`;
+          const loaded = await invoke<LoadedShow>("show_save_as", {
+            sourcePath: selectedShow.path,
+            name: saveAsName,
+          });
+          setCurrentShow(loaded);
+          setDraftName(defaultShowName());
+          await refreshShows(loaded.path);
+          setActivity(`Saved as ${loaded.manifest.name}`);
+          break;
+        }
+        case "delete": {
+          if (!selectedShow) {
+            setActivity("No show selected");
+            break;
+          }
+          await invoke<void>("show_delete", { path: selectedShow.path });
+          setCurrentShow((current) => (current?.path === selectedShow.path ? null : current));
+          await refreshShows();
+          setActivity(`Deleted ${selectedShow.name}`);
+          break;
+        }
       }
-      case "open":
-        setActivity(selectedShow ? `Opened ${selectedShow.name}` : "No show selected");
-        break;
-      case "load":
-        setActivity(selectedShow ? `Loaded ${selectedShow.name} into desk` : "No show selected");
-        break;
-      case "save":
-        setShows((current) =>
-          current.map((show) =>
-            show.id === selectedShow?.id ? { ...show, modified: "Now" } : show,
-          ),
-        );
-        setActivity(selectedShow ? `Saved ${selectedShow.name}` : "No show selected");
-        break;
-      case "saveAs": {
-        if (!selectedShow) {
-          setActivity("No show selected");
-          break;
-        }
-
-        const show: ShowFile = {
-          ...selectedShow,
-          id: `show-${Date.now()}`,
-          name: `${selectedShow.name}_Copy`,
-          path: `${targetPath.replace(/\/$/, "")}/${selectedShow.name}_Copy.lxshow`,
-          modified: "Now",
-          locked: false,
-        };
-        setShows((current) => [show, ...current]);
-        setSelectedId(show.id);
-        setActivity(`Saved as ${show.name}`);
-        break;
-      }
-      case "export":
-        setActivity(selectedShow ? `Export prepared for ${selectedShow.name}` : "No show selected");
-        break;
-      case "delete":
-        if (!selectedShow) {
-          setActivity("No show selected");
-          break;
-        }
-        if (selectedShow.locked) {
-          setActivity(`${selectedShow.name} is locked`);
-          break;
-        }
-        setShows((current) => {
-          const next = current.filter((show) => show.id !== selectedShow.id);
-          setSelectedId(next[0]?.id ?? "");
-          return next;
-        });
-        setActivity(`Deleted ${selectedShow.name}`);
-        break;
+    } catch (error) {
+      setActivity(errorToMessage(error));
+    } finally {
+      setBusy(false);
     }
   };
 
@@ -154,15 +188,15 @@ export function ShowFileDialog({ open, onClose }: ShowFileDialogProps) {
       open={open}
       title="秀文件"
       subtitle="Show file operations"
-      width={900}
-      height={560}
+      width={940}
+      height={580}
       onClose={onClose}
     >
       <div
         style={{
           display: "grid",
           height: "100%",
-          gridTemplateColumns: "180px minmax(0, 1fr) 280px",
+          gridTemplateColumns: "170px minmax(0, 1fr) 300px",
           background: "var(--lx-bg-abyss)",
         }}
       >
@@ -185,6 +219,7 @@ export function ShowFileDialog({ open, onClose }: ShowFileDialogProps) {
                 key={item.id}
                 type="button"
                 onClick={() => setOperation(item.id)}
+                disabled={busy}
                 style={{
                   display: "grid",
                   gridTemplateColumns: "22px minmax(0, 1fr)",
@@ -197,6 +232,7 @@ export function ShowFileDialog({ open, onClose }: ShowFileDialogProps) {
                   color: active ? "var(--lx-primary-bright)" : getOperationColor(item.tone),
                   padding: "0 8px",
                   textAlign: "left",
+                  opacity: busy ? 0.7 : 1,
                 }}
               >
                 <Icon size={14} />
@@ -206,6 +242,18 @@ export function ShowFileDialog({ open, onClose }: ShowFileDialogProps) {
               </button>
             );
           })}
+
+          <div className="lx-divider-h" />
+          <button
+            type="button"
+            className="lx-btn lx-btn-ghost lx-btn-sm"
+            onClick={() => void refreshShows()}
+            disabled={busy}
+            style={{ justifyContent: "flex-start" }}
+          >
+            <RefreshCw size={12} />
+            刷新
+          </button>
         </aside>
 
         <main
@@ -230,59 +278,65 @@ export function ShowFileDialog({ open, onClose }: ShowFileDialogProps) {
             <input
               value={query}
               onChange={(event) => setQuery(event.currentTarget.value)}
-              placeholder="搜索秀文件..."
+              placeholder="搜索秀文件、路径、GUID..."
               className="lx-input lx-input-sm"
               style={{ flex: 1 }}
             />
           </div>
 
           <div style={{ overflow: "auto" }}>
-            {visibleShows.map((show) => (
-              <button
-                key={show.id}
-                type="button"
-                onClick={() => setSelectedId(show.id)}
-                style={{
-                  display: "grid",
-                  width: "100%",
-                  gridTemplateColumns: "minmax(0, 1fr) 92px",
-                  gap: 12,
-                  minHeight: 54,
-                  alignItems: "center",
-                  border: "none",
-                  borderBottom: "1px solid var(--lx-stroke)",
-                  background: selectedId === show.id ? "rgba(0,120,212,0.16)" : "transparent",
-                  color: "var(--lx-fg-secondary)",
-                  padding: "8px 12px",
-                  textAlign: "left",
-                }}
-              >
-                <span style={{ display: "grid", gap: 4, minWidth: 0 }}>
-                  <span style={{ color: "var(--lx-fg-primary)", fontWeight: 800 }}>
-                    {show.name}
+            {filteredShows.length === 0 ? (
+              <EmptyState
+                title="没有秀文件"
+                description={`扫描目录：${libraryRoot}`}
+              />
+            ) : (
+              filteredShows.map((show) => (
+                <button
+                  key={show.path}
+                  type="button"
+                  onClick={() => setSelectedPath(show.path)}
+                  style={{
+                    display: "grid",
+                    width: "100%",
+                    gridTemplateColumns: "minmax(0, 1fr) 108px",
+                    gap: 12,
+                    minHeight: 58,
+                    alignItems: "center",
+                    border: "none",
+                    borderBottom: "1px solid var(--lx-stroke)",
+                    background: selectedShow?.path === show.path ? "rgba(0,120,212,0.16)" : "transparent",
+                    color: "var(--lx-fg-secondary)",
+                    padding: "8px 12px",
+                    textAlign: "left",
+                  }}
+                >
+                  <span style={{ display: "grid", gap: 4, minWidth: 0 }}>
+                    <span style={{ color: "var(--lx-fg-primary)", fontWeight: 800 }}>
+                      {show.name}
+                    </span>
+                    <span
+                      className="lx-code"
+                      style={{
+                        overflow: "hidden",
+                        color: "var(--lx-fg-tertiary)",
+                        textOverflow: "ellipsis",
+                        whiteSpace: "nowrap",
+                      }}
+                      title={show.path}
+                    >
+                      {show.path}
+                    </span>
                   </span>
-                  <span
-                    className="lx-code"
-                    style={{
-                      overflow: "hidden",
-                      color: "var(--lx-fg-tertiary)",
-                      textOverflow: "ellipsis",
-                      whiteSpace: "nowrap",
-                    }}
-                  >
-                    {show.path}
+                  <span style={{ display: "grid", justifyItems: "end", gap: 4 }}>
+                    <span className="lx-badge lx-badge-info">v{show.formatVersion}</span>
+                    <span className="lx-code" style={{ color: "var(--lx-fg-tertiary)", fontSize: 10 }}>
+                      {formatDate(show.modifiedAtMs)}
+                    </span>
                   </span>
-                </span>
-                <span style={{ display: "grid", justifyItems: "end", gap: 4 }}>
-                  <span className={`lx-badge ${show.locked ? "lx-badge-default" : "lx-badge-info"}`}>
-                    {show.locked ? "Locked" : `v${show.version}`}
-                  </span>
-                  <span className="lx-code" style={{ color: "var(--lx-fg-tertiary)", fontSize: 10 }}>
-                    {show.modified}
-                  </span>
-                </span>
-              </button>
-            ))}
+                </button>
+              ))
+            )}
           </div>
 
           <div
@@ -298,44 +352,46 @@ export function ShowFileDialog({ open, onClose }: ShowFileDialogProps) {
             }}
           >
             <Clock3 size={12} />
-            {activity}
+            {busy ? "Working..." : activity}
           </div>
         </main>
 
         <aside style={{ display: "grid", gridTemplateRows: "minmax(0, 1fr) auto", minHeight: 0 }}>
           <div style={{ display: "grid", alignContent: "start", gap: 10, overflow: "auto", padding: 12 }}>
-            <PanelTitle title="目标" />
+            <PanelTitle title="操作目标" />
             <Field label="名称">
               <input
                 className="lx-input lx-input-sm"
-                value={operation === "new" ? draftName : selectedShow?.name ?? ""}
+                value={operation === "new" || operation === "saveAs" ? draftName : selectedShow?.name ?? ""}
                 onChange={(event) => setDraftName(event.currentTarget.value)}
-                readOnly={operation !== "new"}
+                readOnly={operation !== "new" && operation !== "saveAs"}
+                placeholder="Show_Name"
               />
             </Field>
-            <Field label="目录">
-              <input
-                className="lx-input lx-input-sm"
-                value={targetPath}
-                onChange={(event) => setTargetPath(event.currentTarget.value)}
-              />
-            </Field>
+            <InfoRow label="目录" value={libraryRoot} />
+            <InfoRow label="后缀" value=".limxdsek" />
 
             <div className="lx-divider-h" />
-            <PanelTitle title="当前秀文件" />
+            <PanelTitle title="当前选择" />
             <InfoRow label="Show" value={selectedShow?.name ?? "-"} />
+            <InfoRow label="GUID" value={selectedShow?.id ?? "-"} />
             <InfoRow label="Path" value={selectedShow?.path ?? "-"} />
-            <InfoRow label="Modified" value={selectedShow?.modified ?? "-"} />
-            <InfoRow label="Version" value={selectedShow ? `v${selectedShow.version}` : "-"} />
-            <InfoRow label="Lock" value={selectedShow?.locked ? "Locked" : "Editable"} />
+            <InfoRow label="Modified" value={selectedShow ? formatDate(selectedShow.modifiedAtMs) : "-"} />
+            <InfoRow label="Size" value={selectedShow ? formatBytes(selectedShow.sizeBytes) : "-"} />
+
+            <div className="lx-divider-h" />
+            <PanelTitle title="已加载" />
+            <InfoRow label="Show" value={currentShow?.manifest.name ?? "-"} />
+            <InfoRow label="GUID" value={currentShow?.manifest.id ?? "-"} />
+            <InfoRow label="Path" value={currentShow?.path ?? "-"} />
 
             <div className="lx-panel-compact" style={{ display: "grid", gap: 7 }}>
               <div style={{ display: "flex", gap: 7, color: "var(--lx-fg-secondary)" }}>
                 <HardDrive size={13} />
-                <span style={{ fontWeight: 700 }}>ShowData</span>
+                <span style={{ fontWeight: 700 }}>Show Library</span>
               </div>
               <span className="lx-code" style={{ color: "var(--lx-fg-tertiary)" }}>
-                {shows.length} files indexed
+                {shows.length} encrypted file{shows.length === 1 ? "" : "s"} indexed
               </span>
             </div>
           </div>
@@ -353,7 +409,7 @@ export function ShowFileDialog({ open, onClose }: ShowFileDialogProps) {
             <button type="button" className="lx-btn lx-btn-ghost" onClick={onClose}>
               关闭
             </button>
-            <button type="button" className="lx-btn lx-btn-primary" onClick={executeOperation}>
+            <button type="button" className="lx-btn lx-btn-primary" onClick={() => void executeOperation()} disabled={busy}>
               执行
             </button>
           </div>
@@ -386,7 +442,7 @@ function InfoRow({ label, value }: { label: string; value: string }) {
     <div
       style={{
         display: "grid",
-        gridTemplateColumns: "70px minmax(0, 1fr)",
+        gridTemplateColumns: "54px minmax(0, 1fr)",
         gap: 8,
         color: "var(--lx-fg-tertiary)",
         fontSize: 11,
@@ -405,6 +461,28 @@ function InfoRow({ label, value }: { label: string; value: string }) {
       >
         {value}
       </span>
+    </div>
+  );
+}
+
+function EmptyState({ title, description }: { title: string; description: string }) {
+  return (
+    <div
+      style={{
+        display: "grid",
+        placeItems: "center",
+        height: "100%",
+        minHeight: 240,
+        color: "var(--lx-fg-tertiary)",
+        textAlign: "center",
+      }}
+    >
+      <div style={{ display: "grid", gap: 8 }}>
+        <strong style={{ color: "var(--lx-fg-secondary)" }}>{title}</strong>
+        <span className="lx-code" style={{ maxWidth: 420 }}>
+          {description}
+        </span>
+      </div>
     </div>
   );
 }
@@ -429,4 +507,34 @@ function getOperationColor(tone: string) {
   if (tone === "action") return "var(--lx-action-bright)";
   if (tone === "primary") return "var(--lx-primary-bright)";
   return "var(--lx-fg-secondary)";
+}
+
+function defaultShowName() {
+  const date = new Date();
+  const yyyy = date.getFullYear();
+  const mm = String(date.getMonth() + 1).padStart(2, "0");
+  const dd = String(date.getDate()).padStart(2, "0");
+  const hh = String(date.getHours()).padStart(2, "0");
+  const min = String(date.getMinutes()).padStart(2, "0");
+  return `NewShow_${yyyy}_${mm}_${dd}_${hh}_${min}`;
+}
+
+function formatDate(value: number) {
+  return new Intl.DateTimeFormat("zh-CN", {
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(new Date(value));
+}
+
+function formatBytes(value: number) {
+  if (value < 1024) return `${value} B`;
+  if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`;
+  return `${(value / 1024 / 1024).toFixed(1)} MB`;
+}
+
+function errorToMessage(error: unknown) {
+  if (error instanceof Error) return error.message;
+  return String(error);
 }

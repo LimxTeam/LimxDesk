@@ -10,7 +10,11 @@
 # ============================================================
 
 [workspace]
-members = ["."]
+members = [
+    ".",
+    "crates/limxdesk-platform",
+    "crates/limxdesk-showfile",
+]
 resolver = "2"
 
 [package]
@@ -33,6 +37,10 @@ path = "src/main.rs"
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
+# ── 0. LimxDesk 核心模块 ──────────────────────────────────
+limxdesk-platform = { path = "crates/limxdesk-platform" }
+limxdesk-showfile = { path = "crates/limxdesk-showfile" }
+
 # ── 1. Tauri 框架与插件 ───────────────────────────────────
 tauri = { version = "2", features = ["tray-icon"] }
 tauri-plugin-shell = "2"
