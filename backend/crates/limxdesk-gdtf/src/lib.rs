@@ -245,20 +245,35 @@ fn parse_modes(fixture: Node<'_, '_>) -> Vec<GdtfModeSummary> {
                     max_channel = max_channel.max(offset);
                 }
 
+                if let Some(attribute) =
+                    attribute_from_initial_function(dmx_channel.attribute("InitialFunction"))
+                {
+                    attributes.insert(attribute);
+                }
+
                 for logical_channel in dmx_channel
                     .children()
                     .filter(|node| node.has_tag_name("LogicalChannel"))
                 {
-                    if let Some(attribute) = logical_channel.attribute("Attribute") {
-                        attributes.insert(attribute.to_string());
+                    if let Some(attribute) =
+                        normalize_attribute_link(logical_channel.attribute("Attribute"))
+                    {
+                        attributes.insert(attribute);
                     }
 
                     for function in logical_channel
                         .children()
                         .filter(|node| node.has_tag_name("ChannelFunction"))
                     {
-                        if let Some(attribute) = function.attribute("Attribute") {
-                            attributes.insert(attribute.to_string());
+                        if let Some(attribute) =
+                            normalize_attribute_link(function.attribute("Attribute"))
+                        {
+                            attributes.insert(attribute);
+                        }
+                        if let Some(attribute) =
+                            normalize_attribute_link(function.attribute("OriginalAttribute"))
+                        {
+                            attributes.insert(attribute);
                         }
                     }
                 }
@@ -299,8 +314,8 @@ fn summarize_attributes(
             .children()
             .filter(|node| node.has_tag_name("Attribute"))
         {
-            let name = attribute.attribute("Name").unwrap_or_default();
-            let feature = attribute.attribute("Feature").unwrap_or(name);
+            let name = normalize_attribute_link(attribute.attribute("Name")).unwrap_or_default();
+            let feature = attribute.attribute("Feature").unwrap_or(&name);
             features_by_attribute.insert(name.to_string(), feature_group_name(feature));
         }
     }
@@ -507,6 +522,43 @@ fn parse_offsets(value: &str) -> Vec<u16> {
         .collect()
 }
 
+fn normalize_attribute_link(value: Option<&str>) -> Option<String> {
+    let value = value?.trim();
+    if value.is_empty()
+        || value.eq_ignore_ascii_case("NoFeature")
+        || value.eq_ignore_ascii_case("None")
+    {
+        return None;
+    }
+
+    let leaf = value
+        .split(['.', '/'])
+        .filter(|part| !part.trim().is_empty())
+        .last()
+        .unwrap_or(value)
+        .trim();
+    if leaf.is_empty()
+        || leaf.eq_ignore_ascii_case("NoFeature")
+        || leaf.eq_ignore_ascii_case("None")
+    {
+        None
+    } else {
+        Some(leaf.to_string())
+    }
+}
+
+fn attribute_from_initial_function(value: Option<&str>) -> Option<String> {
+    let value = value?.trim();
+    if value.is_empty() || value.eq_ignore_ascii_case("None") {
+        return None;
+    }
+
+    value
+        .split('.')
+        .rev()
+        .find_map(|part| normalize_attribute_link(Some(part)))
+}
+
 fn feature_group_name(feature: &str) -> String {
     feature.split('.').next().unwrap_or(feature).to_string()
 }
@@ -615,6 +667,44 @@ mod tests {
             .attribute_groups
             .iter()
             .any(|group| group.name == "Color"));
+    }
+
+    #[test]
+    fn normalizes_gdtf_attribute_node_links() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<GDTF DataVersion="1.2">
+  <FixtureType FixtureTypeID="111" Manufacturer="Test" Name="Moving">
+    <AttributeDefinitions>
+      <Attributes>
+        <Attribute Feature="Dimmer.Dimmer" Name="Dimmer"/>
+        <Attribute Feature="Color.RGB" Name="ColorAdd_R"/>
+      </Attributes>
+    </AttributeDefinitions>
+    <DMXModes>
+      <DMXMode Name="Default">
+        <DMXChannels>
+          <DMXChannel Offset="1" InitialFunction="Beam_Dimmer.Dimmer.Dimmer">
+            <LogicalChannel Attribute="Attributes.Dimmer">
+              <ChannelFunction Attribute="Attributes.Dimmer"/>
+            </LogicalChannel>
+          </DMXChannel>
+          <DMXChannel Offset="2" InitialFunction="Beam_ColorAdd_R.ColorAdd_R.ColorAdd_R">
+            <LogicalChannel Attribute="Attributes.ColorAdd_R">
+              <ChannelFunction Attribute="Attributes.ColorAdd_R"/>
+            </LogicalChannel>
+          </DMXChannel>
+        </DMXChannels>
+      </DMXMode>
+    </DMXModes>
+  </FixtureType>
+</GDTF>"#;
+
+        let summary = parse_description_xml(xml).unwrap();
+        assert_eq!(summary.modes[0].attributes, vec!["ColorAdd_R", "Dimmer"]);
+        assert!(summary
+            .attribute_groups
+            .iter()
+            .any(|group| group.name == "Dimmer"));
     }
 
     #[test]

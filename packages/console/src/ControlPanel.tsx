@@ -7,6 +7,7 @@ import { BigEncoderWheel } from "./components/BigEncoderWheel";
 import { ModeButtonBar } from "./components/ModeButtonBar";
 import { CommandButtonPanel } from "./components/CommandButtonPanel";
 import { EncoderInfoBar } from "./components/EncoderInfoBar";
+import type { AttributeTab } from "./components/AttributeTabBar";
 
 interface EncoderParam {
   name: string;
@@ -109,6 +110,7 @@ interface ProgrammerSelectionContext {
 type ProgrammerMode = "live" | "preview";
 type ProgrammerLayer = "absolute" | "relative" | "fade" | "delay";
 type ProgrammerValueSource = "manual" | "preset" | "output";
+type AttributeGroupId = "dimmer" | "position" | "gobo" | "color" | "beam" | "focus";
 interface ProgrammerSetAttributeRequest {
   attribute: string;
   featureGroup: string;
@@ -119,55 +121,16 @@ interface ProgrammerSetAttributeRequest {
 
 const ENCODERS_PER_PAGE = 4;
 
-const FALLBACK_PAGE_INFO: Record<string, EncoderGroup> = {
-  dimmer: {
-    name: "Dimmer",
-    encoders: [{ name: "Dim", value: "--" }],
-  },
-  position: {
-    name: "Position",
-    encoders: [
-      { name: "Pan", value: "--" },
-      { name: "Tilt", value: "--" },
-    ],
-  },
-  gobo: {
-    name: "Gobo",
-    encoders: [{ name: "Gobo", value: "--" }],
-  },
-  color: {
-    name: "Color",
-    encoders: [{ name: "Color", value: "--" }],
-  },
-  beam: {
-    name: "Beam",
-    encoders: [{ name: "Beam", value: "--" }],
-  },
-  focus: {
-    name: "Focus",
-    encoders: [{ name: "Focus", value: "--" }],
-  },
-  selection: {
-    name: "Selection",
-    encoders: [{ name: "Fixture", value: "No Selection" }],
-  },
-  phaser: {
-    name: "Phaser",
-    encoders: [{ name: "Phase", value: "0°" }],
-  },
-  matricks: {
-    name: "MAtricks",
-    encoders: [{ name: "MAT", value: "" }],
-  },
-  progtime: {
-    name: "ProgTime",
-    encoders: [{ name: "Time", value: "3s" }],
-  },
-  exectime: {
-    name: "ExecTime",
-    encoders: [{ name: "Time", value: "3s" }],
-  },
+const ATTRIBUTE_GROUP_LABELS: Record<AttributeGroupId, string> = {
+  dimmer: "Dimmer",
+  position: "Position",
+  gobo: "Gobo",
+  color: "Color",
+  beam: "Beam",
+  focus: "Focus",
 };
+
+const ATTRIBUTE_GROUP_ORDER: AttributeGroupId[] = ["dimmer", "position", "gobo", "color", "beam", "focus"];
 
 export function ControlPanel() {
   const [activeTab, setActiveTab] = useState("dimmer");
@@ -263,7 +226,11 @@ export function ControlPanel() {
     fixtures.find((fixture) => fixture.id === selection.primaryFixtureId) ??
     fixtures.find((fixture) => fixture.id === selectedFixtureId);
   const pageInfo = buildPageInfo(selectedFixture, fixtureTypes, programmer);
-  const info = pageInfo[activeTab] ?? pageInfo.dimmer;
+  const tabs = buildAttributeTabs(pageInfo);
+  const info = pageInfo[activeTab] ?? pageInfo[tabs[0]?.id] ?? {
+    name: "No Attribute",
+    encoders: [],
+  };
   const totalPages = Math.max(1, Math.ceil(info.encoders.length / ENCODERS_PER_PAGE));
   const currentPage = Math.min(pageByTab[activeTab] ?? 0, totalPages - 1);
   const pageLabel = `${currentPage + 1} of ${totalPages}`;
@@ -274,6 +241,13 @@ export function ControlPanel() {
   useEffect(() => {
     selectedFixtureIdRef.current = selectedFixtureId;
   }, [selectedFixtureId]);
+
+  useEffect(() => {
+    if (tabs.length === 0) return;
+    if (!tabs.some((tab) => tab.id === activeTab)) {
+      setActiveTab(tabs[0].id);
+    }
+  }, [activeTab, tabs]);
 
   async function refreshRuntimeData(selectionOverride?: FixtureSelection) {
     try {
@@ -357,7 +331,7 @@ export function ControlPanel() {
         overflow: "hidden",
       }}
     >
-      <AttributeTabBar activeId={activeTab} onChange={setActiveTab} />
+      <AttributeTabBar tabs={tabs} activeId={activeTab} onChange={setActiveTab} />
 
       <div
         style={{
@@ -411,14 +385,32 @@ export function ControlPanel() {
               boxSizing: "border-box",
             }}
           >
-            {visibleEncoders.map((enc, i) => (
-              <BigEncoderWheel
-                key={`${info.name}-${enc.name}-${currentPage}-${i}`}
-                paramName={enc.name}
-                value={enc.value}
-                onRotationChange={(rotation) => handleEncoderRotation(enc, rotation)}
-              />
-            ))}
+            {visibleEncoders.length > 0 ? (
+              visibleEncoders.map((enc, i) => (
+                <BigEncoderWheel
+                  key={`${info.name}-${enc.name}-${currentPage}-${i}`}
+                  paramName={enc.name}
+                  value={enc.value}
+                  onRotationChange={(rotation) => handleEncoderRotation(enc, rotation)}
+                />
+              ))
+            ) : (
+              <div
+                style={{
+                  display: "grid",
+                  placeItems: "center",
+                  width: 280,
+                  height: 112,
+                  color: "var(--lx-fg-tertiary)",
+                  fontSize: 12,
+                  border: "1px dashed var(--lx-stroke)",
+                  borderRadius: "var(--lx-radius-sm)",
+                  background: "rgba(0,0,0,0.18)",
+                }}
+              >
+                {selectedFixture ? "当前灯具模式没有解析到 GDTF 属性" : "未选择灯具"}
+              </div>
+            )}
           </div>
         </div>
 
@@ -442,7 +434,12 @@ function buildPageInfo(
   fixtureTypes: FixtureTypeEntry[],
   programmer: Programmer,
 ): Record<string, EncoderGroup> {
-  const groups = cloneFallbackPageInfo();
+  const groups: Record<string, EncoderGroup> = {
+    matricks: {
+      name: "MAtricks",
+      encoders: [],
+    },
+  };
   if (!fixture) return groups;
 
   groups.selection = {
@@ -470,7 +467,7 @@ function buildPageInfo(
   for (const [id, encoders] of Object.entries(dynamicGroups)) {
     if (encoders.length === 0) continue;
     groups[id] = {
-      name: FALLBACK_PAGE_INFO[id]?.name ?? titleCase(id),
+      name: ATTRIBUTE_GROUP_LABELS[id as AttributeGroupId] ?? titleCase(id),
       encoders,
     };
   }
@@ -479,7 +476,7 @@ function buildPageInfo(
 }
 
 function groupAttributes(attributes: string[], fixture: PatchFixture, programmer: Programmer) {
-  const groups: Record<string, EncoderParam[]> = {
+  const groups: Record<AttributeGroupId, EncoderParam[]> = {
     dimmer: [],
     position: [],
     gobo: [],
@@ -495,14 +492,14 @@ function groupAttributes(attributes: string[], fixture: PatchFixture, programmer
       attribute,
       featureGroup: titleCase(group),
       layer: "absolute",
-      value: resolveProgrammerValue(programmer, fixture.id, attribute) ?? defaultAttributeValue(attribute),
+      value: resolveProgrammerValue(programmer, fixture.id, attribute) ?? "--",
     });
   }
 
   return groups;
 }
 
-function inferAttributeTab(attribute: string): keyof ReturnType<typeof groupAttributes> {
+function inferAttributeTab(attribute: string): AttributeGroupId {
   const lower = attribute.toLowerCase();
   if (lower.includes("pan") || lower.includes("tilt") || lower.includes("position")) return "position";
   if (lower.includes("gobo")) return "gobo";
@@ -511,15 +508,6 @@ function inferAttributeTab(attribute: string): keyof ReturnType<typeof groupAttr
   if (lower.includes("zoom") || lower.includes("iris") || lower.includes("prism") || lower.includes("frost") || lower.includes("beam")) return "beam";
   if (lower.includes("dim") || lower.includes("shutter") || lower.includes("strobe")) return "dimmer";
   return "beam";
-}
-
-function defaultAttributeValue(attribute: string) {
-  const lower = attribute.toLowerCase();
-  if (lower.includes("pan") || lower.includes("tilt") || lower.includes("rotate") || lower.includes("rot")) return "0°";
-  if (lower.includes("gobo")) return "Open";
-  if (lower.includes("dim")) return "100%";
-  if (lower.includes("color") || lower.includes("rgb") || lower.includes("cmy")) return "0%";
-  return "0%";
 }
 
 function formatAttributeName(attribute: string) {
@@ -554,29 +542,32 @@ function formatProgrammerScalar(value: ProgrammerScalar, attribute: string) {
   return "--";
 }
 
-function cloneFallbackPageInfo() {
-  return Object.fromEntries(
-    Object.entries(FALLBACK_PAGE_INFO).map(([key, group]) => [
-      key,
-      {
-        name: group.name,
-        encoders: group.encoders.map((encoder) => ({
-          ...encoder,
-          attribute: "",
-          featureGroup: group.name,
-          layer: "absolute" as ProgrammerLayer,
-        })),
-      },
-    ]),
-  ) as Record<string, EncoderGroup>;
-}
-
 function resolveSelectedFixtureId(selection: FixtureSelection, fixtures: PatchFixture[]) {
   const preferred = selection.primaryFixtureId ?? selection.fixtureIds[0] ?? "";
   if (preferred && fixtures.some((fixture) => fixture.id === preferred)) {
     return preferred;
   }
   return "";
+}
+
+function buildAttributeTabs(pageInfo: Record<string, EncoderGroup>): AttributeTab[] {
+  const tabs: AttributeTab[] = [];
+  for (const id of ATTRIBUTE_GROUP_ORDER) {
+    if (pageInfo[id]?.encoders.length) {
+      tabs.push({
+        id,
+        label: ATTRIBUTE_GROUP_LABELS[id],
+        number: tabs.length + 1,
+      });
+    }
+  }
+
+  if (pageInfo.selection) {
+    tabs.push({ id: "selection", label: "Selection" });
+  }
+
+  tabs.push({ id: "matricks", label: "MAtricks" });
+  return tabs;
 }
 
 function deriveProgrammerValue(attribute: string, rotation: number): ProgrammerScalar {
