@@ -3,6 +3,7 @@ import { DynamicIsland, dynamicIsland } from "@limxdesk/notifications";
 import { ConsoleShell } from "@limxdesk/console";
 import { SettingsApp } from "@limxdesk/settings";
 import { useEffect } from "react";
+import { listen } from "@tauri-apps/api/event";
 
 export default function App() {
   const mode = new URLSearchParams(window.location.search).get("window");
@@ -19,6 +20,52 @@ export default function App() {
       duration: 2400,
     });
   }, [mode]);
+
+  useEffect(() => {
+    let active = true;
+    const unlisteners: Array<() => void> = [];
+
+    const register = async () => {
+      const loaded = await listen<ShowEventPayload>("show:loaded", (event) => {
+        dynamicIsland.show({
+          type: "success",
+          title: "Show 已加载",
+          subtitle: event.payload.name,
+          duration: 2200,
+        });
+      });
+      const saved = await listen<ShowEventPayload>("show:saved", (event) => {
+        dynamicIsland.show({
+          type: "success",
+          title: "Show 已保存",
+          subtitle: event.payload.name,
+          duration: 1800,
+        });
+      });
+      const deleted = await listen<{ path: string }>("show:deleted", (event) => {
+        dynamicIsland.show({
+          type: "warning",
+          title: "Show 已删除",
+          subtitle: event.payload.path,
+          duration: 2600,
+        });
+      });
+
+      if (!active) {
+        loaded();
+        saved();
+        deleted();
+        return;
+      }
+      unlisteners.push(loaded, saved, deleted);
+    };
+
+    void register();
+    return () => {
+      active = false;
+      unlisteners.forEach((unlisten) => unlisten());
+    };
+  }, []);
 
   if (mode === "settings") {
     return (
@@ -62,4 +109,10 @@ export default function App() {
       <DynamicIsland />
     </div>
   );
+}
+
+interface ShowEventPayload {
+  id: string;
+  name: string;
+  path: string;
 }

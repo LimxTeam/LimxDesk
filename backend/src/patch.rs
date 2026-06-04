@@ -1,11 +1,11 @@
-use crate::show::ShowRuntimeState;
+use crate::{events, show::ShowRuntimeState};
 use limxdesk_patch::{
     apply_wizard, auto_patch, delete_fixture, duplicate_fixture, normalize_document,
     update_fixture, validate_fixtures, FixtureTypeRef, PatchCommandResult, PatchDocument,
     PatchFixturePatch, PatchWizardDraft,
 };
 use limxdesk_showfile::{LoadedShow, ShowRepository};
-use tauri::State;
+use tauri::{AppHandle, State};
 
 const PATCH_SECTION_KEY: &str = "patch.v1";
 const PATCH_SECTION_VERSION: u16 = 1;
@@ -25,6 +25,7 @@ pub fn patch_load_current_show(
 pub fn patch_save_current_show(
     fixtures: serde_json::Value,
     state: State<'_, ShowRuntimeState>,
+    app: AppHandle,
 ) -> Result<(), String> {
     let Some(show) = state.current()? else {
         return Err("No show file loaded. Create or load a show before editing patch.".to_string());
@@ -33,7 +34,8 @@ pub fn patch_save_current_show(
     let fixtures = serde_json::from_value(fixtures).map_err(|error| error.to_string())?;
     let document = normalize_document(PatchDocument { fixtures });
     validate_fixtures(&document.fixtures).map_err(|error| error.to_string())?;
-    save_patch_document(&show, &document, &state)?;
+    let saved_show = save_patch_document(&show, &document, &state)?;
+    events::emit_patch_changed(&app, &saved_show);
     Ok(())
 }
 
@@ -42,8 +44,9 @@ pub fn patch_apply_wizard(
     fixture_type: FixtureTypeRef,
     draft: PatchWizardDraft,
     state: State<'_, ShowRuntimeState>,
+    app: AppHandle,
 ) -> Result<PatchCommandResult, String> {
-    mutate_patch_document(state, |document| {
+    mutate_patch_document(state, app, |document| {
         apply_wizard(document, fixture_type, draft)
     })
 }
@@ -53,33 +56,40 @@ pub fn patch_update_fixture(
     id: String,
     patch: PatchFixturePatch,
     state: State<'_, ShowRuntimeState>,
+    app: AppHandle,
 ) -> Result<PatchCommandResult, String> {
-    mutate_patch_document(state, |document| update_fixture(document, &id, patch))
+    mutate_patch_document(state, app, |document| update_fixture(document, &id, patch))
 }
 
 #[tauri::command]
 pub fn patch_delete_fixture(
     id: String,
     state: State<'_, ShowRuntimeState>,
+    app: AppHandle,
 ) -> Result<PatchCommandResult, String> {
-    mutate_patch_document(state, |document| delete_fixture(document, &id))
+    mutate_patch_document(state, app, |document| delete_fixture(document, &id))
 }
 
 #[tauri::command]
 pub fn patch_duplicate_fixture(
     id: String,
     state: State<'_, ShowRuntimeState>,
+    app: AppHandle,
 ) -> Result<PatchCommandResult, String> {
-    mutate_patch_document(state, |document| duplicate_fixture(document, &id))
+    mutate_patch_document(state, app, |document| duplicate_fixture(document, &id))
 }
 
 #[tauri::command]
-pub fn patch_auto_patch(state: State<'_, ShowRuntimeState>) -> Result<PatchCommandResult, String> {
-    mutate_patch_document(state, auto_patch)
+pub fn patch_auto_patch(
+    state: State<'_, ShowRuntimeState>,
+    app: AppHandle,
+) -> Result<PatchCommandResult, String> {
+    mutate_patch_document(state, app, auto_patch)
 }
 
 fn mutate_patch_document(
     state: State<'_, ShowRuntimeState>,
+    app: AppHandle,
     mutation: impl FnOnce(PatchDocument) -> limxdesk_patch::PatchResult<PatchCommandResult>,
 ) -> Result<PatchCommandResult, String> {
     let Some(show) = state.current()? else {
@@ -88,7 +98,8 @@ fn mutate_patch_document(
 
     let document = load_patch_document(&show)?;
     let result = mutation(document).map_err(|error| error.to_string())?;
-    save_patch_document(&show, &result.document, &state)?;
+    let saved_show = save_patch_document(&show, &result.document, &state)?;
+    events::emit_patch_changed(&app, &saved_show);
     Ok(result)
 }
 
@@ -104,7 +115,7 @@ fn save_patch_document(
     show: &LoadedShow,
     document: &PatchDocument,
     state: &State<'_, ShowRuntimeState>,
-) -> Result<(), String> {
+) -> Result<LoadedShow, String> {
     let loaded = ShowRepository::default_for_current_os()
         .write_section(
             &show.path,
@@ -114,6 +125,6 @@ fn save_patch_document(
         )
         .map_err(|error| error.to_string())?;
 
-    state.set_current(loaded)?;
-    Ok(())
+    state.set_current(loaded.clone())?;
+    Ok(loaded)
 }

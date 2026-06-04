@@ -1,6 +1,7 @@
 import { useDeferredValue, useEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
 import { dynamicIsland } from "@limxdesk/notifications";
 import {
@@ -99,6 +100,45 @@ export function FixtureTypesSettingsPage() {
 
   useEffect(() => {
     void refreshLibrary();
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    const unlisteners: Array<() => void> = [];
+
+    const register = async () => {
+      const fixtureTypesChanged = await listen("fixture-types:changed", () => {
+        void refreshLibrary();
+      });
+      const patchChanged = await listen("patch:changed", () => {
+        void refreshLibrary();
+      });
+      const showLoaded = await listen("show:loaded", () => {
+        void refreshLibrary();
+      });
+      const showDeleted = await listen("show:deleted", () => {
+        setFixtureTypes([]);
+        setSelectedPath("");
+        setDraft(DEFAULT_DRAFT);
+        setDirty(false);
+        setLogLine("No show loaded. Create or load a show file before editing fixture types.");
+      });
+
+      if (!active) {
+        fixtureTypesChanged();
+        patchChanged();
+        showLoaded();
+        showDeleted();
+        return;
+      }
+      unlisteners.push(fixtureTypesChanged, patchChanged, showLoaded, showDeleted);
+    };
+
+    void register();
+    return () => {
+      active = false;
+      unlisteners.forEach((unlisten) => unlisten());
+    };
   }, []);
 
   useEffect(() => {

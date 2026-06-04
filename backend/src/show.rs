@@ -1,6 +1,7 @@
+use crate::events;
 use limxdesk_showfile::{LoadedShow, ShowFileEntry, ShowRepository};
 use std::sync::Mutex;
-use tauri::State;
+use tauri::{AppHandle, State};
 
 #[derive(Default)]
 pub struct ShowRuntimeState {
@@ -75,29 +76,44 @@ pub fn show_scan_library() -> Result<Vec<ShowFileEntry>, String> {
 }
 
 #[tauri::command]
-pub fn show_create(name: String, state: State<'_, ShowRuntimeState>) -> Result<LoadedShow, String> {
+pub fn show_create(
+    name: String,
+    state: State<'_, ShowRuntimeState>,
+    app: AppHandle,
+) -> Result<LoadedShow, String> {
     let loaded = ShowRepository::default_for_current_os()
         .create(name)
         .map_err(|error| error.to_string())?;
     state.set_current(loaded.clone())?;
+    events::emit_show_loaded(&app, &loaded);
     Ok(loaded)
 }
 
 #[tauri::command]
-pub fn show_load(path: String, state: State<'_, ShowRuntimeState>) -> Result<LoadedShow, String> {
+pub fn show_load(
+    path: String,
+    state: State<'_, ShowRuntimeState>,
+    app: AppHandle,
+) -> Result<LoadedShow, String> {
     let loaded = ShowRepository::default_for_current_os()
         .load(path)
         .map_err(|error| error.to_string())?;
     state.set_current(loaded.clone())?;
+    events::emit_show_loaded(&app, &loaded);
     Ok(loaded)
 }
 
 #[tauri::command]
-pub fn show_save(path: String, state: State<'_, ShowRuntimeState>) -> Result<LoadedShow, String> {
+pub fn show_save(
+    path: String,
+    state: State<'_, ShowRuntimeState>,
+    app: AppHandle,
+) -> Result<LoadedShow, String> {
     let loaded = ShowRepository::default_for_current_os()
         .save(path)
         .map_err(|error| error.to_string())?;
     state.set_current(loaded.clone())?;
+    events::emit_show_saved(&app, &loaded);
     Ok(loaded)
 }
 
@@ -106,16 +122,22 @@ pub fn show_save_as(
     source_path: String,
     name: String,
     state: State<'_, ShowRuntimeState>,
+    app: AppHandle,
 ) -> Result<LoadedShow, String> {
     let loaded = ShowRepository::default_for_current_os()
         .save_as(source_path, name)
         .map_err(|error| error.to_string())?;
     state.set_current(loaded.clone())?;
+    events::emit_show_loaded(&app, &loaded);
     Ok(loaded)
 }
 
 #[tauri::command]
-pub fn show_delete(path: String, state: State<'_, ShowRuntimeState>) -> Result<(), String> {
+pub fn show_delete(
+    path: String,
+    state: State<'_, ShowRuntimeState>,
+    app: AppHandle,
+) -> Result<(), String> {
     ShowRepository::default_for_current_os()
         .delete(&path)
         .map_err(|error| error.to_string())?;
@@ -124,6 +146,7 @@ pub fn show_delete(path: String, state: State<'_, ShowRuntimeState>) -> Result<(
         state.clear_current()?;
     }
 
+    events::emit_show_deleted(&app, path);
     Ok(())
 }
 

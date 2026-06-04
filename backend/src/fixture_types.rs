@@ -1,4 +1,4 @@
-use crate::show::ShowRuntimeState;
+use crate::{events, show::ShowRuntimeState};
 use limxdesk_fixture_types::{
     FixtureTypeDraft, FixtureTypeEntry, FixtureTypeRepository, FixtureTypeSource,
 };
@@ -6,7 +6,7 @@ use limxdesk_platform::current_timestamp_millis;
 use limxdesk_showfile::{LoadedShow, ShowRepository};
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, fs};
-use tauri::State;
+use tauri::{AppHandle, State};
 
 const FIXTURE_TYPES_SECTION_KEY: &str = "fixture-types.v1";
 const FIXTURE_TYPES_SECTION_VERSION: u16 = 1;
@@ -86,6 +86,7 @@ pub fn fixture_type_scan_current_show(
 pub fn fixture_type_import_gdtf_to_show(
     path: String,
     state: State<'_, ShowRuntimeState>,
+    app: AppHandle,
 ) -> Result<FixtureTypeEntry, String> {
     let (show, mut document) = load_show_fixture_type_document(&state)?;
     let bytes = fs::read(&path).map_err(|error| error.to_string())?;
@@ -101,7 +102,8 @@ pub fn fixture_type_import_gdtf_to_show(
     };
 
     upsert_show_fixture_type(&mut document, record);
-    save_show_fixture_type_document(&show, &document, &state)?;
+    let saved_show = save_show_fixture_type_document(&show, &document, &state)?;
+    events::emit_fixture_types_changed(&app, &saved_show);
     let entries = entries_from_document(&document)?;
     entries
         .into_iter()
@@ -113,6 +115,7 @@ pub fn fixture_type_import_gdtf_to_show(
 pub fn fixture_type_create_in_show(
     draft: FixtureTypeDraft,
     state: State<'_, ShowRuntimeState>,
+    app: AppHandle,
 ) -> Result<FixtureTypeEntry, String> {
     let (show, mut document) = load_show_fixture_type_document(&state)?;
     let bytes =
@@ -131,7 +134,8 @@ pub fn fixture_type_create_in_show(
             updated_at_ms: now,
         },
     );
-    save_show_fixture_type_document(&show, &document, &state)?;
+    let saved_show = save_show_fixture_type_document(&show, &document, &state)?;
+    events::emit_fixture_types_changed(&app, &saved_show);
     let entries = entries_from_document(&document)?;
     entries
         .into_iter()
@@ -144,6 +148,7 @@ pub fn fixture_type_update_in_show(
     path: String,
     draft: FixtureTypeDraft,
     state: State<'_, ShowRuntimeState>,
+    app: AppHandle,
 ) -> Result<FixtureTypeEntry, String> {
     let (show, mut document) = load_show_fixture_type_document(&state)?;
     let Some(record) = document.entries.iter_mut().find(|item| item.path == path) else {
@@ -157,7 +162,8 @@ pub fn fixture_type_update_in_show(
     record.updated_at_ms = current_timestamp_millis().map_err(|error| error.to_string())?;
     let updated_path = record.path.clone();
 
-    save_show_fixture_type_document(&show, &document, &state)?;
+    let saved_show = save_show_fixture_type_document(&show, &document, &state)?;
+    events::emit_fixture_types_changed(&app, &saved_show);
     let entries = entries_from_document(&document)?;
     entries
         .into_iter()
@@ -169,6 +175,7 @@ pub fn fixture_type_update_in_show(
 pub fn fixture_type_delete_from_show(
     path: String,
     state: State<'_, ShowRuntimeState>,
+    app: AppHandle,
 ) -> Result<(), String> {
     let (show, mut document) = load_show_fixture_type_document(&state)?;
     let used_counts = load_fixture_type_usage(&show)?;
@@ -184,7 +191,8 @@ pub fn fixture_type_delete_from_show(
         ));
     }
 
-    save_show_fixture_type_document(&show, &document, &state)?;
+    let saved_show = save_show_fixture_type_document(&show, &document, &state)?;
+    events::emit_fixture_types_changed(&app, &saved_show);
     Ok(())
 }
 
@@ -226,7 +234,7 @@ fn save_show_fixture_type_document(
     show: &LoadedShow,
     document: &ShowFixtureTypeDocument,
     state: &State<'_, ShowRuntimeState>,
-) -> Result<(), String> {
+) -> Result<LoadedShow, String> {
     let loaded = ShowRepository::default_for_current_os()
         .write_section(
             &show.path,
@@ -235,8 +243,8 @@ fn save_show_fixture_type_document(
             document,
         )
         .map_err(|error| error.to_string())?;
-    state.set_current(loaded)?;
-    Ok(())
+    state.set_current(loaded.clone())?;
+    Ok(loaded)
 }
 
 fn entries_from_document(

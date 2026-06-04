@@ -1,6 +1,7 @@
 import { useDeferredValue, useEffect, useState } from "react";
 import type { ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { dynamicIsland, type IslandType } from "@limxdesk/notifications";
 import { FloatingDialog } from "@limxdesk/ui";
 import {
@@ -97,6 +98,47 @@ export function ConnectivitySettingsPage() {
   useEffect(() => {
     void refreshFixtureTypes();
     void loadPatchFromShow();
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    const unlisteners: Array<() => void> = [];
+
+    const register = async () => {
+      const patchChanged = await listen("patch:changed", () => {
+        void loadPatchFromShow();
+      });
+      const fixtureTypesChanged = await listen("fixture-types:changed", () => {
+        void refreshFixtureTypes();
+        void loadPatchFromShow();
+      });
+      const showLoaded = await listen("show:loaded", () => {
+        void refreshFixtureTypes();
+        void loadPatchFromShow();
+      });
+      const showDeleted = await listen("show:deleted", () => {
+        setFixtures([]);
+        setFixtureTypes([]);
+        setSelectedId("");
+        setShowLoaded(false);
+        setLogLine("No show loaded. Create or load a show file before editing patch.");
+      });
+
+      if (!active) {
+        patchChanged();
+        fixtureTypesChanged();
+        showLoaded();
+        showDeleted();
+        return;
+      }
+      unlisteners.push(patchChanged, fixtureTypesChanged, showLoaded, showDeleted);
+    };
+
+    void register();
+    return () => {
+      active = false;
+      unlisteners.forEach((unlisten) => unlisten());
+    };
   }, []);
 
   const loadPatchFromShow = async () => {

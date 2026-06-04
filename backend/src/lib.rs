@@ -27,6 +27,7 @@
 // │ titlebar_is_maximized             │ titlebar                │
 // ============================================================
 
+mod events;
 mod fixture_types;
 mod patch;
 mod show;
