@@ -9,33 +9,38 @@ function isTauriRuntime(): boolean {
 
 export async function openSettingsWindow(): Promise<void> {
   if (isTauriRuntime()) {
-    const existing = await WebviewWindow.getByLabel(SETTINGS_WINDOW_LABEL);
+    try {
+      const existing = await WebviewWindow.getByLabel(SETTINGS_WINDOW_LABEL);
 
-    if (existing) {
-      await existing.show();
-      await existing.unminimize();
-      await existing.setFocus();
+      if (existing) {
+        await existing.show();
+        await existing.unminimize();
+        await existing.setFocus();
+        return;
+      }
+
+      const settingsWindow = new WebviewWindow(SETTINGS_WINDOW_LABEL, {
+        title: "LimxDesk Settings",
+        url: SETTINGS_QUERY,
+        width: 1180,
+        height: 780,
+        minWidth: 980,
+        minHeight: 680,
+        center: true,
+        resizable: true,
+        decorations: false,
+        visible: true,
+      });
+
+      settingsWindow.once("tauri://error", (event) => {
+        console.error("Failed to create settings window", event);
+      });
+
+      return;
+    } catch (error) {
+      console.error("Unable to open settings window", error);
       return;
     }
-
-    const settingsWindow = new WebviewWindow(SETTINGS_WINDOW_LABEL, {
-      title: "LimxDesk Settings",
-      url: SETTINGS_QUERY,
-      width: 1180,
-      height: 780,
-      minWidth: 980,
-      minHeight: 680,
-      center: true,
-      resizable: true,
-      decorations: false,
-      visible: true,
-    });
-
-    settingsWindow.once("tauri://error", (event) => {
-      console.error("Failed to create settings window", event);
-    });
-
-    return;
   }
 
   window.open(

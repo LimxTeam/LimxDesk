@@ -1,4 +1,3 @@
-import { useState } from "react";
 import {
   Zap, Settings, FolderOpen, SlidersHorizontal, Group, GitBranch,
   ListOrdered, Monitor, HelpCircle, Filter,
@@ -19,8 +18,6 @@ const NAV_ITEMS = [
 ];
 
 export function LeftSidebar() {
-  const [active, setActive] = useState<string | null>(null);
-
   return (
     <div
       style={{
@@ -33,12 +30,10 @@ export function LeftSidebar() {
       }}
     >
       {NAV_ITEMS.map((item) => {
-        const isActive = active === item.id;
         return (
           <button
             key={item.id}
             onClick={() => {
-              setActive(item.id);
               item.action?.();
             }}
             title={item.id}
@@ -49,11 +44,19 @@ export function LeftSidebar() {
               alignItems: "center",
               justifyContent: "center",
               borderRadius: "var(--lx-radius-sm)",
-              background: isActive ? "var(--lx-primary-dim)" : "transparent",
-              color: isActive ? "var(--lx-primary-bright)" : "var(--lx-fg-tertiary)",
+              background: "transparent",
+              color: "var(--lx-fg-tertiary)",
               border: "none",
               cursor: "pointer",
               transition: "all var(--lx-duration-fast)",
+            }}
+            onMouseEnter={(event) => {
+              event.currentTarget.style.background = "rgba(0, 120, 212, 0.10)";
+              event.currentTarget.style.color = "var(--lx-primary-bright)";
+            }}
+            onMouseLeave={(event) => {
+              event.currentTarget.style.background = "transparent";
+              event.currentTarget.style.color = "var(--lx-fg-tertiary)";
             }}
           >
             <item.icon size={16} />
