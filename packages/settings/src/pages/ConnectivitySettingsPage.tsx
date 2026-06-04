@@ -14,7 +14,7 @@ import {
 import { ResizableDataTable } from "../components/ResizableDataTable";
 import type { DataTableColumn } from "../components/ResizableDataTable";
 
-type PatchState = "patched" | "overlap" | "overflow" | "unpatched";
+type PatchState = "patched" | "fid" | "overlap" | "overflow" | "unpatched";
 
 interface FixtureTypeEntry {
   id: string;
@@ -102,11 +102,14 @@ export function ConnectivitySettingsPage() {
   const updateSelected = (patch: Partial<PatchFixture>) => {
     if (!selectedFixture) return;
 
-    setFixtures((current) =>
-      current.map((fixture) =>
-        fixture.id === selectedFixture.id ? normalizeFixture({ ...fixture, ...patch }, fixtureTypes) : fixture,
-      ),
-    );
+    const nextFixture = normalizeFixture({ ...selectedFixture, ...patch }, fixtureTypes);
+    const issues = getFixtureIssues(fixtures, nextFixture);
+    if (issues.length > 0) {
+      setLogLine(formatIssueMessage(issues, nextFixture));
+      return;
+    }
+
+    setFixtures((current) => current.map((fixture) => (fixture.id === selectedFixture.id ? nextFixture : fixture)));
   };
 
   const applyWizard = (draft: PatchWizardDraft) => {
@@ -117,35 +120,14 @@ export function ConnectivitySettingsPage() {
       return;
     }
 
-    const nextFixtures: PatchFixture[] = [];
-    let cursorUniverse = clampUniverse(draft.universe);
-    let cursorAddress = clampAddress(draft.address);
-
-    for (let index = 0; index < clampQuantity(draft.quantity); index += 1) {
-      if (cursorAddress + mode.channels - 1 > 512) {
-        cursorUniverse += 1;
-        cursorAddress = 1;
-      }
-
-      const fid = draft.firstFid + index;
-      nextFixtures.push({
-        id: `fix-${Date.now()}-${index}`,
-        fid,
-        name: `${draft.namePrefix.trim() || fixtureType.name} ${draft.channelId + index}`,
-        fixtureTypeId: fixtureType.id,
-        fixtureTypeName: `${fixtureType.manufacturer} ${fixtureType.name}`.trim(),
-        fixtureTypePath: fixtureType.path,
-        modeId: mode.id,
-        modeName: mode.name,
-        channels: mode.channels,
-        universe: cursorUniverse,
-        address: cursorAddress,
-        stage: draft.stage,
-        panInvert: false,
-        tiltInvert: false,
-      });
-
-      cursorAddress += mode.channels;
+    const nextFixtures = previewPatch(normalizeWizardDraft(draft), fixtureType, mode).map((fixture, index) => ({
+      ...fixture,
+      id: `fix-${Date.now()}-${index}`,
+    }));
+    const issues = getBatchIssues(fixtures, nextFixtures);
+    if (issues.length > 0) {
+      setLogLine(`Cannot patch: ${issues[0]}`);
+      return;
     }
 
     setFixtures((current) => [...current, ...nextFixtures].sort((left, right) => left.fid - right.fid));
@@ -304,7 +286,8 @@ function PatchWizardDialog({
   const fixtureType = fixtureTypes.find((item) => item.path === draft.fixtureTypePath) ?? firstType;
   const mode = fixtureType?.modes.find((item) => item.id === draft.modeId) ?? fixtureType?.modes[0];
   const preview = fixtureType && mode ? previewPatch(draft, fixtureType, mode) : [];
-  const conflicts = preview.filter((item) => hasRangeConflict(fixtures, item)).length;
+  const issues = getBatchIssues(fixtures, preview);
+  const issueCount = preview.filter((item) => getFixtureIssues([...fixtures, ...preview], item).length > 0).length;
 
   const updateDraft = (patch: Partial<PatchWizardDraft>) => {
     setDraft((current) => ({ ...current, ...patch }));
@@ -386,8 +369,8 @@ function PatchWizardDialog({
           <div className="lx-panel-compact" style={{ display: "grid", gap: 6, color: "var(--lx-fg-secondary)" }}>
             <span className="lx-code">Mode Width: {mode?.channels ?? 0} channels</span>
             <span className="lx-code">Preview: {preview.length} fixtures</span>
-            <span className="lx-code" style={{ color: conflicts > 0 ? "var(--lx-status-error)" : "var(--lx-action-bright)" }}>
-              Conflicts: {conflicts}
+            <span className="lx-code" style={{ color: issueCount > 0 ? "var(--lx-status-error)" : "var(--lx-action-bright)" }}>
+              Conflicts: {issueCount}
             </span>
           </div>
 
@@ -395,7 +378,7 @@ function PatchWizardDialog({
             <button type="button" className="lx-btn lx-btn-ghost" onClick={onClose}>
               Cancel
             </button>
-            <button type="button" className="lx-btn lx-btn-primary" onClick={() => onApply(normalizeWizardDraft(draft))} disabled={!fixtureType || !mode}>
+            <button type="button" className="lx-btn lx-btn-primary" onClick={() => onApply(normalizeWizardDraft(draft))} disabled={!fixtureType || !mode || issues.length > 0}>
               Apply
             </button>
           </div>
@@ -404,18 +387,18 @@ function PatchWizardDialog({
         <div style={{ display: "grid", minHeight: 0, gridTemplateRows: "34px minmax(0, 1fr)", overflow: "hidden" }}>
           <div className="lx-panel-header">
             <span>Patch Preview</span>
-            <span className={`lx-badge ${conflicts > 0 ? "lx-badge-error" : "lx-badge-success"}`}>{conflicts > 0 ? "Conflict" : "Clean"}</span>
+            <span className={`lx-badge ${issues.length > 0 ? "lx-badge-error" : "lx-badge-success"}`}>{issues.length > 0 ? "Conflict" : "Clean"}</span>
           </div>
           <div style={{ overflow: "auto" }}>
             {preview.map((fixture) => {
-              const conflict = hasRangeConflict(fixtures, fixture);
-              const overflow = getPatchStateForRange(fixture, fixtures) === "overflow";
+              const fixtureIssues = getFixtureIssues([...fixtures, ...preview], fixture);
+              const conflict = fixtureIssues.length > 0;
               return (
                 <div
                   key={fixture.id}
                   style={{
                     display: "grid",
-                    gridTemplateColumns: "68px 1fr 130px 70px 92px",
+                    gridTemplateColumns: "68px 1fr 130px 70px 92px 92px",
                     gap: 10,
                     alignItems: "center",
                     minHeight: 34,
@@ -429,8 +412,11 @@ function PatchWizardDialog({
                   <span style={{ color: "var(--lx-fg-primary)", fontWeight: 700 }}>{fixture.name}</span>
                   <span>{fixture.modeName}</span>
                   <span className="lx-code">{fixture.channels}ch</span>
-                  <span className="lx-code" style={{ color: conflict || overflow ? "var(--lx-status-error)" : "var(--lx-action-bright)" }}>
+                  <span className="lx-code" style={{ color: conflict ? "var(--lx-status-error)" : "var(--lx-action-bright)" }}>
                     {formatPatch(fixture)}
+                  </span>
+                  <span className={`lx-badge ${conflict ? "lx-badge-error" : "lx-badge-success"}`}>
+                    {fixtureIssues.length > 0 ? fixtureIssues.join("/") : "OK"}
                   </span>
                 </div>
               );
@@ -696,7 +682,7 @@ function StatusPanel({ stats, logLine }: { stats: ReturnType<typeof getPatchStat
       <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 6 }}>
         <Metric label="Patched" value={stats.patched} />
         <Metric label="Open" value={stats.unpatched} />
-        <Metric label="Fault" value={stats.overlap + stats.overflow} tone={stats.overlap + stats.overflow > 0 ? "var(--lx-status-error)" : undefined} />
+        <Metric label="Fault" value={stats.fid + stats.overlap + stats.overflow} tone={stats.fid + stats.overlap + stats.overflow > 0 ? "var(--lx-status-error)" : undefined} />
       </div>
       <div className="lx-code" style={{ color: "var(--lx-fg-tertiary)", fontSize: 10 }}>{logLine}</div>
     </div>
@@ -713,12 +699,12 @@ function Metric({ label, value, tone }: { label: string; value: number; tone?: s
 }
 
 function StateBadge({ state }: { state: PatchState }) {
-  const label = state === "patched" ? "Patched" : state === "overlap" ? "Overlap" : state === "overflow" ? "Overflow" : "Open";
+  const label = state === "patched" ? "Patched" : state === "fid" ? "FID" : state === "overlap" ? "Overlap" : state === "overflow" ? "Overflow" : "Open";
   const className = state === "patched" ? "lx-badge-success" : state === "unpatched" ? "lx-badge-warn" : "lx-badge-error";
 
   return (
     <span className={`lx-badge ${className}`}>
-      {(state === "overlap" || state === "overflow") && <AlertTriangle size={10} />}
+      {(state === "fid" || state === "overlap" || state === "overflow") && <AlertTriangle size={10} />}
       {label}
     </span>
   );
@@ -796,6 +782,7 @@ function getPatchStats(fixtures: PatchFixture[]) {
   return {
     total: fixtures.length,
     patched: states.filter((state) => state === "patched").length,
+    fid: states.filter((state) => state === "fid").length,
     overlap: states.filter((state) => state === "overlap").length,
     overflow: states.filter((state) => state === "overflow").length,
     unpatched: states.filter((state) => state === "unpatched").length,
@@ -804,10 +791,69 @@ function getPatchStats(fixtures: PatchFixture[]) {
 }
 
 function getPatchStateForRange(fixture: PatchFixture, fixtures: PatchFixture[]): PatchState {
+  if (hasFidConflict(fixtures, fixture)) return "fid";
   const range = getPatchRange(fixture);
   if (!range) return "unpatched";
   if (range.end > 512) return "overflow";
   return fixtures.some((item) => item.id !== fixture.id && rangesOverlap(range, getPatchRange(item))) ? "overlap" : "patched";
+}
+
+function getFixtureIssues(fixtures: PatchFixture[], fixture: PatchFixture): string[] {
+  const issues: string[] = [];
+
+  if (hasFidConflict(fixtures, fixture)) {
+    issues.push("FID");
+  }
+
+  const range = getPatchRange(fixture);
+  if (range) {
+    if (range.end > 512) {
+      issues.push("OVER");
+    }
+
+    if (fixtures.some((item) => item.id !== fixture.id && rangesOverlap(range, getPatchRange(item)))) {
+      issues.push("ADDR");
+    }
+  }
+
+  return issues;
+}
+
+function getBatchIssues(existing: PatchFixture[], batch: PatchFixture[]): string[] {
+  const pool = [...existing, ...batch];
+  const messages = new Set<string>();
+
+  for (const fixture of batch) {
+    const issues = getFixtureIssues(pool, fixture);
+    if (issues.includes("FID")) {
+      messages.add(`FID ${fixture.fid} already exists`);
+    }
+    if (issues.includes("ADDR")) {
+      messages.add(`Address ${formatPatch(fixture)}-${fixture.address !== null ? fixture.address + fixture.channels - 1 : ""} is occupied`);
+    }
+    if (issues.includes("OVER")) {
+      messages.add(`Address ${formatPatch(fixture)} exceeds universe size`);
+    }
+  }
+
+  return Array.from(messages);
+}
+
+function hasFidConflict(fixtures: PatchFixture[], fixture: PatchFixture) {
+  return fixtures.some((item) => item.id !== fixture.id && item.fid === fixture.fid);
+}
+
+function formatIssueMessage(issues: string[], fixture: PatchFixture) {
+  if (issues.includes("FID")) {
+    return `Cannot edit: FID ${fixture.fid} already exists`;
+  }
+  if (issues.includes("ADDR")) {
+    return `Cannot edit: address range ${formatPatch(fixture)} uses occupied DMX addresses`;
+  }
+  if (issues.includes("OVER")) {
+    return `Cannot edit: address range ${formatPatch(fixture)} exceeds 512`;
+  }
+  return "Cannot edit fixture";
 }
 
 function hasRangeConflict(fixtures: PatchFixture[], fixture: PatchFixture) {
