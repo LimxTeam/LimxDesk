@@ -18,22 +18,21 @@ export function BigEncoderWheel({
   value = "100%",
   rotation: controlledRotation,
   onRotationChange,
-  size = 130,
+  size = 144,
 }: BigEncoderWheelProps) {
   const [internalRotation, setInternalRotation] = useState(-30);
   const rotation = controlledRotation ?? internalRotation;
 
   const dragging = useRef(false);
-  const lastY = useRef(0);
-  const startRotation = useRef(0);
+  const lastPointerAngle = useRef(0);
+  const liveRotation = useRef(rotation);
+  const frame = useRef<number | null>(null);
   const containerRef = useRef<HTMLDivElement>(null);
 
   const ticks = useMemo(() => {
     const arr: { angle: number; long: boolean }[] = [];
-    for (let i = 0; i < 72; i++) {
-      const angle = (i / 72) * 360;
-      if (angle > 135 && angle < 225) continue;
-      arr.push({ angle, long: i % 6 === 0 });
+    for (let i = 0; i < 96; i++) {
+      arr.push({ angle: (i / 96) * 360, long: i % 8 === 0 });
     }
     return arr;
   }, []);
@@ -44,63 +43,99 @@ export function BigEncoderWheel({
   const tickEndLong = outerR - 6;
   const tickEndShort = outerR - 3;
 
+  useEffect(() => {
+    liveRotation.current = rotation;
+  }, [rotation]);
+
+  useEffect(() => {
+    return () => {
+      if (frame.current !== null) cancelAnimationFrame(frame.current);
+    };
+  }, []);
+
+  function getPointerAngle(e: PointerEvent | React.PointerEvent) {
+    const rect = containerRef.current?.getBoundingClientRect();
+    if (!rect) return 0;
+
+    const x = e.clientX - (rect.left + rect.width / 2);
+    const y = e.clientY - (rect.top + rect.height / 2);
+    return (Math.atan2(y, x) * 180) / Math.PI;
+  }
+
+  function getShortestAngleDelta(next: number, prev: number) {
+    return ((next - prev + 540) % 360) - 180;
+  }
+
   /** 更新旋转角度 */
   const updateRotation = useCallback(
     (next: number) => {
       const normalized = ((next % 360) + 360) % 360;
-      setInternalRotation(normalized);
-      onRotationChange?.(normalized);
+      liveRotation.current = normalized;
+
+      if (frame.current !== null) cancelAnimationFrame(frame.current);
+      frame.current = requestAnimationFrame(() => {
+        setInternalRotation(normalized);
+        onRotationChange?.(normalized);
+        frame.current = null;
+      });
     },
     [onRotationChange]
   );
 
-  /** 鼠标按下：开始拖动 */
-  const onMouseDown = useCallback(
-    (e: React.MouseEvent) => {
+  /** 指针按下：开始拖动 */
+  const onPointerDown = useCallback(
+    (e: React.PointerEvent<HTMLDivElement>) => {
+      e.preventDefault();
       dragging.current = true;
-      lastY.current = e.clientY;
-      startRotation.current = rotation;
-      (e.currentTarget as HTMLElement).style.cursor = "grabbing";
-      const onMouseMove = (ev: MouseEvent) => {
-        if (!dragging.current) return;
-        const dy = ev.clientY - lastY.current;  // 往下为正
-        lastY.current = ev.clientY;
-        const delta = dy * 1.5;  // 灵敏度：1.5
-        updateRotation(startRotation.current + delta);
-      };
-      const onMouseUp = () => {
-        dragging.current = false;
-        document.removeEventListener("mousemove", onMouseMove);
-        document.removeEventListener("mouseup", onMouseUp);
-        document.querySelectorAll("[data-encoder-wheel]").forEach((el) => {
-          (el as HTMLElement).style.cursor = "grab";
-        });
-      };
-      document.addEventListener("mousemove", onMouseMove);
-      document.addEventListener("mouseup", onMouseUp);
+      lastPointerAngle.current = getPointerAngle(e);
+      liveRotation.current = rotation;
+      e.currentTarget.style.cursor = "grabbing";
+
+      try {
+        e.currentTarget.setPointerCapture(e.pointerId);
+      } catch {
+        // Pointer capture can fail if the pointer is already released.
+      }
     },
-    [rotation, updateRotation]
+    [rotation]
   );
+
+  const onPointerMove = useCallback(
+    (e: React.PointerEvent<HTMLDivElement>) => {
+      if (!dragging.current) return;
+      e.preventDefault();
+
+      const nextAngle = getPointerAngle(e);
+      const delta = getShortestAngleDelta(nextAngle, lastPointerAngle.current);
+      lastPointerAngle.current = nextAngle;
+      updateRotation(liveRotation.current + delta);
+    },
+    [updateRotation]
+  );
+
+  const stopDragging = useCallback((e: React.PointerEvent<HTMLDivElement>) => {
+    if (!dragging.current) return;
+    dragging.current = false;
+    e.currentTarget.style.cursor = "grab";
+
+    try {
+      e.currentTarget.releasePointerCapture(e.pointerId);
+    } catch {
+      // Pointer capture may already be released by the browser.
+    }
+  }, []);
 
   /** 鼠标滚轮：悬停时转动 */
   const onWheel = useCallback(
-    (e: WheelEvent) => {
+    (e: React.WheelEvent<HTMLDivElement>) => {
       e.preventDefault();
+      e.stopPropagation();
       // deltaY < 0：往上滚 → 反转（逆时针）；deltaY > 0：往下滚 → 正转（顺时针）
       const delta = e.deltaY * 1.2;
-      updateRotation(rotation + delta);
+      updateRotation(liveRotation.current + delta);
     },
-    [rotation, updateRotation]
+    [updateRotation]
   );
-
-  // 绑定 wheel 事件（使用原生监听以支持 preventDefault）
-  useEffect(() => {
-    const el = containerRef.current;
-    if (!el) return;
-    const handler = (e: WheelEvent) => onWheel(e);
-    el.addEventListener("wheel", handler, { passive: false });
-    return () => el.removeEventListener("wheel", handler);
-  }, [onWheel]);
 
   // 刻度 SVG
   const tickSvg = (
@@ -190,6 +225,7 @@ export function BigEncoderWheel({
         borderRadius: "50%",
         cursor: "grab",
         userSelect: "none",
+        touchAction: "none",
         // 硅胶质感：多层渐变，无阴影
         background: `
           radial-gradient(ellipse at 35% 30%, rgba(120,120,130,0.25) 0%, transparent 60%),
@@ -198,16 +234,21 @@ export function BigEncoderWheel({
         `,
         border: "1px solid rgba(255,255,255,0.06)",
       }}
-      onMouseDown={onMouseDown}
+      onPointerDown={onPointerDown}
+      onPointerMove={onPointerMove}
+      onPointerUp={stopDragging}
+      onPointerCancel={stopDragging}
+      onLostPointerCapture={stopDragging}
+      onWheel={onWheel}
     >
       {/* ── 外圈刻度环（硅胶按压感）── */}
       <div
         style={{
           position: "absolute",
-          top: 5,
-          left: 5,
-          right: 5,
-          bottom: 5,
+          top: 10,
+          left: 10,
+          right: 10,
+          bottom: 10,
           borderRadius: "50%",
           border: "1px solid rgba(255,255,255,0.035)",
           background: `

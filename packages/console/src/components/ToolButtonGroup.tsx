@@ -130,10 +130,10 @@ export function ToolButtonGroup({
               justifyContent: "center",
               gap: 0,
               width: 52,
-              minHeight: tool.states ? 32 : 22,
+              minHeight: 32,
               padding: "2px 3px 1px 3px",
-              fontSize: 9,
-              fontWeight: bgActive ? 600 : 500,
+              fontSize: 11,
+              fontWeight: bgActive ? 700 : 600,
               lineHeight: 1.15,
               textAlign: "center",
               borderRadius: "var(--lx-radius-xs)",
@@ -163,8 +163,8 @@ export function ToolButtonGroup({
             {tool.states && (
               <span
                 style={{
-                  fontSize: 8,
-                  fontWeight: 600,
+                  fontSize: 10,
+                  fontWeight: 700,
                   marginTop: 1,
                   padding: "0 3px",
                   borderRadius: "var(--lx-radius-xs)",

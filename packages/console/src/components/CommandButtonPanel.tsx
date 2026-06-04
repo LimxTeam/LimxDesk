@@ -1,86 +1,159 @@
-import { useState, useCallback } from "react";
+import { useCallback, useState } from "react";
 
-/**
- * 右侧命令/数字按钮面板
- *
- * 布局：
- *  ┌──────────────────┬────────────┬────────────────┐
- *  │ 左侧：功能按钮    │ 中间：数字  │ 右侧：        │
- *  │ [On][Off][Sel]  │ 键盘（4列   │ [Please]      │
- *  │ [Move][Copy]…   │ 严格等宽）  │ [Oops]        │
- *  │                  │            │ [ESC]         │
- *  │                  │            │ [Clear]       │
- *  └──────────────────┴────────────┴────────────────┘
- */
+const KEY_HEIGHT = 32;
+const GAP = 4;
 
-const BTN_HEIGHT = 32;
-const BTN_FONT = 13;
-const GAP = 3;
+type KeyTone = "neutral" | "positive" | "danger" | "operator" | "execute";
 
-/** 功能按钮（每行4个） */
-const COMMAND_ROWS = [
-  ["On", "Off", "Select", "Fixture"],
-  ["Move", "Copy", "Delete", "Stomp"],
-  ["Edit", "Update", "", ""],
-  ["Group", "Preset", "Sequence", "Cue"],
+type KeyDef = {
+  label: string;
+  tone?: KeyTone;
+  span?: number;
+};
+
+const COMMAND_KEYS: KeyDef[] = [
+  { label: "On", tone: "positive", span: 3 },
+  { label: "Off", tone: "danger", span: 3 },
+  { label: "Select", span: 3 },
+  { label: "Fixture", span: 3 },
+  { label: "Move", span: 3 },
+  { label: "Copy", span: 3 },
+  { label: "Delete", tone: "danger", span: 3 },
+  { label: "Stomp", span: 3 },
+  { label: "Sequence", span: 3 },
+  { label: "Cue", span: 3 },
+  { label: "Group", span: 3 },
+  { label: "Preset", span: 3 },
+  { label: "ESC", span: 4 },
+  { label: "Oops", tone: "danger", span: 4 },
+  { label: "Clear", tone: "danger", span: 4 },
+  { label: "Store", span: 4 },
+  { label: "Update", span: 4 },
+  { label: "Edit", span: 4 },
 ];
 
-/** 数字键盘行定义：每个元素可以是 string（占位）或 { label, span } */
-type NumpadCell = string | { label: string; span: number };
-
-const NUMPAD_ROWS: NumpadCell[][] = [
-  ["7", "8", "9",      "+"],
-  ["4", "5", "6",      "Thru"],
-  ["1", "2", "3",      "-"],
-  ["0", ".", "If",     "At"],
-  ["DESK", "/", { label: "Please", span: 2 }],
+const NUMPAD_KEYS: KeyDef[] = [
+  { label: "7" },
+  { label: "8" },
+  { label: "9" },
+  { label: "+", tone: "operator" },
+  { label: "4" },
+  { label: "5" },
+  { label: "6" },
+  { label: "Thru", tone: "operator" },
+  { label: "1" },
+  { label: "2" },
+  { label: "3" },
+  { label: "-", tone: "operator" },
+  { label: "0" },
+  { label: "." },
+  { label: "If", tone: "operator" },
+  { label: "At", tone: "operator" },
+  { label: "DESK" },
+  { label: "/", tone: "operator" },
+  { label: "Please", tone: "execute", span: 2 },
 ];
 
-/** 右侧按钮（Store 放最下面） */
-const RIGHT_KEYS = ["Oops", "ESC", "Clear", "Store"];
+const toneStyle: Record<KeyTone, React.CSSProperties> = {
+  neutral: {
+    background:
+      "linear-gradient(180deg, rgba(86, 88, 99, 0.96) 0%, rgba(50, 52, 60, 0.98) 48%, rgba(31, 32, 38, 1) 100%)",
+    borderColor: "rgba(208, 213, 224, 0.13)",
+    color: "#F1F3F7",
+  },
+  positive: {
+    background:
+      "linear-gradient(180deg, rgba(72, 105, 92, 0.96) 0%, rgba(45, 68, 62, 0.98) 50%, rgba(29, 43, 41, 1) 100%)",
+    borderColor: "rgba(124, 207, 176, 0.25)",
+    color: "#D9FFF0",
+  },
+  danger: {
+    background:
+      "linear-gradient(180deg, rgba(116, 67, 73, 0.96) 0%, rgba(78, 39, 46, 0.98) 50%, rgba(49, 24, 30, 1) 100%)",
+    borderColor: "rgba(238, 126, 138, 0.27)",
+    color: "#FFD7DB",
+  },
+  operator: {
+    background:
+      "linear-gradient(180deg, rgba(92, 83, 66, 0.96) 0%, rgba(62, 54, 45, 0.98) 50%, rgba(38, 35, 32, 1) 100%)",
+    borderColor: "rgba(230, 178, 96, 0.26)",
+    color: "#F6D39A",
+  },
+  execute: {
+    background:
+      "linear-gradient(180deg, rgba(235, 193, 73, 0.98) 0%, rgba(202, 151, 30, 0.99) 52%, rgba(133, 92, 13, 1) 100%)",
+    borderColor: "rgba(255, 223, 128, 0.48)",
+    color: "#18130A",
+  },
+};
 
-// ─── 样式 ───────────────────────────────
+function getPressedStyle(tone: KeyTone): React.CSSProperties {
+  if (tone === "execute") {
+    return {
+      background:
+        "linear-gradient(180deg, rgba(180, 124, 17, 1) 0%, rgba(226, 178, 55, 0.98) 100%)",
+      boxShadow:
+        "inset 0 2px 7px rgba(46, 31, 4, 0.42), inset 0 -1px 0 rgba(255, 236, 165, 0.16)",
+    };
+  }
 
-function btnStyle(warn?: boolean, pressed?: boolean): React.CSSProperties {
-  const base = warn
-    ? "linear-gradient(180deg, #5a2020 0%, #3a1010 100%)"
-    : "linear-gradient(180deg, #3c3c44 0%, #2a2a32 100%)";
-  const active = warn
-    ? "linear-gradient(180deg, #3a1010 0%, #5a2020 100%)"
-    : "linear-gradient(180deg, #2a2a32 0%, #3c3c44 100%)";
   return {
-    height: BTN_HEIGHT,
-    border: "1px solid var(--lx-stroke)",
-    borderRadius: "var(--lx-radius-xs)",
-    background: pressed ? active : base,
-    color: warn ? "#ff9090" : "var(--lx-fg-primary)",
-    fontWeight: 600,
-    fontSize: BTN_FONT,
-    cursor: "pointer",
-    userSelect: "none" as const,
-    whiteSpace: "nowrap" as const,
-    padding: "0 4px",
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-    transition: "background 0.12s, transform 0.12s",
-    boxShadow: pressed
-      ? "0 0 1px rgba(0,0,0,0.5), inset 0 1px 2px rgba(0,0,0,0.3)"
-      : "0 1px 2px rgba(0,0,0,0.35), inset 0 1px 0 rgba(255,255,255,0.04)",
-    fontFamily: "inherit",
-    transform: pressed ? "translateY(1px)" : undefined,
+    filter: "brightness(0.92) saturate(0.96)",
+    boxShadow:
+      "inset 0 2px 7px rgba(0, 0, 0, 0.46), inset 0 -1px 0 rgba(255, 255, 255, 0.05)",
   };
 }
 
-function isOp(key: string) {
-  return ["+", "Thru", "-", "At", "/"].includes(key);
+function keyStyle(key: KeyDef, isPressed: boolean): React.CSSProperties {
+  const tone = key.tone ?? "neutral";
+  const numeric = /^[0-9.]$/.test(key.label);
+  const depth = isPressed
+    ? getPressedStyle(tone).boxShadow
+    : "inset 0 1px 1px rgba(255, 255, 255, 0.14), inset 0 -7px 13px rgba(0, 0, 0, 0.22), 0 2px 4px rgba(0, 0, 0, 0.38)";
+
+  return {
+    ...toneStyle[tone],
+    ...(isPressed ? getPressedStyle(tone) : {}),
+    minWidth: 0,
+    height: KEY_HEIGHT,
+    borderWidth: 1,
+    borderStyle: "solid",
+    borderRadius: "var(--lx-radius-md)",
+    padding: key.label.length > 7 ? "0 5px" : "0 8px",
+    color: toneStyle[tone].color,
+    cursor: "pointer",
+    display: "inline-flex",
+    alignItems: "center",
+    justifyContent: "center",
+    fontFamily: numeric ? "var(--lx-font-mono)" : "inherit",
+    fontSize: numeric ? 13 : 12,
+    fontWeight: tone === "execute" || tone === "operator" ? 800 : 700,
+    lineHeight: 1,
+    textShadow:
+      tone === "execute"
+        ? "0 1px 0 rgba(255, 236, 166, 0.20)"
+        : "0 1px 1px rgba(0, 0, 0, 0.48)",
+    whiteSpace: "nowrap",
+    overflow: "hidden",
+    textOverflow: "ellipsis",
+    userSelect: "none",
+    transform: isPressed ? "translateY(1px)" : "translateY(0)",
+    boxShadow: depth,
+    transition:
+      "transform var(--lx-duration-instant) var(--lx-ease-out), filter var(--lx-duration-instant) var(--lx-ease-out), box-shadow var(--lx-duration-instant) var(--lx-ease-out), border-color var(--lx-duration-fast) var(--lx-ease-out)",
+  };
 }
 
-function isWarn(key: string) {
-  return ["Off", "Delete", "Oops", "Clear"].includes(key);
+function keyGridStyle(columns: string): React.CSSProperties {
+  return {
+    display: "grid",
+    gridTemplateColumns: columns,
+    gridAutoRows: KEY_HEIGHT,
+    gap: GAP,
+    alignContent: "start",
+    minWidth: 0,
+  };
 }
-
-// ─── 组件 ─────────────────────────────────
 
 export interface CommandButtonPanelProps {
   onButtonPress?: (label: string) => void;
@@ -91,128 +164,50 @@ export function CommandButtonPanel({ onButtonPress }: CommandButtonPanelProps) {
 
   const handlePress = useCallback(
     (label: string) => {
-      if (!label) return;
       setPressed(label);
       onButtonPress?.(label);
-      setTimeout(() => setPressed(null), 120);
+      window.setTimeout(() => setPressed(null), 120);
     },
     [onButtonPress],
   );
 
-  const renderBtn = (label: string, styleOverrides?: React.CSSProperties) => {
-    if (!label) return <div key={`ph-${Math.random()}`} style={{ visibility: "hidden" }} />;
-    const isPlease = label === "Please";
-    const warn = isWarn(label);
-    const op = isOp(label);
-    return (
-      <button
-        key={label}
-        onClick={() => handlePress(label)}
-        style={{
-          ...btnStyle(warn || op, pressed === label),
-          fontFamily: /^[0-9.]$/.test(label)
-            ? '"Fira Code", monospace'
-            : undefined,
-          fontWeight: op ? 700 : isPlease ? 700 : 600,
-          fontSize: /^[0-9]$/.test(label) ? BTN_FONT + 1 : BTN_FONT,
-          ...(isPlease
-            ? {
-                background:
-                  pressed === "Please"
-                    ? "linear-gradient(180deg, #7a5a00 0%, #b07e00 100%)"
-                    : "linear-gradient(180deg, #b07e00 0%, #7a5a00 100%)",
-                color: "#000",
-                letterSpacing: 1,
-              }
-            : {}),
-          ...styleOverrides,
-        }}
-      >
-        {label}
-      </button>
-    );
-  };
+  const renderKey = (key: KeyDef) => (
+    <button
+      key={key.label}
+      onClick={() => handlePress(key.label)}
+      style={{
+        ...keyStyle(key, pressed === key.label),
+        gridColumn: key.span ? `span ${key.span}` : undefined,
+      }}
+    >
+      {key.label}
+    </button>
+  );
 
   return (
     <div
       style={{
-        display: "flex",
-        flexDirection: "row",
-        gap: 6,
+        display: "grid",
+        gridTemplateColumns: "300px 200px",
+        gap: 8,
+        width: 522,
         height: "100%",
-        padding: "4px 6px",
+        padding: 0,
         boxSizing: "border-box",
         flexShrink: 0,
+        alignItems: "end",
       }}
     >
-      {/* 左侧：功能按钮 4列网格 */}
-      <div
-        style={{
-          display: "grid",
-          gridTemplateColumns: "repeat(4, 68px)",
-          gap: GAP,
-          flexShrink: 0,
-          alignContent: "start",
-        }}
-      >
-        {COMMAND_ROWS.flat().map((label) => renderBtn(label))}
+      <div style={{ height: 182, minWidth: 0 }}>
+        <div style={keyGridStyle("repeat(12, minmax(0, 1fr))")}>
+          {COMMAND_KEYS.map(renderKey)}
+        </div>
       </div>
 
-      {/* 中间：数字键盘 — 固定 4 列，Please 跨两列 */}
-      <div
-        style={{
-          display: "flex",
-          flexDirection: "column",
-          gap: GAP,
-          width: 148,
-          flexShrink: 0,
-        }}
-      >
-        {NUMPAD_ROWS.map((row, ri) => (
-          <div
-            key={ri}
-            style={{
-              display: "grid",
-              gridTemplateColumns: "repeat(4, 1fr)",
-              gap: GAP,
-              flex: 1,
-              minHeight: 0,
-            }}
-          >
-            {row.map((cell, ci) => {
-              if (cell === "") return <div key={`${ri}-${ci}`} style={{ visibility: "hidden" }} />;
-              if (typeof cell === "string") {
-                return renderBtn(cell);
-              }
-              // span cell（Please）
-              return (
-                <div
-                  key={cell.label}
-                  style={{ gridColumn: `span ${cell.span}` }}
-                >
-                  {renderBtn(cell.label)}
-                </div>
-              );
-            })}
-          </div>
-        ))}
-      </div>
-
-      {/* 右侧：Oops + ESC + Clear + Store 垂直排列 */}
-      <div
-        style={{
-          display: "flex",
-          flexDirection: "column",
-          gap: GAP,
-          width: 56,
-          flexShrink: 0,
-        }}
-      >
-        {RIGHT_KEYS.map((label) => (
-          <div key={label} style={{ flex: 1 }}>
-            {renderBtn(label)}
-          </div>
-        ))}
+      <div style={{ height: 182, minWidth: 0 }}>
+        <div style={keyGridStyle("repeat(4, minmax(0, 1fr))")}>
+          {NUMPAD_KEYS.map(renderKey)}
+        </div>
       </div>
     </div>
   );

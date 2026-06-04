@@ -51,9 +51,9 @@ function ModeBtn({
         minWidth: 58,
         height: 36,
         padding: "0 7px",
-        fontSize: 9,
-        fontWeight: isActive ? 600 : 500,
-        lineHeight: 1.2,
+        fontSize: 11,
+        fontWeight: isActive ? 700 : 600,
+        lineHeight: 1.12,
         textAlign: "center",
         borderRadius: "var(--lx-radius-xs)",
         border: isActive

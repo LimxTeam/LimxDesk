@@ -66,7 +66,7 @@ export function AttributeTabBar({
             style={{
               height: 20,
               padding: "0 8px",
-              fontSize: 10,
+              fontSize: 12,
               fontWeight: isActive ? 700 : 600,
               textTransform: "uppercase",
               letterSpacing: "0.04em",
