@@ -276,7 +276,7 @@ export function ConnectivitySettingsPage() {
       >
         <SearchBox value={query} onChange={setQuery} />
         <div style={{ display: "flex", gap: 6 }}>
-          <button type="button" className="lx-btn lx-btn-primary" onClick={() => setWizardOpen(true)} disabled={busy || !showLoaded || fixtureTypes.length === 0}>
+          <button type="button" className="lx-btn lx-btn-primary" onClick={() => setWizardOpen(true)} disabled={busy || fixtureTypes.length === 0}>
             <Plus size={13} />
             添加配接
           </button>
