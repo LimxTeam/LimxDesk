@@ -16,6 +16,10 @@ interface EncoderInfoBarProps {
   attributeName?: string;
   /** 翻页信息，如 "1 of 1" */
   page?: string;
+  /** 当前属性是否存在多页可翻 */
+  canPage?: boolean;
+  /** 点击属性名时翻页 */
+  onAttributeClick?: () => void;
   /** 受控：当前模式 "single" | "feature" */
   mode?: "single" | "feature";
   onModeChange?: (mode: "single" | "feature") => void;
@@ -24,6 +28,8 @@ interface EncoderInfoBarProps {
 export function EncoderInfoBar({
   attributeName = "Dimmer",
   page = "1 of 1",
+  canPage = false,
+  onAttributeClick,
   mode: controlledMode,
   onModeChange,
 }: EncoderInfoBarProps) {
@@ -50,22 +56,55 @@ export function EncoderInfoBar({
       }}
     >
       {/* 属性名 + 翻页 */}
-      <span
+      <div
         style={{
-          fontSize: 10,
-          fontWeight: 600,
-          color: "var(--lx-fg-secondary)",
+          display: "flex",
+          alignItems: "center",
+          gap: 4,
           whiteSpace: "nowrap",
         }}
       >
-        {attributeName} {page}
-      </span>
+        <button
+          type="button"
+          onClick={canPage ? onAttributeClick : undefined}
+          aria-disabled={!canPage}
+          title={canPage ? "点击切换下一页属性" : undefined}
+          style={{
+            padding: 0,
+            border: "none",
+            background: "transparent",
+            fontSize: 12,
+            fontWeight: 700,
+            color: canPage ? "var(--lx-accent-bright)" : "var(--lx-fg-secondary)",
+            whiteSpace: "nowrap",
+            cursor: canPage ? "pointer" : "default",
+            lineHeight: 1,
+            textDecoration: canPage ? "underline" : "none",
+            textUnderlineOffset: "2px",
+            textDecorationColor: canPage ? "var(--lx-stroke-accent)" : "transparent",
+            opacity: canPage ? 1 : 0.92,
+          }}
+        >
+          {attributeName}
+        </button>
+
+        <span
+          style={{
+            fontSize: 12,
+            fontWeight: 700,
+            color: "var(--lx-fg-secondary)",
+            whiteSpace: "nowrap",
+          }}
+        >
+          {page}
+        </span>
+      </div>
 
       {/* Link Resolution 标签 */}
       <span
         style={{
-          fontSize: 9,
-          fontWeight: 500,
+          fontSize: 11,
+          fontWeight: 600,
           color: "var(--lx-fg-muted)",
           whiteSpace: "nowrap",
           userSelect: "none",
@@ -78,8 +117,8 @@ export function EncoderInfoBar({
       <button
         onClick={toggleMode}
         style={{
-          fontSize: 9,
-          fontWeight: 600,
+          fontSize: 11,
+          fontWeight: 700,
           padding: "0 8px",
           height: 18,
           borderRadius: "var(--lx-radius-xs)",
