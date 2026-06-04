@@ -4,20 +4,24 @@ import {
 } from "lucide-react";
 import { openSettingsWindow } from "@limxdesk/settings";
 
-const NAV_ITEMS = [
-  { id: "power",   icon: Zap, label: "" },
-  { id: "setup",   icon: Settings, label: "", action: () => void openSettingsWindow() },
-  { id: "library", icon: FolderOpen, label: "" },
-  { id: "faders",  icon: SlidersHorizontal, label: "" },
-  { id: "groups",  icon: Group, label: "" },
-  { id: "chases",  icon: GitBranch, label: "" },
-  { id: "cues",    icon: ListOrdered, label: "" },
-  { id: "screen",  icon: Monitor, label: "" },
-  { id: "help",    icon: HelpCircle, label: "" },
-  { id: "filter",  icon: Filter, label: "" },
-];
+interface LeftSidebarProps {
+  onOpenShowFiles?: () => void;
+}
 
-export function LeftSidebar() {
+export function LeftSidebar({ onOpenShowFiles }: LeftSidebarProps) {
+  const navItems = [
+    { id: "power",   icon: Zap, label: "电源" },
+    { id: "setup",   icon: Settings, label: "设置", action: () => void openSettingsWindow() },
+    { id: "library", icon: FolderOpen, label: "秀文件", action: onOpenShowFiles },
+    { id: "faders",  icon: SlidersHorizontal, label: "推杆" },
+    { id: "groups",  icon: Group, label: "编组" },
+    { id: "chases",  icon: GitBranch, label: "追逐" },
+    { id: "cues",    icon: ListOrdered, label: "Cue" },
+    { id: "screen",  icon: Monitor, label: "屏幕" },
+    { id: "help",    icon: HelpCircle, label: "帮助" },
+    { id: "filter",  icon: Filter, label: "过滤" },
+  ];
+
   return (
     <div
       style={{
@@ -29,14 +33,14 @@ export function LeftSidebar() {
         gap: 2,
       }}
     >
-      {NAV_ITEMS.map((item) => {
+      {navItems.map((item) => {
         return (
           <button
             key={item.id}
             onClick={() => {
               item.action?.();
             }}
-            title={item.id}
+            title={item.label}
             style={{
               width: 36,
               height: 36,

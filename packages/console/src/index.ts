@@ -15,3 +15,5 @@ export { GrandMaster } from "./components/GrandMaster";
 export { ResolutionSelector } from "./components/ResolutionSelector";
 export { EncoderInfoBar } from "./components/EncoderInfoBar";
 export { CommandButtonPanel } from "./components/CommandButtonPanel";
+export { ShowFileDialog } from "./components/ShowFileDialog";
+export type { ShowFileDialogProps } from "./components/ShowFileDialog";

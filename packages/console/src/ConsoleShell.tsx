@@ -9,6 +9,7 @@ import { RightSidebar } from "./RightSidebar";
 import { CommandBar } from "./CommandBar";
 import { ControlPanel } from "./ControlPanel";
 import { WorkspaceCanvas } from "./workspace/WorkspaceCanvas";
+import { ShowFileDialog } from "./components/ShowFileDialog";
 
 /** 侧边栏宽度过渡 */
 const SLIDE = "width 0.22s cubic-bezier(0.32, 0.72, 0, 1)";
@@ -16,6 +17,7 @@ const SLIDE = "width 0.22s cubic-bezier(0.32, 0.72, 0, 1)";
 export function ConsoleShell({ children }: { children?: React.ReactNode }) {
   const [leftCollapsed, setLeftCollapsed] = useState(false);
   const [rightCollapsed, setRightCollapsed] = useState(false);
+  const [showFileDialogOpen, setShowFileDialogOpen] = useState(false);
 
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100%", width: "100%", overflow: "hidden" }}>
@@ -33,7 +35,7 @@ export function ConsoleShell({ children }: { children?: React.ReactNode }) {
           }}
         >
           <div style={{ width: 50, height: "100%" }}>
-            <LeftSidebar />
+            <LeftSidebar onOpenShowFiles={() => setShowFileDialogOpen(true)} />
           </div>
         </div>
 
@@ -134,6 +136,11 @@ export function ConsoleShell({ children }: { children?: React.ReactNode }) {
       >
         <ControlPanel />
       </div>
+
+      <ShowFileDialog
+        open={showFileDialogOpen}
+        onClose={() => setShowFileDialogOpen(false)}
+      />
     </div>
   );
 }
