@@ -209,6 +209,7 @@ const SHAPER_ALIASES: Record<ShaperControlId, string[]> = {
 export function GroupsWindow({ config, onConfigChange }: WindowToolProps) {
   const [selection, setSelection] = useState<FixtureSelection>({ fixtureIds: [], primaryFixtureId: null, version: 0 });
   const [activeSlotId, setActiveSlotId] = useState<number | null>(null);
+  const [storeMode, setStoreMode] = useState(false);
   const [editor, setEditor] = useState<GroupSlot | null>(null);
   const slots = useMemo(() => normalizeGroupSlots(config.groups), [config.groups]);
 
@@ -252,6 +253,7 @@ export function GroupsWindow({ config, onConfigChange }: WindowToolProps) {
     };
     updateSlots(upsertSlot(slots, nextSlot));
     setActiveSlotId(id);
+    setStoreMode(false);
   }
 
   function clearSlot(id: number) {
@@ -269,12 +271,61 @@ export function GroupsWindow({ config, onConfigChange }: WindowToolProps) {
     });
   }
 
+  function handleSlotClick(id: number, slot: GroupSlot | undefined) {
+    if (storeMode) {
+      storeSlot(id);
+      return;
+    }
+    if (slot) {
+      void recallSlot(slot);
+    }
+  }
+
   return (
     <ToolWindowShell
       title="Groups"
       subtitle={`${slots.length}/${GROUP_SLOT_COUNT} stored`}
-      right={<span className="lx-code">{selection.fixtureIds.length} selected</span>}
+      right={
+        <div style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
+          <button
+            type="button"
+            className={storeMode ? "lx-btn lx-btn-primary" : "lx-btn lx-btn-ghost"}
+            disabled={selection.fixtureIds.length === 0}
+            onClick={() => setStoreMode((value) => !value)}
+          >
+            Store
+          </button>
+          <span className="lx-code">{selection.fixtureIds.length} selected</span>
+        </div>
+      }
     >
+      <div
+        style={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+          gap: 10,
+          padding: "6px 8px",
+          borderBottom: "1px solid var(--lx-stroke)",
+          background: storeMode ? "rgba(245,184,77,0.10)" : "rgba(255,255,255,0.018)",
+          color: storeMode ? "var(--lx-accent-bright)" : "var(--lx-fg-tertiary)",
+          fontSize: 10,
+          fontWeight: 800,
+          letterSpacing: "0.06em",
+          textTransform: "uppercase",
+        }}
+      >
+        <span>
+          {storeMode
+            ? "Store mode: click a slot to save current fixture selection"
+            : "Recall mode: click stored groups to select fixtures"}
+        </span>
+        {storeMode ? (
+          <button type="button" className="lx-btn lx-btn-ghost" onClick={() => setStoreMode(false)}>
+            Cancel Store
+          </button>
+        ) : null}
+      </div>
       <div style={poolGridStyle}>
         {Array.from({ length: GROUP_SLOT_COUNT }, (_, index) => {
           const id = index + 1;
@@ -282,8 +333,8 @@ export function GroupsWindow({ config, onConfigChange }: WindowToolProps) {
           return (
             <PoolTileButton
               key={id}
-              title={slot ? `Recall Group ${id}` : `Store Group ${id}`}
-              onClick={() => (slot ? void recallSlot(slot) : storeSlot(id))}
+              title={storeMode ? `Store Group ${id}` : slot ? `Recall Group ${id}` : `Empty Group ${id}`}
+              onClick={() => handleSlotClick(id, slot)}
               onContextMenu={(event) => {
                 event.preventDefault();
                 setEditor(slot ?? createEmptyGroupSlot(id));
@@ -293,11 +344,17 @@ export function GroupsWindow({ config, onConfigChange }: WindowToolProps) {
                 appearance={slot?.appearance ?? createDefaultNamedAppearance(`Group ${id}`)}
                 fallbackLabel={String(id)}
                 empty={!slot}
-                active={activeSlotId === id}
+                active={activeSlotId === id || storeMode}
                 height={46}
                 compact
               />
-              <PoolMeta>{slot ? `${slot.fixtureIds.length} fixtures` : String(id)}</PoolMeta>
+              <PoolMeta>
+                {slot
+                  ? `${slot.fixtureIds.length} fixtures`
+                  : storeMode
+                    ? "target"
+                    : String(id)}
+              </PoolMeta>
             </PoolTileButton>
           );
         })}
