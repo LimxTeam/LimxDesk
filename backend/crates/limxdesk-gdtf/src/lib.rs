@@ -86,10 +86,18 @@ pub struct GdtfModeAttributeSummary {
     pub feature_group: String,
     pub occurrence_count: u16,
     pub module_ids: Vec<String>,
+    pub dmx_slots: Vec<GdtfAttributeDmxSlotSummary>,
     pub min_value: Option<f64>,
     pub max_value: Option<f64>,
     pub default_value: Option<f64>,
     pub value_kind: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GdtfAttributeDmxSlotSummary {
+    pub module_id: Option<String>,
+    pub offsets: Vec<u16>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -427,15 +435,18 @@ fn summarize_mode_attributes(
             })
             .map(|module| module.id.clone())
             .collect::<Vec<_>>();
-        let occurrence_count = occurrences
-            .iter()
-            .filter(|item| item.name == occurrence.name)
-            .count()
-            .min(u16::MAX as usize) as u16;
         let matching = occurrences
             .iter()
             .filter(|item| item.name == occurrence.name)
             .collect::<Vec<_>>();
+        let dmx_slots = matching
+            .iter()
+            .map(|item| GdtfAttributeDmxSlotSummary {
+                module_id: module_for_occurrence(item, sub_fixtures),
+                offsets: item.offsets.clone(),
+            })
+            .collect::<Vec<_>>();
+        let occurrence_count = matching.len().min(u16::MAX as usize) as u16;
         let physical_values = matching
             .iter()
             .flat_map(|item| [item.physical_from, item.physical_to])
@@ -456,6 +467,7 @@ fn summarize_mode_attributes(
             feature_group: occurrence.feature_group.clone(),
             occurrence_count,
             module_ids,
+            dmx_slots,
             min_value,
             max_value,
             default_value,
@@ -464,6 +476,23 @@ fn summarize_mode_attributes(
     }
 
     attributes
+}
+
+fn module_for_occurrence(
+    occurrence: &ChannelAttributeOccurrence,
+    sub_fixtures: &[GdtfModeSubFixtureSummary],
+) -> Option<String> {
+    let first_offset = occurrence.offsets.iter().copied().min()?;
+    sub_fixtures
+        .iter()
+        .find(|module| {
+            let Some(first_address) = module.first_address else {
+                return false;
+            };
+            let last_address = first_address.saturating_add(module.channel_count.saturating_sub(1));
+            first_offset >= first_address && first_offset <= last_address
+        })
+        .map(|module| module.id.clone())
 }
 
 fn infer_sub_fixtures(

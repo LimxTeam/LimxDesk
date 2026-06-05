@@ -1,4 +1,4 @@
-use crate::{events, fixture_selection::FixtureSelectionState};
+use crate::{events, fixture_selection::FixtureSelectionState, output, show::ShowRuntimeState};
 use limxdesk_fixture_selection::FixtureSelectionMode;
 use limxdesk_programmer::{
     Programmer, ProgrammerClearResult, ProgrammerClearTarget, ProgrammerMode,
@@ -110,6 +110,8 @@ pub fn programmer_set_attribute_for_selection(
     request: ProgrammerSetAttributeRequest,
     programmer_state: State<'_, ProgrammerState>,
     selection_state: State<'_, FixtureSelectionState>,
+    show_state: State<'_, ShowRuntimeState>,
+    output_state: State<'_, output::OutputState>,
     app: AppHandle,
 ) -> Result<Programmer, String> {
     let selection = selection_state.current()?;
@@ -119,6 +121,9 @@ pub fn programmer_set_attribute_for_selection(
         .map_err(|error| error.to_string())?;
     let programmer = programmer_state.set_current(programmer)?;
     events::emit_programmer_changed(&app, &programmer);
+    if let Err(error) = output::send_current_output(&show_state, &programmer_state, &output_state) {
+        tracing::warn!("failed to send programmer output: {error}");
+    }
     Ok(programmer)
 }
 

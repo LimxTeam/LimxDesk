@@ -6,8 +6,11 @@ version = 4
 name = "LimxDesk"
 version = "0.1.0"
 dependencies = [
+ "limxdesk-artnet",
+ "limxdesk-dmx",
  "limxdesk-fixture-selection",
  "limxdesk-fixture-types",
+ "limxdesk-network",
  "limxdesk-patch",
  "limxdesk-platform",
  "limxdesk-programmer",
@@ -1818,6 +1821,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "limxdesk-artnet"
+version = "0.1.0"
+dependencies = [
+ "serde",
+]
+
+[[package]]
+name = "limxdesk-dmx"
+version = "0.1.0"
+dependencies = [
+ "serde",
+]
+
+[[package]]
 name = "limxdesk-fixture-selection"
 version = "0.1.0"
 dependencies = [
@@ -1842,6 +1859,13 @@ dependencies = [
  "serde",
  "uuid",
  "zip",
+]
+
+[[package]]
+name = "limxdesk-network"
+version = "0.1.0"
+dependencies = [
+ "serde",
 ]
 
 [[package]]

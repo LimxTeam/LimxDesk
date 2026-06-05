@@ -1,7 +1,8 @@
 use limxdesk_gdtf::{
     create_gdtf, create_gdtf_bytes as create_gdtf_archive_bytes, read_gdtf, read_gdtf_bytes,
-    update_gdtf, update_gdtf_bytes as update_gdtf_archive_bytes, GdtfError, GdtfFixtureDraft,
-    GdtfFixtureSummary, GdtfModeAttributeSummary, GdtfModeSubFixtureSummary, GDTF_EXTENSION,
+    update_gdtf, update_gdtf_bytes as update_gdtf_archive_bytes, GdtfAttributeDmxSlotSummary,
+    GdtfError, GdtfFixtureDraft, GdtfFixtureSummary, GdtfModeAttributeSummary,
+    GdtfModeSubFixtureSummary, GDTF_EXTENSION,
 };
 use limxdesk_platform::{LocalFileSystem, PlatformError, PlatformPaths};
 use serde::{Deserialize, Serialize};
@@ -100,10 +101,18 @@ pub struct FixtureModeAttributeEntry {
     pub feature_group: String,
     pub occurrence_count: u16,
     pub module_ids: Vec<String>,
+    pub dmx_slots: Vec<FixtureAttributeDmxSlotEntry>,
     pub min_value: Option<f64>,
     pub max_value: Option<f64>,
     pub default_value: Option<f64>,
     pub value_kind: String,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct FixtureAttributeDmxSlotEntry {
+    pub module_id: Option<String>,
+    pub offsets: Vec<u16>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -369,10 +378,20 @@ impl From<GdtfModeAttributeSummary> for FixtureModeAttributeEntry {
             feature_group: value.feature_group,
             occurrence_count: value.occurrence_count,
             module_ids: value.module_ids,
+            dmx_slots: value.dmx_slots.into_iter().map(Into::into).collect(),
             min_value: value.min_value,
             max_value: value.max_value,
             default_value: value.default_value,
             value_kind: value.value_kind,
+        }
+    }
+}
+
+impl From<GdtfAttributeDmxSlotSummary> for FixtureAttributeDmxSlotEntry {
+    fn from(value: GdtfAttributeDmxSlotSummary) -> Self {
+        Self {
+            module_id: value.module_id,
+            offsets: value.offsets,
         }
     }
 }

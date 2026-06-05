@@ -31,6 +31,7 @@ mod events;
 mod fixture_selection;
 mod fixture_types;
 mod layout;
+mod output;
 mod patch;
 mod programmer;
 mod show;
@@ -45,6 +46,7 @@ pub fn run() {
 
     tauri::Builder::default()
         .manage(fixture_selection::FixtureSelectionState::default())
+        .manage(output::OutputState::default())
         .manage(programmer::ProgrammerState::default())
         .manage(show::ShowRuntimeState::default())
         .plugin(tauri_plugin_shell::init())
@@ -94,6 +96,10 @@ pub fn run() {
             programmer::programmer_clear,
             programmer::programmer_store_values,
             programmer::programmer_reset,
+            output::output_get_targets,
+            output::output_set_targets,
+            output::output_render_dmx,
+            output::output_send_current,
             patch::patch_load_current_show,
             patch::patch_save_current_show,
             patch::patch_apply_wizard,
