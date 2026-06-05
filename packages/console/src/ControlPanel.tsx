@@ -1,12 +1,14 @@
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { dynamicIsland } from "@limxdesk/notifications";
 import { AttributeTabBar } from "./components/AttributeTabBar";
 import { ToolButtonGroup } from "./components/ToolButtonGroup";
 import { BigEncoderWheel } from "./components/BigEncoderWheel";
 import { ModeButtonBar } from "./components/ModeButtonBar";
 import { CommandButtonPanel } from "./components/CommandButtonPanel";
 import { EncoderInfoBar } from "./components/EncoderInfoBar";
+import { clearWorkspaceRuntimeCache } from "./workspace/workspaceRuntime";
 import type { AttributeTab } from "./components/AttributeTabBar";
 
 interface EncoderParam {
@@ -403,13 +405,49 @@ export function ControlPanel() {
   }
 
   function handleCommandButton(label: string) {
-    if (label !== "Clear") return;
-    clearEncoderWriteState();
-    void invoke("programmer_clear", { target: "contextual" })
-      .then(() => refreshRuntimeData())
-      .catch((error) => {
-        console.error("Failed to clear programmer", error);
+    if (label === "Clear") {
+      clearEncoderWriteState();
+      void invoke("programmer_clear", { target: "contextual" })
+        .then(() => refreshRuntimeData())
+        .catch((error) => {
+          console.error("Failed to clear programmer", error);
+        });
+      return;
+    }
+
+    if (label === "Store") {
+      void storeSingleStepProgram();
+    }
+  }
+
+  async function storeSingleStepProgram() {
+    try {
+      clearEncoderWriteState();
+      const result = await invoke<{ sequence: { name: string; cues: unknown[] } }>(
+        "sequence_store_single_step_program",
+        {
+          request: {
+            sequenceId: null,
+            name: null,
+            storeMode: "overwrite",
+          },
+        },
+      );
+      clearWorkspaceRuntimeCache(["frames"]);
+      dynamicIsland.show({
+        type: "success",
+        title: "单步程序已保存",
+        subtitle: `${result.sequence.name} / ${result.sequence.cues.length} cue`,
+        duration: 1800,
       });
+    } catch (error) {
+      dynamicIsland.show({
+        type: "error",
+        title: "保存单步程序失败",
+        subtitle: String(error),
+        duration: 4200,
+      });
+    }
   }
 
   return (
