@@ -1498,7 +1498,6 @@ function VerticalRail({
         style={verticalRailTrackStyle}
       >
         <div style={{ ...verticalRailFillStyle, height: `${railValue}%` }} />
-        <div style={{ ...verticalRailThumbStyle, bottom: `calc(5px + (${railValue}% * 0.9))` }} />
       </div>
       <span className="lx-code" style={verticalRailValueStyle}>{Math.round(value)}</span>
     </div>
@@ -1692,7 +1691,7 @@ function colorBoardStyle(state: ColorPickerState): React.CSSProperties {
     border: "1px solid rgba(255,255,255,0.08)",
     borderRadius: "var(--lx-radius-md)",
     background:
-      "linear-gradient(180deg, rgba(255,255,255,0.18), rgba(255,255,255,0.03) 38%, rgba(0,0,0,0.70) 100%), linear-gradient(90deg, #ff0000 0%, #ffff00 16.6%, #00ff00 33.2%, #00ffff 49.8%, #0000ff 66.4%, #ff00ff 83.1%, #ff0000 100%)",
+      "linear-gradient(180deg, rgba(0,0,0,0) 0%, rgba(0,0,0,1) 100%), linear-gradient(90deg, #fff 0%, rgba(255,255,255,0) 100%), linear-gradient(90deg, #ff0000 0%, #ffff00 16.6%, #00ff00 33.2%, #00ffff 49.8%, #0000ff 66.4%, #ff00ff 83.1%, #ff0000 100%)",
     boxShadow: `inset 0 0 0 1px ${colorCss(state.values)}`,
     cursor: "crosshair",
   };
@@ -1939,18 +1938,6 @@ const verticalRailFillStyle: React.CSSProperties = {
   right: 0,
   bottom: 0,
   background: "linear-gradient(180deg, rgba(168,78,237,0.84), rgba(77,163,245,0.58))",
-};
-
-const verticalRailThumbStyle: React.CSSProperties = {
-  position: "absolute",
-  left: 8,
-  right: 8,
-  height: 8,
-  transform: "translateY(50%)",
-  borderRadius: 999,
-  background: "rgba(255,255,255,0.92)",
-  border: "1px solid rgba(0,0,0,0.36)",
-  boxShadow: "0 0 8px rgba(255,255,255,0.16)",
 };
 
 const verticalRailValueStyle: React.CSSProperties = {
