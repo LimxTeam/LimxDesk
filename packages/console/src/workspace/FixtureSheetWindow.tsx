@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
@@ -166,6 +166,12 @@ export function FixtureSheetWindow() {
     blind: false,
     version: 0,
   });
+  const viewRef = useRef(view);
+  const pendingProgrammerRef = useRef<Programmer | null>(null);
+  const programmerFrameRef = useRef<number | null>(null);
+  const frameLoadScheduledRef = useRef<number | null>(null);
+  const frameLoadInFlightRef = useRef(false);
+  const frameLoadPendingRef = useRef(false);
 
   const rows = useMemo(
     () => buildRows(fixtures, fixtureTypes, expandedFixtureIds),
@@ -184,25 +190,35 @@ export function FixtureSheetWindow() {
   }, [primaryId, rows]);
   const attributeGroups = useMemo(() => buildAttributeGroups(referenceMode), [referenceMode]);
   const activeValuesByFixture = useMemo(() => programmerActiveValuesByFixture(programmer), [programmer]);
+  const activeValuesByRow = useMemo(
+    () => buildActiveValuesByRow(rows, activeValuesByFixture),
+    [activeValuesByFixture, rows],
+  );
   const visibleRows = useMemo(() => {
     const needle = query.trim().toLowerCase();
     if (!needle) return rows;
     return rows.filter((row) => {
-      const activeText = activeValuesForRow(row, activeValuesByFixture)
+      const activeText = (activeValuesByRow.get(row.id) ?? [])
         .map((value) => `${value.attribute} ${formatProgrammerValue(value)}`)
         .join(" ");
       return `${row.fidLabel} ${row.name} ${row.subFixtureName} ${row.fixture.fixtureTypeName} ${row.fixture.modeName} ${row.patchLabel} ${row.fixture.stage} ${activeText}`
         .toLowerCase()
         .includes(needle);
     });
-  }, [activeValuesByFixture, query, rows]);
+  }, [activeValuesByRow, query, rows]);
+
+  useEffect(() => {
+    viewRef.current = view;
+    if (view === "dmx") {
+      requestFrameLoad();
+    }
+  }, [view]);
 
   useEffect(() => {
     void loadFixtureTypes();
     void loadPatch();
     void loadSelection();
     void loadProgrammer();
-    void loadFrames();
   }, []);
 
   useEffect(() => {
@@ -213,18 +229,18 @@ export function FixtureSheetWindow() {
       const patchChanged = await listen("patch:changed", () => {
         clearWorkspaceRuntimeCache(["patch", "frames"]);
         void loadPatch();
-        void loadFrames();
+        requestFrameLoad();
       });
       const fixtureTypesChanged = await listen("fixture-types:changed", () => {
         clearWorkspaceRuntimeCache(["fixtureTypes", "frames"]);
         void loadFixtureTypes();
-        void loadFrames();
+        requestFrameLoad();
       });
       const showLoaded = await listen("show:loaded", () => {
         clearWorkspaceRuntimeCache();
         void loadFixtureTypes();
         void loadPatch();
-        void loadFrames();
+        requestFrameLoad();
       });
       const showDeleted = await listen("show:deleted", () => {
         clearWorkspaceRuntimeCache();
@@ -248,12 +264,12 @@ export function FixtureSheetWindow() {
       const programmerChanged = await listen<Programmer>("programmer:changed", (event) => {
         setWorkspaceRuntimeValue("programmer", event.payload);
         clearWorkspaceRuntimeCache(["frames"]);
-        setProgrammer(event.payload);
-        void loadFrames();
+        scheduleProgrammerUpdate(event.payload);
+        requestFrameLoad();
       });
       const outputSent = await listen("output:sent", () => {
         clearWorkspaceRuntimeCache(["frames"]);
-        void loadFrames();
+        requestFrameLoad();
       });
 
       if (!active) {
@@ -273,6 +289,14 @@ export function FixtureSheetWindow() {
     return () => {
       active = false;
       unlisteners.forEach((unlisten) => unlisten());
+      if (programmerFrameRef.current !== null) {
+        window.cancelAnimationFrame(programmerFrameRef.current);
+        programmerFrameRef.current = null;
+      }
+      if (frameLoadScheduledRef.current !== null) {
+        window.cancelAnimationFrame(frameLoadScheduledRef.current);
+        frameLoadScheduledRef.current = null;
+      }
     };
   }, []);
 
@@ -330,6 +354,18 @@ export function FixtureSheetWindow() {
     }
   }
 
+  function scheduleProgrammerUpdate(nextProgrammer: Programmer) {
+    pendingProgrammerRef.current = nextProgrammer;
+    if (programmerFrameRef.current !== null) return;
+
+    programmerFrameRef.current = window.requestAnimationFrame(() => {
+      programmerFrameRef.current = null;
+      const pending = pendingProgrammerRef.current;
+      pendingProgrammerRef.current = null;
+      if (pending) setProgrammer(pending);
+    });
+  }
+
   async function loadFrames() {
     try {
       const nextFrames = await loadCachedDmxFrames<DmxUniverseFrame[]>();
@@ -338,6 +374,27 @@ export function FixtureSheetWindow() {
     } catch {
       setFrames([]);
     }
+  }
+
+  function requestFrameLoad() {
+    if (viewRef.current !== "dmx") return;
+    if (frameLoadInFlightRef.current) {
+      frameLoadPendingRef.current = true;
+      return;
+    }
+    if (frameLoadScheduledRef.current !== null) return;
+
+    frameLoadScheduledRef.current = window.requestAnimationFrame(() => {
+      frameLoadScheduledRef.current = null;
+      frameLoadInFlightRef.current = true;
+      void loadFrames().finally(() => {
+        frameLoadInFlightRef.current = false;
+        if (frameLoadPendingRef.current) {
+          frameLoadPendingRef.current = false;
+          requestFrameLoad();
+        }
+      });
+    });
   }
 
   function toggleExpanded(event: React.MouseEvent<HTMLButtonElement>, fixtureId: string) {
@@ -483,7 +540,7 @@ export function FixtureSheetWindow() {
               const fixture = row.fixture;
               const selected = selectedIds.includes(row.id);
               const primary = row.id === primaryId;
-              const activeValues = activeValuesForRow(row, activeValuesByFixture);
+              const activeValues = activeValuesByRow.get(row.id) ?? [];
               const active = activeValues.length > 0;
               return (
                 <tr
@@ -1124,19 +1181,24 @@ function programmerActiveValuesByFixture(programmer: Programmer) {
   return valuesByFixture;
 }
 
-function activeValuesForRow(row: FixtureSheetRow, valuesByFixture: Map<string, ProgrammerValue[]>) {
-  if (row.isSubFixture) {
-    return valuesByFixture.get(row.id) ?? [];
+function buildActiveValuesByRow(
+  rows: FixtureSheetRow[],
+  valuesByFixture: Map<string, ProgrammerValue[]>,
+) {
+  const valuesByRow = new Map<string, ProgrammerValue[]>();
+  for (const row of rows) {
+    valuesByRow.set(row.id, [...(valuesByFixture.get(row.id) ?? [])]);
   }
 
-  const values = [...(valuesByFixture.get(row.fixture.id) ?? [])];
-  const prefix = `${row.fixture.id}::sub:`;
   for (const [id, fixtureValues] of valuesByFixture) {
-    if (id.startsWith(prefix)) {
-      values.push(...fixtureValues);
-    }
+    const parentId = parentFixtureId(id);
+    if (parentId === id) continue;
+    const parentValues = valuesByRow.get(parentId) ?? [];
+    parentValues.push(...fixtureValues);
+    valuesByRow.set(parentId, parentValues);
   }
-  return values;
+
+  return valuesByRow;
 }
 
 function ActiveValueChips({ values }: { values: ProgrammerValue[] }) {
