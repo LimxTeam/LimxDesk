@@ -30,6 +30,8 @@ export function BigEncoderWheel({
   const lastPointerAngle = useRef(0);
   const liveRotation = useRef(rotation);
   const frame = useRef<number | null>(null);
+  const pendingRotation = useRef(rotation);
+  const pendingDelta = useRef(0);
   const containerRef = useRef<HTMLDivElement>(null);
 
   const ticks = useMemo(() => {
@@ -48,6 +50,7 @@ export function BigEncoderWheel({
 
   useEffect(() => {
     liveRotation.current = rotation;
+    pendingRotation.current = rotation;
   }, [rotation]);
 
   useEffect(() => {
@@ -75,12 +78,19 @@ export function BigEncoderWheel({
       const previous = liveRotation.current;
       const delta = next - previous;
       liveRotation.current = next;
+      pendingRotation.current = next;
+      pendingDelta.current += delta;
 
-      if (frame.current !== null) cancelAnimationFrame(frame.current);
+      if (frame.current !== null) return;
       frame.current = requestAnimationFrame(() => {
-        setInternalRotation(next);
-        onRotationChange?.(next);
-        onRotationDelta?.(delta);
+        const committedRotation = pendingRotation.current;
+        const committedDelta = pendingDelta.current;
+        pendingDelta.current = 0;
+        setInternalRotation(committedRotation);
+        onRotationChange?.(committedRotation);
+        if (Math.abs(committedDelta) > 0.0001) {
+          onRotationDelta?.(committedDelta);
+        }
         frame.current = null;
       });
     },
