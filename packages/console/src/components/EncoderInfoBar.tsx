@@ -18,6 +18,8 @@ interface EncoderInfoBarProps {
   page?: string;
   /** 当前属性是否存在多页可翻 */
   canPage?: boolean;
+  /** 当前属性页是否包含已激活 programmer 值 */
+  active?: boolean;
   /** 点击属性名时翻页 */
   onAttributeClick?: () => void;
   /** 受控：当前模式 "single" | "feature" */
@@ -29,6 +31,7 @@ export function EncoderInfoBar({
   attributeName = "Dimmer",
   page = "1 of 1",
   canPage = false,
+  active = false,
   onAttributeClick,
   mode: controlledMode,
   onModeChange,
@@ -75,7 +78,11 @@ export function EncoderInfoBar({
             background: "transparent",
             fontSize: 12,
             fontWeight: 700,
-            color: canPage ? "var(--lx-accent-bright)" : "var(--lx-fg-secondary)",
+            color: active
+              ? "var(--lx-action-bright)"
+              : canPage
+                ? "var(--lx-accent-bright)"
+                : "var(--lx-fg-secondary)",
             whiteSpace: "nowrap",
             cursor: canPage ? "pointer" : "default",
             lineHeight: 1,

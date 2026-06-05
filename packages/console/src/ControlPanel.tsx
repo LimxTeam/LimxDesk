@@ -459,6 +459,7 @@ export function ControlPanel() {
               attributeName={info.name}
               page={pageLabel}
               canPage={canPaginate}
+              active={info.encoders.some((encoder) => encoder.active)}
               onAttributeClick={handleAttributePageChange}
             />
             <ModeButtonBar />
