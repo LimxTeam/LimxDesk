@@ -1,4 +1,5 @@
 import { FixtureSheetWindow } from "./FixtureSheetWindow";
+import { DmxSheetWindow } from "./DmxSheetWindow";
 import { getWorkspaceWindowItem } from "./windowCatalog";
 import type { WorkspaceWindow } from "./types";
 
@@ -11,6 +12,10 @@ export function WindowSurface({ window }: WindowSurfaceProps) {
 
   if (window.type === "fixture-sheet") {
     return <FixtureSheetWindow />;
+  }
+
+  if (window.type === "dmx-sheet") {
+    return <DmxSheetWindow />;
   }
 
   return (

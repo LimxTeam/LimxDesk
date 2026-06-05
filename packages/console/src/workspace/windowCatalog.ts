@@ -11,6 +11,15 @@ export const WORKSPACE_WINDOW_CATALOG: WorkspaceWindowCatalogItem[] = [
     metrics: ["Universe", "Address", "Mode"],
   },
   {
+    type: "dmx-sheet",
+    title: "DMX Sheet",
+    icon: "DX",
+    accent: "#78D978",
+    blurb: "Rendered DMX universe monitor driven by patch, GDTF defaults, and programmer output.",
+    defaultSize: { w: 9, h: 6 },
+    metrics: ["Universe", "Channel", "Value"],
+  },
+  {
     type: "playback",
     title: "Playback",
     icon: "PB",

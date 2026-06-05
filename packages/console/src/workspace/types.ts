@@ -1,5 +1,6 @@
 export type WorkspaceWindowType =
   | "fixture-sheet"
+  | "dmx-sheet"
   | "playback"
   | "timecode"
   | "color-picker"

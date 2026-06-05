@@ -11,6 +11,8 @@ interface BigEncoderWheelProps {
   onRotationChange?: (deg: number) => void;
   /** 编码器增量回调。正数为顺时针，负数为逆时针。 */
   onRotationDelta?: (delta: number) => void;
+  /** 当前属性是否在 programmer 中激活 */
+  active?: boolean;
   /** 编码器直径（px） */
   size?: number;
 }
@@ -21,6 +23,7 @@ export function BigEncoderWheel({
   rotation: controlledRotation,
   onRotationChange,
   onRotationDelta,
+  active = false,
   size = 144,
 }: BigEncoderWheelProps) {
   const [internalRotation, setInternalRotation] = useState(-30);
@@ -248,6 +251,7 @@ export function BigEncoderWheel({
           linear-gradient(160deg, #3a3a40 0%, #28282e 40%, #1e1e24 100%)
         `,
         border: "1px solid rgba(255,255,255,0.06)",
+        boxShadow: active ? "0 0 0 1px rgba(120,217,120,0.55), 0 0 18px rgba(120,217,120,0.18)" : undefined,
       }}
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
@@ -323,7 +327,7 @@ export function BigEncoderWheel({
           style={{
             fontSize: 14,
             fontWeight: 700,
-            color: "#ccc",
+            color: active ? "var(--lx-action-bright)" : "#ccc",
             letterSpacing: "0.04em",
             textShadow: "0 1px 4px rgba(0,0,0,0.7)",
             lineHeight: 1,
@@ -339,7 +343,7 @@ export function BigEncoderWheel({
           style={{
             fontSize: 10,
             fontWeight: 500,
-            color: "#777",
+            color: active ? "var(--lx-fg-primary)" : "#777",
             letterSpacing: "0.02em",
             lineHeight: 1,
             position: "relative",

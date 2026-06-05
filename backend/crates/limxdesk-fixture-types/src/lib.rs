@@ -115,6 +115,7 @@ pub struct FixtureAttributeDmxSlotEntry {
     pub offsets: Vec<u16>,
     pub physical_from: Option<f64>,
     pub physical_to: Option<f64>,
+    pub default_raw: Option<f64>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -396,6 +397,7 @@ impl From<GdtfAttributeDmxSlotSummary> for FixtureAttributeDmxSlotEntry {
             offsets: value.offsets,
             physical_from: value.physical_from,
             physical_to: value.physical_to,
+            default_raw: value.default_raw,
         }
     }
 }

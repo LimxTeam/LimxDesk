@@ -12,6 +12,7 @@ import type { AttributeTab } from "./components/AttributeTabBar";
 interface EncoderParam {
   name: string;
   value: string;
+  active: boolean;
   attribute?: string;
   featureGroup?: string;
   layer?: ProgrammerLayer;
@@ -480,6 +481,7 @@ export function ControlPanel() {
                   key={`${info.name}-${enc.name}-${currentPage}-${i}`}
                   paramName={enc.name}
                   value={enc.value}
+                  active={enc.active}
                   onRotationDelta={(delta) => handleEncoderDelta(enc, delta)}
                 />
               ))
@@ -575,11 +577,14 @@ function groupAttributes(
       attribute: attribute.name,
       featureGroup: attribute.featureGroup,
       layer: "absolute",
-      value: resolveProgrammerValue(programmer, selectedId || fixture.id, attribute) ?? "--",
+      active: isProgrammerAttributeActive(programmer, selectedId || fixture.id, attribute.name),
+      value:
+        resolveProgrammerValue(programmer, selectedId || fixture.id, attribute) ??
+        formatDefaultAttributeValue(attribute),
       valueKind: attribute.valueKind,
       minValue: attribute.minValue,
       maxValue: attribute.maxValue,
-      defaultValue: attribute.defaultValue,
+      defaultValue: normalizeDefaultForProgrammer(attribute),
     });
   }
 
@@ -637,6 +642,31 @@ function resolveProgrammerValue(programmer: Programmer, fixtureId: string, attri
   return formatProgrammerScalar(match.value, attribute);
 }
 
+function isProgrammerAttributeActive(programmer: Programmer, fixtureId: string, attribute: string) {
+  const buffer = programmer.mode === "preview" ? programmer.preview : programmer.live;
+  return buffer.parts.some((part) =>
+    part.values.some((value) => value.fixtureId === fixtureId && value.attribute === attribute && value.active),
+  );
+}
+
+function formatDefaultAttributeValue(attribute: FixtureModeAttribute) {
+  const value = normalizeDefaultForProgrammer(attribute);
+  if (value === null) return "--";
+  return formatProgrammerScalar({ numeric: value, text: null }, attribute);
+}
+
+function normalizeDefaultForProgrammer(attribute: FixtureModeAttribute) {
+  const value = attribute.defaultValue;
+  if (typeof value !== "number" || !Number.isFinite(value)) return null;
+  if (attribute.valueKind === "percent") {
+    const max = attribute.maxValue;
+    if (typeof max === "number" && Number.isFinite(max) && max <= 1.0) {
+      return value * 100;
+    }
+  }
+  return value;
+}
+
 function encoderWriteKey(fixtureId: string, encoder: EncoderParam) {
   return `${fixtureId}:${encoder.attribute ?? ""}:${encoder.layer ?? "absolute"}`;
 }
@@ -683,6 +713,7 @@ function buildAttributeTabs(pageInfo: Record<string, EncoderGroup>): AttributeTa
         id,
         label: ATTRIBUTE_GROUP_LABELS[id],
         number: tabs.length + 1,
+        highlight: pageInfo[id].encoders.some((encoder) => encoder.active) ? "amber" : null,
       });
     }
   }

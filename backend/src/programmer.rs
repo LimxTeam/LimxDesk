@@ -167,6 +167,9 @@ pub fn programmer_clear(
         .clear(target, !selection.fixture_ids.is_empty());
     let programmer = programmer_state.set_current(result.programmer.clone())?;
     events::emit_programmer_changed(&app, &programmer);
+    if let Err(error) = output::request_output_send(&app) {
+        tracing::warn!("failed to request programmer output after clear: {error}");
+    }
 
     if result.clear_selection {
         let cleared_selection = selection.clear();
@@ -196,6 +199,9 @@ pub fn programmer_reset(
 ) -> Result<Programmer, String> {
     let programmer = state.set_current(Programmer::default())?;
     events::emit_programmer_changed(&app, &programmer);
+    if let Err(error) = output::request_output_send(&app) {
+        tracing::warn!("failed to request programmer output after reset: {error}");
+    }
     Ok(programmer)
 }
 

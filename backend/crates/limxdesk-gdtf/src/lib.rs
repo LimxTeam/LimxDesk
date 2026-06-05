@@ -100,6 +100,7 @@ pub struct GdtfAttributeDmxSlotSummary {
     pub offsets: Vec<u16>,
     pub physical_from: Option<f64>,
     pub physical_to: Option<f64>,
+    pub default_raw: Option<f64>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -467,6 +468,7 @@ fn summarize_mode_attributes(
                 offsets: item.offsets.clone(),
                 physical_from: item.physical_from,
                 physical_to: item.physical_to,
+                default_raw: item.default_raw,
             })
             .collect::<Vec<_>>();
         let occurrence_count = matching.len().min(u16::MAX as usize) as u16;

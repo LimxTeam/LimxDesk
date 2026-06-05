@@ -75,6 +75,7 @@ pub struct DmxAttributeSlot {
     pub offsets: Vec<u16>,
     pub physical_from: Option<f64>,
     pub physical_to: Option<f64>,
+    pub default_raw: Option<f64>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
@@ -95,6 +96,10 @@ pub struct DmxUniverseFrame {
 
 pub fn render_programmer_to_dmx(input: &DmxRenderInput) -> DmxResult<Vec<DmxUniverseFrame>> {
     let mut universes = BTreeMap::<u16, [u8; DMX_UNIVERSE_SIZE]>::new();
+
+    for fixture in &input.fixtures {
+        render_fixture_defaults(input, fixture, &mut universes)?;
+    }
 
     for value in input.programmer_values.iter().filter(|value| value.active) {
         let parent_id = parent_fixture_id(&value.fixture_id);
@@ -162,6 +167,49 @@ pub fn render_programmer_to_dmx(input: &DmxRenderInput) -> DmxResult<Vec<DmxUniv
         .collect())
 }
 
+fn render_fixture_defaults(
+    input: &DmxRenderInput,
+    fixture: &DmxFixturePatch,
+    universes: &mut BTreeMap<u16, [u8; DMX_UNIVERSE_SIZE]>,
+) -> DmxResult<()> {
+    let (Some(universe), Some(address)) = (fixture.universe, fixture.address) else {
+        return Ok(());
+    };
+    if address == 0 || address > DMX_UNIVERSE_SIZE as u16 {
+        return Err(DmxError::InvalidAddress(format!(
+            "invalid DMX address {}.{}",
+            universe, address
+        )));
+    }
+
+    let Some(mode) = resolve_mode(input, fixture) else {
+        return Ok(());
+    };
+    let universe_data = universes
+        .entry(universe)
+        .or_insert([0_u8; DMX_UNIVERSE_SIZE]);
+
+    for attribute in &mode.attributes {
+        for slot in &attribute.dmx_slots {
+            let Some(raw) = slot.default_raw else {
+                continue;
+            };
+            let dmx_bytes = encode_raw_dmx_bytes(raw, slot.offsets.len());
+            for (byte_index, offset) in slot.offsets.iter().enumerate() {
+                if *offset == 0 {
+                    continue;
+                }
+                let index = usize::from(address - 1) + usize::from(*offset - 1);
+                if index < DMX_UNIVERSE_SIZE {
+                    universe_data[index] = dmx_bytes.get(byte_index).copied().unwrap_or(0);
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
 fn resolve_mode<'a>(
     input: &'a DmxRenderInput,
     fixture: &DmxFixturePatch,
@@ -202,6 +250,18 @@ fn encode_attribute_bytes(
         vec![(value >> 8) as u8, (value & 0xff) as u8]
     } else {
         vec![(normalized * 255.0).round() as u8]
+    }
+}
+
+fn encode_raw_dmx_bytes(raw: f64, resolution: usize) -> Vec<u8> {
+    if !raw.is_finite() {
+        return vec![0; resolution.max(1)];
+    }
+    if resolution >= 2 {
+        let value = raw.round().clamp(0.0, 65_535.0) as u16;
+        vec![(value >> 8) as u8, (value & 0xff) as u8]
+    } else {
+        vec![raw.round().clamp(0.0, 255.0) as u8]
     }
 }
 
@@ -281,6 +341,7 @@ mod tests {
             offsets: vec![1, 2],
             physical_from: Some(32.5),
             physical_to: Some(-32.5),
+            default_raw: None,
         }];
         input.programmer_values[0].attribute = "Pan".to_string();
 
@@ -295,6 +356,33 @@ mod tests {
         input.programmer_values[0].numeric = Some(-32.5);
         let frames = render_programmer_to_dmx(&input).unwrap();
         assert_eq!(&frames[0].data[0..2], &[255, 255]);
+    }
+
+    #[test]
+    fn renders_fixture_defaults_without_active_programmer_values() {
+        let mut input = input("fix-1");
+        input.programmer_values.clear();
+        input.fixture_types[0].modes[0].attributes[0].dmx_slots[0].default_raw = Some(7.0);
+        input.fixture_types[0].modes[0].attributes[0].dmx_slots[1].default_raw = Some(9.0);
+
+        let frames = render_programmer_to_dmx(&input).unwrap();
+
+        assert_eq!(frames.len(), 1);
+        assert_eq!(frames[0].data[0], 7);
+        assert_eq!(frames[0].data[3], 9);
+    }
+
+    #[test]
+    fn active_programmer_values_override_fixture_defaults() {
+        let mut input = input("fix-1");
+        input.fixture_types[0].modes[0].attributes[0].dmx_slots[0].default_raw = Some(7.0);
+        input.fixture_types[0].modes[0].attributes[0].dmx_slots[1].default_raw = Some(9.0);
+        input.programmer_values[0].numeric = Some(100.0);
+
+        let frames = render_programmer_to_dmx(&input).unwrap();
+
+        assert_eq!(frames[0].data[0], 255);
+        assert_eq!(frames[0].data[3], 255);
     }
 
     fn input(fixture_id: &str) -> DmxRenderInput {
@@ -327,12 +415,14 @@ mod tests {
                                 offsets: vec![1],
                                 physical_from: Some(0.0),
                                 physical_to: Some(100.0),
+                                default_raw: None,
                             },
                             DmxAttributeSlot {
                                 module_id: Some("module-2".to_string()),
                                 offsets: vec![4],
                                 physical_from: Some(0.0),
                                 physical_to: Some(100.0),
+                                default_raw: None,
                             },
                         ],
                     }],

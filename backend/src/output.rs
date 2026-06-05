@@ -527,6 +527,7 @@ fn dmx_profiles_from_fixture_types(
                                     offsets: slot.offsets.clone(),
                                     physical_from: slot.physical_from,
                                     physical_to: slot.physical_to,
+                                    default_raw: slot.default_raw,
                                 })
                                 .collect(),
                         })

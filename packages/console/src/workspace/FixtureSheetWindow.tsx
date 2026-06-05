@@ -55,6 +55,31 @@ interface FixtureSelection {
   version: number;
 }
 
+interface Programmer {
+  live: ProgrammerBuffer;
+  preview: ProgrammerBuffer;
+  mode: "live" | "preview";
+  blind: boolean;
+  version: number;
+}
+
+interface ProgrammerBuffer {
+  selectedPartId: number;
+  parts: ProgrammerPart[];
+}
+
+interface ProgrammerPart {
+  id: number;
+  label: string | null;
+  values: ProgrammerValue[];
+}
+
+interface ProgrammerValue {
+  fixtureId: string;
+  attribute: string;
+  active: boolean;
+}
+
 interface FixtureSheetRow {
   id: string;
   fixture: PatchFixture;
@@ -64,6 +89,8 @@ interface FixtureSheetRow {
   channels: number;
   isSubFixture: boolean;
   subFixtureName: string;
+  hasSubFixtures: boolean;
+  expanded: boolean;
 }
 
 export function FixtureSheetWindow() {
@@ -74,8 +101,20 @@ export function FixtureSheetWindow() {
   const [anchorId, setAnchorId] = useState("");
   const [query, setQuery] = useState("");
   const [status, setStatus] = useState("Ready");
+  const [expandedFixtureIds, setExpandedFixtureIds] = useState<Set<string>>(() => new Set());
+  const [programmer, setProgrammer] = useState<Programmer>({
+    live: { selectedPartId: 0, parts: [] },
+    preview: { selectedPartId: 0, parts: [] },
+    mode: "live",
+    blind: false,
+    version: 0,
+  });
 
-  const rows = useMemo(() => buildRows(fixtures, fixtureTypes), [fixtures, fixtureTypes]);
+  const rows = useMemo(
+    () => buildRows(fixtures, fixtureTypes, expandedFixtureIds),
+    [expandedFixtureIds, fixtures, fixtureTypes],
+  );
+  const activeFixtureIds = useMemo(() => programmerActiveFixtureIds(programmer), [programmer]);
   const visibleRows = useMemo(() => {
     const needle = query.trim().toLowerCase();
     if (!needle) return rows;
@@ -90,6 +129,7 @@ export function FixtureSheetWindow() {
     void loadFixtureTypes();
     void loadPatch();
     void loadSelection();
+    void loadProgrammer();
   }, []);
 
   useEffect(() => {
@@ -113,6 +153,7 @@ export function FixtureSheetWindow() {
         setSelectedIds([]);
         setPrimaryId("");
         setAnchorId("");
+        setExpandedFixtureIds(new Set());
         setStatus("No show loaded");
       });
       const selectionChanged = await listen<FixtureSelection>(
@@ -122,6 +163,9 @@ export function FixtureSheetWindow() {
           setPrimaryId(event.payload.primaryFixtureId ?? "");
         },
       );
+      const programmerChanged = await listen<Programmer>("programmer:changed", (event) => {
+        setProgrammer(event.payload);
+      });
 
       if (!active) {
         patchChanged();
@@ -129,9 +173,10 @@ export function FixtureSheetWindow() {
         showLoaded();
         showDeleted();
         selectionChanged();
+        programmerChanged();
         return;
       }
-      unlisteners.push(patchChanged, fixtureTypesChanged, showLoaded, showDeleted, selectionChanged);
+      unlisteners.push(patchChanged, fixtureTypesChanged, showLoaded, showDeleted, selectionChanged, programmerChanged);
     };
 
     void register();
@@ -179,6 +224,33 @@ export function FixtureSheetWindow() {
       setPrimaryId("");
       setAnchorId("");
     }
+  }
+
+  async function loadProgrammer() {
+    try {
+      setProgrammer(await invoke<Programmer>("programmer_get"));
+    } catch {
+      setProgrammer({
+        live: { selectedPartId: 0, parts: [] },
+        preview: { selectedPartId: 0, parts: [] },
+        mode: "live",
+        blind: false,
+        version: 0,
+      });
+    }
+  }
+
+  function toggleExpanded(event: React.MouseEvent<HTMLButtonElement>, fixtureId: string) {
+    event.stopPropagation();
+    setExpandedFixtureIds((current) => {
+      const next = new Set(current);
+      if (next.has(fixtureId)) {
+        next.delete(fixtureId);
+      } else {
+        next.add(fixtureId);
+      }
+      return next;
+    });
   }
 
   function selectFixture(event: React.MouseEvent<HTMLTableRowElement>, row: FixtureSheetRow) {
@@ -285,6 +357,9 @@ export function FixtureSheetWindow() {
               const fixture = row.fixture;
               const selected = selectedIds.includes(row.id);
               const primary = row.id === primaryId;
+              const active =
+                activeFixtureIds.has(row.id) ||
+                (!row.isSubFixture && fixtureHasActiveValues(activeFixtureIds, fixture.id));
               return (
                 <tr
                   key={row.id}
@@ -295,12 +370,42 @@ export function FixtureSheetWindow() {
                       ? "rgba(240, 157, 28, 0.18)"
                       : selected
                         ? "rgba(77, 163, 245, 0.18)"
+                        : active
+                          ? "rgba(120, 217, 120, 0.10)"
                         : "transparent",
                     color: selected ? "var(--lx-fg-primary)" : "var(--lx-fg-secondary)",
                     cursor: "pointer",
+                    boxShadow: active ? "inset 3px 0 0 var(--lx-action-bright)" : undefined,
                   }}
                 >
-                  <BodyCell mono>{row.fidLabel}</BodyCell>
+                  <BodyCell mono>
+                    <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
+                      {!row.isSubFixture && row.hasSubFixtures ? (
+                        <button
+                          type="button"
+                          onClick={(event) => toggleExpanded(event, fixture.id)}
+                          title={row.expanded ? "Collapse sub-fixtures" : "Expand sub-fixtures"}
+                          style={{
+                            width: 14,
+                            height: 14,
+                            border: "1px solid var(--lx-stroke)",
+                            borderRadius: 2,
+                            background: row.expanded ? "rgba(77,163,245,0.18)" : "rgba(0,0,0,0.24)",
+                            color: "var(--lx-fg-secondary)",
+                            fontSize: 10,
+                            lineHeight: "12px",
+                            padding: 0,
+                            cursor: "pointer",
+                          }}
+                        >
+                          {row.expanded ? "-" : "+"}
+                        </button>
+                      ) : (
+                        <span style={{ width: 14 }} />
+                      )}
+                      {row.fidLabel}
+                    </span>
+                  </BodyCell>
                   <BodyCell strong={!row.isSubFixture}>{row.name}</BodyCell>
                   <BodyCell>{fixture.fixtureTypeName}</BodyCell>
                   <BodyCell>{fixture.modeName}</BodyCell>
@@ -308,7 +413,7 @@ export function FixtureSheetWindow() {
                   <BodyCell mono>{row.channels}</BodyCell>
                   <BodyCell>{fixture.stage}</BodyCell>
                   <BodyCell>
-                    <StateBadge fixture={fixture} />
+                    <StateBadge fixture={fixture} active={active} />
                   </BodyCell>
                 </tr>
               );
@@ -350,9 +455,16 @@ export function FixtureSheetWindow() {
   );
 }
 
-function buildRows(fixtures: PatchFixture[], fixtureTypes: FixtureTypeEntry[]): FixtureSheetRow[] {
+function buildRows(
+  fixtures: PatchFixture[],
+  fixtureTypes: FixtureTypeEntry[],
+  expandedFixtureIds: Set<string>,
+): FixtureSheetRow[] {
   const rows: FixtureSheetRow[] = [];
   for (const fixture of fixtures) {
+    const mode = findModeForFixture(fixture, fixtureTypes);
+    const subFixtures = mode?.subFixtures ?? [];
+    const expanded = expandedFixtureIds.has(fixture.id);
     rows.push({
       id: fixture.id,
       fixture,
@@ -362,10 +474,15 @@ function buildRows(fixtures: PatchFixture[], fixtureTypes: FixtureTypeEntry[]): 
       channels: fixture.channels,
       isSubFixture: false,
       subFixtureName: "",
+      hasSubFixtures: subFixtures.length > 0,
+      expanded,
     });
 
-    const mode = findModeForFixture(fixture, fixtureTypes);
-    for (const subFixture of mode?.subFixtures ?? []) {
+    if (!expanded) {
+      continue;
+    }
+
+    for (const subFixture of subFixtures) {
       rows.push({
         id: `${fixture.id}::sub:${subFixture.id}`,
         fixture,
@@ -375,6 +492,8 @@ function buildRows(fixtures: PatchFixture[], fixtureTypes: FixtureTypeEntry[]): 
         channels: subFixture.channelCount,
         isSubFixture: true,
         subFixtureName: subFixture.name,
+        hasSubFixtures: false,
+        expanded: false,
       });
     }
   }
@@ -454,12 +573,14 @@ function BodyCell({
   );
 }
 
-function StateBadge({ fixture }: { fixture: PatchFixture }) {
+function StateBadge({ fixture, active }: { fixture: PatchFixture; active: boolean }) {
   const patched = fixture.universe !== null && fixture.address !== null;
   const overflow = patched && fixture.address !== null && fixture.address + fixture.channels - 1 > 512;
-  const label = overflow ? "Overflow" : patched ? "Patched" : "Open";
+  const label = active ? "Active" : overflow ? "Overflow" : patched ? "Patched" : "Open";
   const color = overflow
     ? "var(--lx-status-error)"
+    : active
+      ? "var(--lx-action-bright)"
     : patched
       ? "var(--lx-action-bright)"
       : "var(--lx-accent-bright)";
@@ -498,4 +619,26 @@ function formatSubPatch(fixture: PatchFixture, subFixture: FixtureModeSubFixture
 
 function parentFixtureId(id: string) {
   return id.split("::sub:")[0] ?? id;
+}
+
+function programmerActiveFixtureIds(programmer: Programmer) {
+  const buffer = programmer.mode === "preview" ? programmer.preview : programmer.live;
+  const ids = new Set<string>();
+  for (const part of buffer.parts) {
+    for (const value of part.values) {
+      if (value.active) {
+        ids.add(value.fixtureId);
+      }
+    }
+  }
+  return ids;
+}
+
+function fixtureHasActiveValues(activeFixtureIds: Set<string>, fixtureId: string) {
+  if (activeFixtureIds.has(fixtureId)) return true;
+  const prefix = `${fixtureId}::sub:`;
+  for (const id of activeFixtureIds) {
+    if (id.startsWith(prefix)) return true;
+  }
+  return false;
 }
