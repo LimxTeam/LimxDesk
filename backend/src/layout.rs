@@ -82,6 +82,14 @@ pub struct NamedImage {
     pub fit: String,
     #[serde(default = "default_image_opacity")]
     pub opacity: f32,
+    #[serde(default = "default_image_scale")]
+    pub scale: f32,
+    #[serde(default)]
+    pub offset_x: f32,
+    #[serde(default)]
+    pub offset_y: f32,
+    #[serde(default)]
+    pub rotation: f32,
 }
 
 impl Default for NamedAppearance {
@@ -259,6 +267,15 @@ fn normalize_appearance(mut appearance: NamedAppearance, slot_id: u8) -> NamedAp
         image.data_url = image.data_url.trim().to_string();
         if image.data_url.is_empty() {
             appearance.image = None;
+        } else {
+            image.opacity = image.opacity.clamp(0.05, 1.0);
+            image.scale = image.scale.clamp(0.2, 3.0);
+            image.offset_x = image.offset_x.clamp(-100.0, 100.0);
+            image.offset_y = image.offset_y.clamp(-100.0, 100.0);
+            image.rotation = image.rotation.clamp(-180.0, 180.0);
+            if image.fit != "contain" {
+                image.fit = default_image_fit();
+            }
         }
     }
     appearance
@@ -297,4 +314,8 @@ fn default_image_fit() -> String {
 
 fn default_image_opacity() -> f32 {
     0.55
+}
+
+fn default_image_scale() -> f32 {
+    1.0
 }

@@ -263,6 +263,8 @@ export function NamedAppearanceTile({
             height: "100%",
             objectFit: normalized.image.fit,
             opacity: normalized.image.opacity,
+            transform: `translate(${normalized.image.offsetX}%, ${normalized.image.offsetY}%) scale(${normalized.image.scale}) rotate(${normalized.image.rotation}deg)`,
+            transformOrigin: "center",
           }}
         />
       ) : null}
@@ -341,6 +343,11 @@ export function NamedAppearanceEditor({
     onChange(normalizeNamedAppearance({ ...appearance, ...patch }, appearance.name));
   }
 
+  function updateImagePatch(patch: Partial<NonNullable<NamedAppearance["image"]>>) {
+    if (!appearance.image) return;
+    update({ image: { ...appearance.image, ...patch } });
+  }
+
   function updateImage(file: File | null) {
     if (!file) return;
     const reader = new FileReader();
@@ -353,6 +360,10 @@ export function NamedAppearanceEditor({
           dataUrl,
           fit: appearance.image?.fit ?? "cover",
           opacity: appearance.image?.opacity ?? 0.55,
+          scale: appearance.image?.scale ?? 1,
+          offsetX: appearance.image?.offsetX ?? 0,
+          offsetY: appearance.image?.offsetY ?? 0,
+          rotation: appearance.image?.rotation ?? 0,
         },
       });
     });
@@ -397,15 +408,15 @@ export function NamedAppearanceEditor({
     <div
       style={{
         display: "grid",
-        gridTemplateColumns: "250px minmax(0, 1fr)",
-        gap: 12,
+        gridTemplateColumns: "300px minmax(0, 1fr)",
+        gap: 14,
         height: "100%",
         minHeight: 0,
-        padding: 12,
+        padding: 14,
         background: "var(--lx-bg-surface)",
       }}
     >
-      <div style={{ display: "grid", gridTemplateRows: "auto 1fr", gap: 10, minHeight: 0 }}>
+      <div style={editorPreviewPanelStyle}>
         <span
           style={{
             color: "var(--lx-fg-primary)",
@@ -420,116 +431,187 @@ export function NamedAppearanceEditor({
         <NamedAppearanceTile
           appearance={appearance}
           fallbackLabel="Preview"
-          height={170}
+          height={210}
         />
+        <div style={editorMetaGridStyle}>
+          <MetricBadge label="Image" value={appearance.image ? "ON" : "OFF"} />
+          <MetricBadge label="Scribble" value={appearance.scribble ? `${appearance.scribble.paths.length}` : "OFF"} />
+          <MetricBadge label="Name" value={`${appearance.name.length}/48`} />
+        </div>
       </div>
 
-      <div style={{ display: "grid", gap: 10, minHeight: 0, overflow: "auto" }}>
-        <label style={editorFieldStyle}>
-          <span style={editorLabelStyle}>Name</span>
-          <input
-            className="lx-input"
-            value={appearance.name}
-            maxLength={48}
-            onChange={(event) => update({ name: event.currentTarget.value })}
-          />
-        </label>
+      <div style={editorInspectorStyle}>
+        <EditorSection title="Basic" subtitle="Identity and tile palette">
+          <label style={editorFieldStyle}>
+            <span style={editorLabelStyle}>Name</span>
+            <input
+              className="lx-input"
+              value={appearance.name}
+              maxLength={48}
+              onChange={(event) => update({ name: event.currentTarget.value })}
+            />
+          </label>
 
-        <div style={editorFieldStyle}>
-          <span style={editorLabelStyle}>Background</span>
-          <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-            {NAMING_COLOR_SWATCHES.map((color) => (
-              <button
-                key={color}
-                type="button"
-                aria-label={`背景色 ${color}`}
-                onClick={() => update({ backgroundColor: color })}
-                style={{
-                  width: 30,
-                  height: 24,
-                  borderRadius: "var(--lx-radius-xs)",
-                  border:
-                    appearance.backgroundColor.toLowerCase() === color.toLowerCase()
-                      ? "2px solid var(--lx-fg-primary)"
-                      : "1px solid var(--lx-stroke)",
-                  background: color,
-                }}
+          <div style={editorFieldStyle}>
+            <span style={editorLabelStyle}>Background</span>
+            <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+              {NAMING_COLOR_SWATCHES.map((color) => (
+                <button
+                  key={color}
+                  type="button"
+                  aria-label={`背景色 ${color}`}
+                  onClick={() => update({ backgroundColor: color })}
+                  style={{
+                    width: 30,
+                    height: 24,
+                    borderRadius: "var(--lx-radius-xs)",
+                    border:
+                      appearance.backgroundColor.toLowerCase() === color.toLowerCase()
+                        ? "2px solid var(--lx-fg-primary)"
+                        : "1px solid var(--lx-stroke)",
+                    background: color,
+                  }}
+                />
+              ))}
+              <input
+                type="color"
+                value={appearance.backgroundColor}
+                onChange={(event) => update({ backgroundColor: event.currentTarget.value })}
+                style={colorInputStyle}
               />
-            ))}
-            <input
-              type="color"
-              value={appearance.backgroundColor}
-              onChange={(event) => update({ backgroundColor: event.currentTarget.value })}
-              style={colorInputStyle}
-            />
+            </div>
           </div>
-        </div>
 
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-          <label style={editorFieldStyle}>
-            <span style={editorLabelStyle}>Text</span>
-            <input
-              type="color"
-              value={appearance.textColor}
-              onChange={(event) => update({ textColor: event.currentTarget.value })}
-              style={wideColorInputStyle}
-            />
-          </label>
-          <label style={editorFieldStyle}>
-            <span style={editorLabelStyle}>Accent</span>
-            <input
-              type="color"
-              value={appearance.accentColor}
-              onChange={(event) => update({ accentColor: event.currentTarget.value })}
-              style={wideColorInputStyle}
-            />
-          </label>
-        </div>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+            <label style={editorFieldStyle}>
+              <span style={editorLabelStyle}>Text</span>
+              <input
+                type="color"
+                value={appearance.textColor}
+                onChange={(event) => update({ textColor: event.currentTarget.value })}
+                style={wideColorInputStyle}
+              />
+            </label>
+            <label style={editorFieldStyle}>
+              <span style={editorLabelStyle}>Accent</span>
+              <input
+                type="color"
+                value={appearance.accentColor}
+                onChange={(event) => update({ accentColor: event.currentTarget.value })}
+                style={wideColorInputStyle}
+              />
+            </label>
+          </div>
+        </EditorSection>
 
-        <div style={editorFieldStyle}>
-          <span style={editorLabelStyle}>Image</span>
+        <EditorSection title="Image Layer" subtitle={appearance.image?.name || "No image assigned"}>
           <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-            <input
-              type="file"
-              accept="image/*"
-              onChange={(event: ChangeEvent<HTMLInputElement>) => {
-                updateImage(event.currentTarget.files?.[0] ?? null);
-                event.currentTarget.value = "";
-              }}
-              style={{ color: "var(--lx-fg-tertiary)", fontSize: 11 }}
-            />
+            <label className="lx-btn lx-btn-ghost" style={{ cursor: "pointer" }}>
+              Choose Image
+              <input
+                type="file"
+                accept="image/*"
+                onChange={(event: ChangeEvent<HTMLInputElement>) => {
+                  updateImage(event.currentTarget.files?.[0] ?? null);
+                  event.currentTarget.value = "";
+                }}
+                style={{ display: "none" }}
+              />
+            </label>
             {appearance.image ? (
               <>
-                <select
-                  className="lx-input lx-input-sm"
-                  value={appearance.image.fit}
-                  onChange={(event) =>
-                    update({ image: { ...appearance.image!, fit: event.currentTarget.value === "contain" ? "contain" : "cover" } })
+                <button
+                  type="button"
+                  className="lx-btn lx-btn-ghost"
+                  onClick={() =>
+                    updateImagePatch({
+                      scale: 1,
+                      offsetX: 0,
+                      offsetY: 0,
+                      rotation: 0,
+                    })
                   }
                 >
-                  <option value="cover">Cover</option>
-                  <option value="contain">Contain</option>
-                </select>
-                <input
-                  type="range"
-                  min={0.05}
-                  max={1}
-                  step={0.05}
-                  value={appearance.image.opacity}
-                  onChange={(event) =>
-                    update({ image: { ...appearance.image!, opacity: Number(event.currentTarget.value) } })
-                  }
-                />
+                  Center
+                </button>
                 <button type="button" className="lx-btn lx-btn-ghost" onClick={() => update({ image: null })}>
                   Remove
                 </button>
               </>
             ) : null}
           </div>
-        </div>
 
-        <div style={editorFieldStyle}>
-          <span style={editorLabelStyle}>Scribble</span>
+          {appearance.image ? (
+            <div style={{ display: "grid", gap: 9 }}>
+              <div style={{ display: "grid", gridTemplateColumns: "120px 1fr", gap: 10 }}>
+                <label style={editorFieldStyle}>
+                  <span style={editorLabelStyle}>Fit</span>
+                  <select
+                    className="lx-input lx-input-sm"
+                    value={appearance.image.fit}
+                    onChange={(event) =>
+                      updateImagePatch({ fit: event.currentTarget.value === "contain" ? "contain" : "cover" })
+                    }
+                  >
+                    <option value="cover">Cover</option>
+                    <option value="contain">Contain</option>
+                  </select>
+                </label>
+                <RangeControl
+                  label="Opacity"
+                  value={appearance.image.opacity}
+                  min={0.05}
+                  max={1}
+                  step={0.05}
+                  display={`${Math.round(appearance.image.opacity * 100)}%`}
+                  onChange={(next) => updateImagePatch({ opacity: next })}
+                />
+              </div>
+              <RangeControl
+                label="Scale"
+                value={appearance.image.scale}
+                min={0.2}
+                max={3}
+                step={0.05}
+                display={`${Math.round(appearance.image.scale * 100)}%`}
+                onChange={(next) => updateImagePatch({ scale: next })}
+              />
+              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+                <RangeControl
+                  label="Offset X"
+                  value={appearance.image.offsetX}
+                  min={-100}
+                  max={100}
+                  step={1}
+                  display={`${appearance.image.offsetX}%`}
+                  onChange={(next) => updateImagePatch({ offsetX: next })}
+                />
+                <RangeControl
+                  label="Offset Y"
+                  value={appearance.image.offsetY}
+                  min={-100}
+                  max={100}
+                  step={1}
+                  display={`${appearance.image.offsetY}%`}
+                  onChange={(next) => updateImagePatch({ offsetY: next })}
+                />
+              </div>
+              <RangeControl
+                label="Rotation"
+                value={appearance.image.rotation}
+                min={-180}
+                max={180}
+                step={1}
+                display={`${appearance.image.rotation}°`}
+                onChange={(next) => updateImagePatch({ rotation: next })}
+              />
+            </div>
+          ) : (
+            <div style={emptyEditorHintStyle}>Use an image as the visual identity layer for this named object.</div>
+          )}
+        </EditorSection>
+
+        <EditorSection title="Scribble Layer" subtitle="Draw a quick mark over the tile">
           <div
             ref={padRef}
             onPointerDown={startScribble}
@@ -538,7 +620,7 @@ export function NamedAppearanceEditor({
             onPointerCancel={endScribble}
             style={{
               position: "relative",
-              height: 126,
+              height: 132,
               border: "1px solid var(--lx-stroke)",
               borderRadius: "var(--lx-radius-sm)",
               background:
@@ -565,8 +647,8 @@ export function NamedAppearanceEditor({
             <span
               style={{
                 position: "absolute",
-                left: 8,
-                bottom: 6,
+                left: 9,
+                bottom: 7,
                 color: "var(--lx-fg-muted)",
                 fontSize: 10,
                 pointerEvents: "none",
@@ -575,33 +657,37 @@ export function NamedAppearanceEditor({
               Draw here
             </span>
           </div>
-          <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 6 }}>
-            <input
-              type="color"
-              value={appearance.scribble?.color ?? "#F5B84D"}
-              onChange={(event) =>
-                update({
-                  scribble: {
-                    paths: appearance.scribble?.paths ?? [],
-                    color: event.currentTarget.value,
-                    opacity: appearance.scribble?.opacity ?? 0.9,
-                  },
-                })
-              }
-              style={colorInputStyle}
-            />
-            <input
-              type="range"
+          <div style={{ display: "grid", gridTemplateColumns: "80px 1fr auto", gap: 8, alignItems: "end" }}>
+            <label style={editorFieldStyle}>
+              <span style={editorLabelStyle}>Color</span>
+              <input
+                type="color"
+                value={appearance.scribble?.color ?? "#F5B84D"}
+                onChange={(event) =>
+                  update({
+                    scribble: {
+                      paths: appearance.scribble?.paths ?? [],
+                      color: event.currentTarget.value,
+                      opacity: appearance.scribble?.opacity ?? 0.9,
+                    },
+                  })
+                }
+                style={wideColorInputStyle}
+              />
+            </label>
+            <RangeControl
+              label="Opacity"
+              value={appearance.scribble?.opacity ?? 0.9}
               min={0.05}
               max={1}
               step={0.05}
-              value={appearance.scribble?.opacity ?? 0.9}
-              onChange={(event) =>
+              display={`${Math.round((appearance.scribble?.opacity ?? 0.9) * 100)}%`}
+              onChange={(next) =>
                 update({
                   scribble: {
                     paths: appearance.scribble?.paths ?? [],
                     color: appearance.scribble?.color ?? "#F5B84D",
-                    opacity: Number(event.currentTarget.value),
+                    opacity: next,
                   },
                 })
               }
@@ -611,14 +697,160 @@ export function NamedAppearanceEditor({
               className="lx-btn lx-btn-ghost"
               onClick={() => update({ scribble: null })}
             >
-              Clear Scribble
+              Clear
             </button>
           </div>
-        </div>
+        </EditorSection>
       </div>
     </div>
   );
 }
+
+function EditorSection({
+  title,
+  subtitle,
+  children,
+}: {
+  title: string;
+  subtitle?: string;
+  children: ReactNode;
+}) {
+  return (
+    <section style={editorSectionStyle}>
+      <div style={{ display: "flex", justifyContent: "space-between", gap: 12 }}>
+        <div style={{ display: "grid", gap: 3, minWidth: 0 }}>
+          <span style={editorSectionTitleStyle}>{title}</span>
+          {subtitle ? (
+            <span
+              className="lx-code"
+              style={{
+                color: "var(--lx-fg-tertiary)",
+                overflow: "hidden",
+                textOverflow: "ellipsis",
+                whiteSpace: "nowrap",
+              }}
+            >
+              {subtitle}
+            </span>
+          ) : null}
+        </div>
+      </div>
+      <div style={{ display: "grid", gap: 10 }}>{children}</div>
+    </section>
+  );
+}
+
+function RangeControl({
+  label,
+  value,
+  min,
+  max,
+  step,
+  display,
+  onChange,
+}: {
+  label: string;
+  value: number;
+  min: number;
+  max: number;
+  step: number;
+  display: string;
+  onChange: (value: number) => void;
+}) {
+  return (
+    <label style={editorFieldStyle}>
+      <span style={{ ...editorLabelStyle, display: "flex", justifyContent: "space-between", gap: 8 }}>
+        <span>{label}</span>
+        <span className="lx-code" style={{ color: "var(--lx-fg-secondary)" }}>
+          {display}
+        </span>
+      </span>
+      <input
+        type="range"
+        min={min}
+        max={max}
+        step={step}
+        value={value}
+        onChange={(event) => onChange(Number(event.currentTarget.value))}
+        style={{ width: "100%" }}
+      />
+    </label>
+  );
+}
+
+function MetricBadge({ label, value }: { label: string; value: string }) {
+  return (
+    <div style={editorMetricStyle}>
+      <span style={{ color: "var(--lx-fg-tertiary)", fontSize: 9 }}>{label}</span>
+      <strong className="lx-code" style={{ color: "var(--lx-fg-primary)", fontSize: 11 }}>
+        {value}
+      </strong>
+    </div>
+  );
+}
+
+const editorPreviewPanelStyle: CSSProperties = {
+  display: "grid",
+  gridTemplateRows: "auto auto auto",
+  alignContent: "start",
+  gap: 12,
+  minHeight: 0,
+  padding: 12,
+  border: "1px solid var(--lx-stroke)",
+  borderRadius: "var(--lx-radius-md)",
+  background: "rgba(0,0,0,0.16)",
+};
+
+const editorInspectorStyle: CSSProperties = {
+  display: "grid",
+  gap: 12,
+  minHeight: 0,
+  overflow: "auto",
+  paddingRight: 4,
+};
+
+const editorSectionStyle: CSSProperties = {
+  display: "grid",
+  gap: 12,
+  minWidth: 0,
+  padding: 12,
+  border: "1px solid var(--lx-stroke)",
+  borderRadius: "var(--lx-radius-md)",
+  background: "rgba(0,0,0,0.14)",
+};
+
+const editorSectionTitleStyle: CSSProperties = {
+  color: "var(--lx-fg-primary)",
+  fontSize: 11,
+  fontWeight: 900,
+  letterSpacing: "0.10em",
+  textTransform: "uppercase",
+};
+
+const editorMetaGridStyle: CSSProperties = {
+  display: "grid",
+  gridTemplateColumns: "repeat(3, 1fr)",
+  gap: 7,
+};
+
+const editorMetricStyle: CSSProperties = {
+  display: "grid",
+  gap: 2,
+  padding: "7px 8px",
+  border: "1px solid var(--lx-stroke)",
+  borderRadius: "var(--lx-radius-sm)",
+  background: "rgba(255,255,255,0.025)",
+};
+
+const emptyEditorHintStyle: CSSProperties = {
+  display: "grid",
+  placeItems: "center",
+  minHeight: 70,
+  border: "1px dashed var(--lx-stroke)",
+  borderRadius: "var(--lx-radius-sm)",
+  color: "var(--lx-fg-tertiary)",
+  fontSize: 11,
+};
 
 const editorFieldStyle: CSSProperties = {
   display: "grid",

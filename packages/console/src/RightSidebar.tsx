@@ -364,8 +364,8 @@ export function RightSidebar({
         open={Boolean(editor)}
         title={editor?.mode === "edit" ? "编辑视图命名" : "保存当前视图"}
         subtitle={editor ? `View Slot ${editor.slot.id}` : undefined}
-        width={760}
-        height={520}
+        width={900}
+        height={620}
         onClose={() => setEditor(null)}
       >
         {editor ? (

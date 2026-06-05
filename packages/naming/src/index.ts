@@ -9,6 +9,10 @@ export interface NamedImage {
   dataUrl: string;
   fit: "cover" | "contain";
   opacity: number;
+  scale: number;
+  offsetX: number;
+  offsetY: number;
+  rotation: number;
 }
 
 export interface NamedAppearance {
@@ -90,6 +94,10 @@ function normalizeImage(value: NamedImage | null | undefined): NamedImage | null
     dataUrl,
     fit: value?.fit === "contain" ? "contain" : "cover",
     opacity: clamp(value?.opacity ?? 0.55, 0.05, 1),
+    scale: clamp(value?.scale ?? 1, 0.2, 3),
+    offsetX: clamp(value?.offsetX ?? 0, -100, 100),
+    offsetY: clamp(value?.offsetY ?? 0, -100, 100),
+    rotation: clamp(value?.rotation ?? 0, -180, 180),
   };
 }
 
