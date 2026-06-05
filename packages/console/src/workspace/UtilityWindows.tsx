@@ -389,11 +389,11 @@ export function ColorPickerWindow({ config, onConfigChange }: WindowToolProps) {
   function updateFromBoard(clientX: number, clientY: number) {
     const rect = boardRef.current?.getBoundingClientRect();
     if (!rect) return;
-    const hue = clamp(((clientX - rect.left) / rect.width) * 360, 0, 360);
-    const saturation = clamp(100 - ((clientY - rect.top) / rect.height) * 100, 0, 100);
+    const point = normalizedPointInRect(clientX, clientY, rect);
+    const hue = clamp(point.x * 360, 0, 360);
+    const saturation = clamp(100 - point.y * 100, 0, 100);
     const current = draftRef.current;
-    const nextValues = deriveColorValuesFromBoard({ ...current, hue, saturation });
-    commitDraft(composeColorState(current, nextValues));
+    commitDraft(updateColorBoardState(current, { hue, saturation }));
   }
 
   function updateVerticalRail(
@@ -429,8 +429,7 @@ export function ColorPickerWindow({ config, onConfigChange }: WindowToolProps) {
     const nextBrightness = (clientY: number) => {
       updateVerticalRail(brightnessRailRef, (value) => {
         const current = draftRef.current;
-        const nextValues = deriveColorValuesFromBoard({ ...current, brightness: value });
-        commitDraft(composeColorState(current, nextValues));
+        commitDraft(updateColorBoardState(current, { brightness: value }));
       }, clientY);
     };
     nextBrightness(event.clientY);
@@ -440,8 +439,7 @@ export function ColorPickerWindow({ config, onConfigChange }: WindowToolProps) {
     if (activeBrightnessPointerIdRef.current !== event.pointerId || (event.buttons & 1) === 0) return;
     updateVerticalRail(brightnessRailRef, (value) => {
       const current = draftRef.current;
-      const nextValues = deriveColorValuesFromBoard({ ...current, brightness: value });
-      commitDraft(composeColorState(current, nextValues));
+      commitDraft(updateColorBoardState(current, { brightness: value }));
     }, event.clientY);
   }
 
@@ -503,7 +501,10 @@ export function ColorPickerWindow({ config, onConfigChange }: WindowToolProps) {
               ))}
               <ToggleButton
                 active={draft.constantBrightness}
-                onClick={() => commitDraft({ ...draftRef.current, constantBrightness: !draft.constantBrightness }, false)}
+                onClick={() => {
+                  const current = draftRef.current;
+                  commitDraft(updateColorBoardState(current, { constantBrightness: !current.constantBrightness }));
+                }}
               >
                 Constant Brightness
               </ToggleButton>
@@ -515,7 +516,11 @@ export function ColorPickerWindow({ config, onConfigChange }: WindowToolProps) {
                 <select
                   className="lx-input lx-input-sm"
                   value={draft.colorSpace}
-                  onChange={(event) => commitDraft({ ...draftRef.current, colorSpace: event.currentTarget.value as ColorPickerSpace }, false)}
+                  onChange={(event) => {
+                    const colorSpace = event.currentTarget.value;
+                    if (!isColorSpaceMode(colorSpace)) return;
+                    commitDraft(updateColorBoardState(draftRef.current, { colorSpace }));
+                  }}
                 >
                   {COLOR_SPACE_OPTIONS.map((option) => (
                     <option key={option.id} value={option.id}>{option.label}</option>
@@ -527,7 +532,11 @@ export function ColorPickerWindow({ config, onConfigChange }: WindowToolProps) {
                 <select
                   className="lx-input lx-input-sm"
                   value={draft.fixtureProfile}
-                  onChange={(event) => commitDraft({ ...draftRef.current, fixtureProfile: event.currentTarget.value as ColorPickerFixtureProfile }, false)}
+                  onChange={(event) => {
+                    const fixtureProfile = event.currentTarget.value;
+                    if (!isColorFixtureProfile(fixtureProfile)) return;
+                    commitDraft({ ...draftRef.current, fixtureProfile });
+                  }}
                 >
                   {COLOR_FIXTURE_OPTIONS.map((option) => (
                     <option key={option.id} value={option.id}>{option.label}</option>
@@ -553,20 +562,16 @@ export function ColorPickerWindow({ config, onConfigChange }: WindowToolProps) {
                 </div>
                 <div style={colorQuickStatsStyle}>
                   <NumberControl label="Hue" value={draft.hue} min={0} max={360} step={1} onChange={(value) => {
-                    const nextValues = deriveColorValuesFromBoard({ ...draftRef.current, hue: value });
-                    commitDraft(composeColorState(draftRef.current, nextValues));
+                    commitDraft(updateColorBoardState(draftRef.current, { hue: value }));
                   }} />
                   <NumberControl label="Sat" value={draft.saturation} min={0} max={100} step={1} onChange={(value) => {
-                    const nextValues = deriveColorValuesFromBoard({ ...draftRef.current, saturation: value });
-                    commitDraft(composeColorState(draftRef.current, nextValues));
+                    commitDraft(updateColorBoardState(draftRef.current, { saturation: value }));
                   }} />
                   <NumberControl label="Bright" value={draft.brightness} min={0} max={100} step={1} onChange={(value) => {
-                    const nextValues = deriveColorValuesFromBoard({ ...draftRef.current, brightness: value });
-                    commitDraft(composeColorState(draftRef.current, nextValues));
+                    commitDraft(updateColorBoardState(draftRef.current, { brightness: value }));
                   }} />
                   <NumberControl label="Warm" value={draft.warmth} min={0} max={100} step={1} onChange={(value) => {
-                    const nextValues = deriveColorValuesFromBoard({ ...draftRef.current, warmth: value });
-                    commitDraft(composeColorState(draftRef.current, nextValues));
+                    commitDraft(updateColorBoardState(draftRef.current, { warmth: value }));
                   }} />
                 </div>
               </div>
@@ -768,45 +773,63 @@ export function PresetsWindow({ config, onConfigChange }: WindowToolProps) {
 
 export function ShapersWindow({ config, onConfigChange }: WindowToolProps) {
   const { selection, attributes, fixtureLabel } = useSelectedFixtureAttributes();
-  const [dragging, setDragging] = useState<ShaperControlId | null>(null);
   const [values, setValues] = useState<Record<ShaperControlId, number>>(() => normalizeShaperValues(config.shapers));
+  const valuesRef = useRef<Record<ShaperControlId, number>>(values);
   const supported = useMemo(() => mapShaperAttributes(attributes), [attributes]);
+  const supportedRef = useRef(supported);
   const padRef = useRef<HTMLDivElement | null>(null);
+  const activeShaperDragRef = useRef<{ pointerId: number; control: ShaperControlId } | null>(null);
 
   useEffect(() => {
-    if (!dragging) return;
-    const move = (event: PointerEvent) => updateBladeFromPointer(dragging, event.clientX, event.clientY);
-    const up = () => setDragging(null);
-    window.addEventListener("pointermove", move);
-    window.addEventListener("pointerup", up);
-    return () => {
-      window.removeEventListener("pointermove", move);
-      window.removeEventListener("pointerup", up);
-    };
-  }, [dragging, values, supported]);
+    valuesRef.current = values;
+  }, [values]);
+
+  useEffect(() => {
+    supportedRef.current = supported;
+  }, [supported]);
 
   function updateValues(nextValues: Record<ShaperControlId, number>) {
+    valuesRef.current = nextValues;
     setValues(nextValues);
     onConfigChange({ ...config, shapers: nextValues });
   }
 
   async function setControl(control: ShaperControlId, value: number) {
-    const nextValues = { ...values, [control]: value };
+    const nextValues = { ...valuesRef.current, [control]: clamp(value, 0, 100) };
     updateValues(nextValues);
-    const attribute = supported[control];
+    const attribute = supportedRef.current[control];
     if (!attribute || selection.fixtureIds.length === 0) return;
-    await setProgrammerAttribute(attribute, value, "manual");
+    await setProgrammerAttribute(attribute, nextValues[control], "manual");
   }
 
   function updateBladeFromPointer(control: ShaperControlId, clientX: number, clientY: number) {
     const rect = padRef.current?.getBoundingClientRect();
     if (!rect) return;
-    const x = clamp(((clientX - rect.left) / rect.width) * 100, 0, 100);
-    const y = clamp(((clientY - rect.top) / rect.height) * 100, 0, 100);
+    const point = normalizedPointInRect(clientX, clientY, rect);
+    const x = point.x * 100;
+    const y = point.y * 100;
     if (control === "top") void setControl(control, y);
     if (control === "bottom") void setControl(control, 100 - y);
     if (control === "left") void setControl(control, x);
     if (control === "right") void setControl(control, 100 - x);
+  }
+
+  function beginShaperDrag(control: ShaperControlId, event: ReactPointerEvent<HTMLDivElement>) {
+    if (!supportedRef.current[control]) return;
+    activeShaperDragRef.current = { pointerId: event.pointerId, control };
+    event.currentTarget.setPointerCapture(event.pointerId);
+    updateBladeFromPointer(control, event.clientX, event.clientY);
+  }
+
+  function moveShaperDrag(event: ReactPointerEvent<HTMLDivElement>) {
+    const drag = activeShaperDragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId || (event.buttons & 1) === 0) return;
+    updateBladeFromPointer(drag.control, event.clientX, event.clientY);
+  }
+
+  function endShaperDrag(event: ReactPointerEvent<HTMLDivElement>) {
+    if (activeShaperDragRef.current?.pointerId !== event.pointerId) return;
+    activeShaperDragRef.current = null;
   }
 
   return (
@@ -815,32 +838,44 @@ export function ShapersWindow({ config, onConfigChange }: WindowToolProps) {
       subtitle={fixtureLabel}
       right={<span className="lx-code">{Object.values(supported).filter(Boolean).length}/7 attrs</span>}
     >
-      <div style={{ display: "grid", gridTemplateColumns: "minmax(180px, 1fr) 160px", gap: 10, minHeight: 0 }}>
+      <div style={shaperFrameStyle}>
         <div
           ref={padRef}
-          style={{
-            position: "relative",
-            overflow: "hidden",
-            border: "1px solid rgba(101,212,199,0.28)",
-            background: "radial-gradient(circle, rgba(255,255,255,0.08), transparent 50%), #030405",
-          }}
+          onPointerMove={moveShaperDrag}
+          onPointerUp={endShaperDrag}
+          onPointerCancel={endShaperDrag}
+          style={shaperPadStyle}
         >
           <div style={shaperBeamStyle} />
-          <BladeHandle side="top" value={values.top} disabled={!supported.top} onPointerDown={() => setDragging("top")} />
-          <BladeHandle side="bottom" value={values.bottom} disabled={!supported.bottom} onPointerDown={() => setDragging("bottom")} />
-          <BladeHandle side="left" value={values.left} disabled={!supported.left} onPointerDown={() => setDragging("left")} />
-          <BladeHandle side="right" value={values.right} disabled={!supported.right} onPointerDown={() => setDragging("right")} />
-          <div style={{ position: "absolute", inset: 12, border: "1px dashed rgba(255,255,255,0.18)", pointerEvents: "none" }} />
+          <BladeHandle side="top" value={values.top} disabled={!supported.top} onPointerDown={(event) => beginShaperDrag("top", event)} />
+          <BladeHandle side="bottom" value={values.bottom} disabled={!supported.bottom} onPointerDown={(event) => beginShaperDrag("bottom", event)} />
+          <BladeHandle side="left" value={values.left} disabled={!supported.left} onPointerDown={(event) => beginShaperDrag("left", event)} />
+          <BladeHandle side="right" value={values.right} disabled={!supported.right} onPointerDown={(event) => beginShaperDrag("right", event)} />
+          <div style={shaperApertureGuideStyle} />
+          <div style={shaperCenterMarkStyle} />
         </div>
-        <div style={{ display: "grid", gap: 6, alignContent: "start" }}>
+        <div style={shaperControlPanelStyle}>
+          <div style={shaperControlHeaderStyle}>
+            <strong style={editorSectionTitleStyle}>Shaper</strong>
+            <span className="lx-code" style={{ color: "var(--lx-fg-tertiary)" }}>{fixtureLabel}</span>
+          </div>
           {(["top", "bottom", "left", "right", "iris", "rotate", "soft"] as ShaperControlId[]).map((control) => (
-            <label key={control} style={channelRowStyle(!supported[control])}>
-              <span>{control}</span>
+            <label key={control} style={shaperControlRowStyle(!supported[control])}>
+              <span>{shaperControlLabel(control)}</span>
               <input
                 type="range"
                 min={0}
                 max={100}
                 value={values[control]}
+                disabled={!supported[control]}
+                onChange={(event) => void setControl(control, Number(event.currentTarget.value))}
+              />
+              <input
+                className="lx-input lx-input-sm"
+                type="number"
+                min={0}
+                max={100}
+                value={Math.round(values[control])}
                 disabled={!supported[control]}
                 onChange={(event) => void setControl(control, Number(event.currentTarget.value))}
               />
@@ -1157,6 +1192,21 @@ function composeColorState(base: ColorPickerState, values: Record<ColorChannelId
   };
 }
 
+function updateColorBoardState(base: ColorPickerState, patch: Partial<Omit<ColorPickerState, "values" | "mode" | "fixtureProfile">>): ColorPickerState {
+  const next = {
+    ...base,
+    ...patch,
+    hue: clamp(patch.hue ?? base.hue, 0, 360),
+    saturation: clamp(patch.saturation ?? base.saturation, 0, 100),
+    brightness: clamp(patch.brightness ?? base.brightness, 0, 100),
+    warmth: clamp(patch.warmth ?? base.warmth, 0, 100),
+  };
+  return {
+    ...next,
+    values: deriveColorValuesFromBoard(next),
+  };
+}
+
 function hsvToRgb(h: number, s: number, v: number) {
   const hue = ((h % 360) + 360) % 360;
   const saturation = clamp(s, 0, 100) / 100;
@@ -1275,20 +1325,6 @@ function normalizeShaperValues(value: unknown): Record<ShaperControlId, number> 
   };
 }
 
-function channelRowStyle(disabled: boolean): React.CSSProperties {
-  return {
-    display: "grid",
-    gridTemplateColumns: "22px minmax(0, 1fr) 32px",
-    alignItems: "center",
-    gap: 6,
-    height: 24,
-    opacity: disabled ? 0.38 : 1,
-    color: "var(--lx-fg-secondary)",
-    fontSize: 10,
-    fontWeight: 800,
-  };
-}
-
 function mapColorAttributes(attributes: FixtureModeAttribute[]) {
   return Object.fromEntries(
     COLOR_CHANNELS.map((channel) => [channel, findAttributeByAliases(attributes, COLOR_ALIASES[channel])]),
@@ -1389,6 +1425,15 @@ function clampInt(value: unknown, min: number, max: number) {
 
 function clamp(value: number, min: number, max: number) {
   return Math.min(max, Math.max(min, value));
+}
+
+function normalizedPointInRect(clientX: number, clientY: number, rect: DOMRect) {
+  const width = Math.max(rect.width, 1);
+  const height = Math.max(rect.height, 1);
+  return {
+    x: clamp((clientX - rect.left) / width, 0, 1),
+    y: clamp((clientY - rect.top) / height, 0, 1),
+  };
 }
 
 function colorCss(values: Record<ColorChannelId, number>) {
@@ -1539,23 +1584,34 @@ function BladeHandle({
   side: "top" | "bottom" | "left" | "right";
   value: number;
   disabled: boolean;
-  onPointerDown: () => void;
+  onPointerDown: (event: ReactPointerEvent<HTMLDivElement>) => void;
 }) {
   const common: React.CSSProperties = {
     position: "absolute",
     background: disabled ? "rgba(255,255,255,0.16)" : "rgba(101,212,199,0.82)",
     border: "1px solid rgba(255,255,255,0.45)",
     cursor: disabled ? "not-allowed" : side === "left" || side === "right" ? "ew-resize" : "ns-resize",
+    display: "grid",
+    placeItems: "center",
+    color: "#050708",
+    fontSize: 9,
+    fontWeight: 900,
+    userSelect: "none",
+    touchAction: "none",
   };
   const style: React.CSSProperties =
     side === "top"
-      ? { ...common, left: "12%", right: "12%", top: `${value}%`, height: 5 }
+      ? { ...common, left: "12%", right: "12%", top: `${value}%`, height: 12, transform: "translateY(-50%)" }
       : side === "bottom"
-        ? { ...common, left: "12%", right: "12%", bottom: `${value}%`, height: 5 }
+        ? { ...common, left: "12%", right: "12%", bottom: `${value}%`, height: 12, transform: "translateY(50%)" }
         : side === "left"
-          ? { ...common, top: "12%", bottom: "12%", left: `${value}%`, width: 5 }
-          : { ...common, top: "12%", bottom: "12%", right: `${value}%`, width: 5 };
-  return <div style={style} onPointerDown={() => !disabled && onPointerDown()} />;
+          ? { ...common, top: "12%", bottom: "12%", left: `${value}%`, width: 12, transform: "translateX(-50%)" }
+          : { ...common, top: "12%", bottom: "12%", right: `${value}%`, width: 12, transform: "translateX(50%)" };
+  return (
+    <div style={style} onPointerDown={(event) => !disabled && onPointerDown(event)}>
+      {side === "top" ? "1A" : side === "bottom" ? "1B" : side === "left" ? "2A" : "2B"}
+    </div>
+  );
 }
 
 const toolHeaderStyle: React.CSSProperties = {
@@ -1751,10 +1807,11 @@ function colorBoardStyle(state: ColorPickerState): React.CSSProperties {
 function colorBoardCrosshairStyle(state: ColorPickerState): React.CSSProperties {
   return {
     position: "absolute",
-    left: `calc(${clamp(state.hue / 360, 0, 1) * 100}% - 12px)`,
-    top: `calc(${100 - clamp(state.saturation, 0, 100)}% - 12px)`,
+    left: `${clamp(state.hue / 360, 0, 1) * 100}%`,
+    top: `${100 - clamp(state.saturation, 0, 100)}%`,
     width: 24,
     height: 24,
+    transform: "translate(-50%, -50%)",
     border: "1px solid rgba(255,255,255,0.78)",
     boxShadow: "0 0 0 1px rgba(0,0,0,0.54), 0 0 12px rgba(255,255,255,0.35)",
     pointerEvents: "none",
@@ -1764,10 +1821,11 @@ function colorBoardCrosshairStyle(state: ColorPickerState): React.CSSProperties 
 function colorBoardPointerStyle(state: ColorPickerState): React.CSSProperties {
   return {
     position: "absolute",
-    left: `calc(${clamp(state.hue / 360, 0, 1) * 100}% - 8px)`,
-    top: `calc(${100 - clamp(state.saturation, 0, 100)}% - 8px)`,
+    left: `${clamp(state.hue / 360, 0, 1) * 100}%`,
+    top: `${100 - clamp(state.saturation, 0, 100)}%`,
     width: 16,
     height: 16,
+    transform: "translate(-50%, -50%)",
     borderRadius: "50%",
     background: colorCss(state.values),
     border: "2px solid rgba(255,255,255,0.96)",
@@ -1903,6 +1961,91 @@ function colorPreviewSmallStyle(background: string): React.CSSProperties {
     border: "1px solid rgba(255,255,255,0.08)",
     background: `linear-gradient(135deg, ${background}, rgba(0,0,0,0.82))`,
   };
+}
+
+const shaperFrameStyle: React.CSSProperties = {
+  display: "grid",
+  gridTemplateColumns: "minmax(240px, 1fr) 220px",
+  gap: 10,
+  minHeight: 0,
+  height: "100%",
+};
+
+const shaperPadStyle: React.CSSProperties = {
+  position: "relative",
+  overflow: "hidden",
+  border: "1px solid rgba(101,212,199,0.28)",
+  borderRadius: "var(--lx-radius-md)",
+  background:
+    "radial-gradient(circle at 50% 50%, rgba(255,255,255,0.10), rgba(0,0,0,0) 44%), linear-gradient(135deg, rgba(255,255,255,0.025), rgba(255,255,255,0.005)), #030405",
+  minHeight: 0,
+};
+
+const shaperApertureGuideStyle: React.CSSProperties = {
+  position: "absolute",
+  inset: "14%",
+  border: "1px dashed rgba(255,255,255,0.18)",
+  boxShadow: "inset 0 0 30px rgba(255,255,255,0.035)",
+  pointerEvents: "none",
+};
+
+const shaperCenterMarkStyle: React.CSSProperties = {
+  position: "absolute",
+  left: "50%",
+  top: "50%",
+  width: 10,
+  height: 10,
+  transform: "translate(-50%, -50%)",
+  borderRadius: "50%",
+  border: "1px solid rgba(255,255,255,0.36)",
+  background: "rgba(0,0,0,0.34)",
+  pointerEvents: "none",
+};
+
+const shaperControlPanelStyle: React.CSSProperties = {
+  display: "grid",
+  gridTemplateRows: "auto repeat(7, auto)",
+  gap: 6,
+  alignContent: "start",
+  minHeight: 0,
+  overflow: "auto",
+};
+
+const shaperControlHeaderStyle: React.CSSProperties = {
+  display: "grid",
+  gap: 2,
+  padding: 8,
+  border: "1px solid rgba(255,255,255,0.08)",
+  borderRadius: "var(--lx-radius-md)",
+  background: "rgba(255,255,255,0.025)",
+};
+
+function shaperControlRowStyle(disabled: boolean): React.CSSProperties {
+  return {
+    display: "grid",
+    gridTemplateColumns: "46px minmax(0, 1fr) 48px 28px",
+    alignItems: "center",
+    gap: 6,
+    minHeight: 28,
+    padding: 5,
+    border: "1px solid rgba(255,255,255,0.08)",
+    borderRadius: "var(--lx-radius-sm)",
+    background: disabled ? "rgba(255,255,255,0.015)" : "rgba(255,255,255,0.035)",
+    opacity: disabled ? 0.38 : 1,
+    color: "var(--lx-fg-secondary)",
+    fontSize: 10,
+    fontWeight: 800,
+  };
+}
+
+function shaperControlLabel(control: ShaperControlId) {
+  if (control === "top") return "Top";
+  if (control === "bottom") return "Bottom";
+  if (control === "left") return "Left";
+  if (control === "right") return "Right";
+  if (control === "iris") return "Iris";
+  if (control === "rotate") return "Rotate";
+  return "Soft";
 }
 
 const verticalRailShellStyle: React.CSSProperties = {
