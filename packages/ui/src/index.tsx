@@ -818,12 +818,12 @@ function VisibilityToggle({
         textAlign: "left",
       }}
     >
-      <span style={{ color: "var(--lx-fg-tertiary)", fontSize: 9 }}>{label}</span>
+      <span style={{ color: "var(--lx-fg-tertiary)", fontSize: 8 }}>{label}</span>
       <strong
         className="lx-code"
         style={{
           color: active ? "var(--lx-primary-bright)" : "var(--lx-fg-muted)",
-          fontSize: 11,
+          fontSize: 10,
         }}
       >
         {active ? "ON" : "OFF"}
@@ -872,14 +872,14 @@ const editorSectionTitleStyle: CSSProperties = {
 
 const editorMetaGridStyle: CSSProperties = {
   display: "grid",
-  gridTemplateColumns: "repeat(2, 1fr)",
-  gap: 7,
+  gridTemplateColumns: "repeat(4, minmax(0, 1fr))",
+  gap: 5,
 };
 
 const editorMetricStyle: CSSProperties = {
   display: "grid",
   gap: 2,
-  padding: "7px 8px",
+  padding: "5px 6px",
   border: "1px solid var(--lx-stroke)",
   borderRadius: "var(--lx-radius-sm)",
   background: "rgba(255,255,255,0.025)",
