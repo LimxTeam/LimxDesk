@@ -1,4 +1,4 @@
-use crate::{events, fixture_selection::FixtureSelectionState, programmer::ProgrammerState};
+use crate::{events, fixture_selection::FixtureSelectionState, output, programmer::ProgrammerState};
 use limxdesk_showfile::{LoadedShow, ShowFileEntry, ShowRepository};
 use std::sync::Mutex;
 use tauri::{AppHandle, State};
@@ -89,6 +89,7 @@ pub fn show_create(
     state.set_current(loaded.clone())?;
     reset_runtime_context(&selection_state, &programmer_state, &app)?;
     events::emit_show_loaded(&app, &loaded);
+    request_default_output(&app);
     Ok(loaded)
 }
 
@@ -106,6 +107,7 @@ pub fn show_load(
     state.set_current(loaded.clone())?;
     reset_runtime_context(&selection_state, &programmer_state, &app)?;
     events::emit_show_loaded(&app, &loaded);
+    request_default_output(&app);
     Ok(loaded)
 }
 
@@ -138,6 +140,7 @@ pub fn show_save_as(
     state.set_current(loaded.clone())?;
     reset_runtime_context(&selection_state, &programmer_state, &app)?;
     events::emit_show_loaded(&app, &loaded);
+    request_default_output(&app);
     Ok(loaded)
 }
 
@@ -180,4 +183,10 @@ fn reset_runtime_context(
     let programmer = programmer_state.set_current(limxdesk_programmer::Programmer::default())?;
     events::emit_programmer_changed(app, &programmer);
     Ok(())
+}
+
+fn request_default_output(app: &AppHandle) {
+    if let Err(error) = output::request_output_send(app) {
+        tracing::warn!("failed to request default output after show change: {error}");
+    }
 }

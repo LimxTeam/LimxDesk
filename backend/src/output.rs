@@ -115,6 +115,7 @@ pub fn output_set_targets(
     let changed_show = show_state.current()?;
     set_runtime_targets(&state, targets.clone())?;
     events::emit_output_changed(&app, changed_show.as_ref());
+    request_output_send(&app)?;
     Ok(targets)
 }
 

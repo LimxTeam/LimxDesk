@@ -1,5 +1,5 @@
 use crate::{
-    events, fixture_selection::FixtureSelectionState, programmer, programmer::ProgrammerState,
+    events, fixture_selection::FixtureSelectionState, output, programmer, programmer::ProgrammerState,
     show::ShowRuntimeState,
 };
 use limxdesk_patch::{
@@ -39,6 +39,7 @@ pub fn patch_save_current_show(
     validate_fixtures(&document.fixtures).map_err(|error| error.to_string())?;
     let saved_show = save_patch_document(&show, &document, &state)?;
     events::emit_patch_changed(&app, &saved_show);
+    request_patch_output(&app);
     Ok(())
 }
 
@@ -129,7 +130,14 @@ fn mutate_patch_document(
         )?;
     }
     events::emit_patch_changed(&app, &saved_show);
+    request_patch_output(&app);
     Ok(result)
+}
+
+fn request_patch_output(app: &AppHandle) {
+    if let Err(error) = output::request_output_send(app) {
+        tracing::warn!("failed to request output after patch change: {error}");
+    }
 }
 
 fn load_patch_document(show: &LoadedShow) -> Result<PatchDocument, String> {

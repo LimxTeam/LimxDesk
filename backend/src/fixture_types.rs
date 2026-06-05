@@ -1,4 +1,4 @@
-use crate::{events, show::ShowRuntimeState};
+use crate::{events, output, show::ShowRuntimeState};
 use limxdesk_fixture_types::{
     FixtureTypeDraft, FixtureTypeEntry, FixtureTypeRepository, FixtureTypeSource,
 };
@@ -106,6 +106,7 @@ pub fn fixture_type_import_gdtf_to_show(
     upsert_show_fixture_type(&mut document, record);
     let saved_show = save_show_fixture_type_document(&show, &document, &state)?;
     events::emit_fixture_types_changed(&app, &saved_show);
+    request_fixture_type_output(&app);
     let entries = entries_from_document(&document)?;
     entries
         .into_iter()
@@ -138,6 +139,7 @@ pub fn fixture_type_create_in_show(
     );
     let saved_show = save_show_fixture_type_document(&show, &document, &state)?;
     events::emit_fixture_types_changed(&app, &saved_show);
+    request_fixture_type_output(&app);
     let entries = entries_from_document(&document)?;
     entries
         .into_iter()
@@ -166,6 +168,7 @@ pub fn fixture_type_update_in_show(
 
     let saved_show = save_show_fixture_type_document(&show, &document, &state)?;
     events::emit_fixture_types_changed(&app, &saved_show);
+    request_fixture_type_output(&app);
     let entries = entries_from_document(&document)?;
     entries
         .into_iter()
@@ -195,7 +198,14 @@ pub fn fixture_type_delete_from_show(
 
     let saved_show = save_show_fixture_type_document(&show, &document, &state)?;
     events::emit_fixture_types_changed(&app, &saved_show);
+    request_fixture_type_output(&app);
     Ok(())
+}
+
+fn request_fixture_type_output(app: &AppHandle) {
+    if let Err(error) = output::request_output_send(app) {
+        tracing::warn!("failed to request output after fixture type change: {error}");
+    }
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
