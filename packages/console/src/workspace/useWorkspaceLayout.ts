@@ -89,7 +89,7 @@ export function useWorkspaceLayout() {
         const id = `window_${nextIdRef.current}`;
         nextIdRef.current += 1;
 
-        return [...prev, { id, type, ...rect }];
+        return [...prev, { id, type, config: {}, ...rect }];
       });
 
       setPendingAddCell(null);
@@ -128,7 +128,7 @@ export function useWorkspaceLayout() {
   );
 
   const replaceWindows = useCallback((nextWindows: WorkspaceWindow[]) => {
-    setWindows(nextWindows.map((window) => ({ ...window, ...clampRectToGrid(window) })));
+    setWindows(nextWindows.map((window) => ({ ...window, config: window.config ?? {}, ...clampRectToGrid(window) })));
     setSelectedWindowId((selected) =>
       nextWindows.some((window) => window.id === selected) ? selected : null,
     );

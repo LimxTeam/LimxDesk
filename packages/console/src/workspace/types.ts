@@ -20,6 +20,7 @@ export interface GridRect extends GridCell {
 export interface WorkspaceWindow extends GridRect {
   id: string;
   type: WorkspaceWindowType;
+  config: Record<string, unknown>;
 }
 
 export interface WorkspaceWindowCatalogItem {

@@ -1,8 +1,13 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { forwardRef, useEffect, useImperativeHandle, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { AddWindowDialog } from "./AddWindowDialog";
 import { GridWindowFrame } from "./GridWindowFrame";
+import {
+  layoutWindowToWorkspaceWindow,
+  workspaceWindowToLayoutWindow,
+  type LayoutDocument,
+} from "./layoutDocument";
 import {
   useWorkspaceLayout,
   WORKSPACE_GRID_COLS,
@@ -22,11 +27,22 @@ interface ActiveDrag {
   startRect: GridRect;
 }
 
+export interface WorkspaceCanvasHandle {
+  getWindows: () => WorkspaceWindow[];
+  applyWindows: (windows: WorkspaceWindow[]) => void;
+  clearWindows: () => void;
+}
+
+export interface WorkspaceCanvasProps {
+  onWindowsChange?: (windows: WorkspaceWindow[]) => void;
+}
+
 function clampCell(value: number, max: number): number {
   return Math.max(0, Math.min(value, max));
 }
 
-export function WorkspaceCanvas() {
+export const WorkspaceCanvas = forwardRef<WorkspaceCanvasHandle, WorkspaceCanvasProps>(
+function WorkspaceCanvas({ onWindowsChange }, ref) {
   const {
     windows,
     selectedWindowId,
@@ -59,9 +75,29 @@ export function WorkspaceCanvas() {
   const cellWidth = containerSize.width / WORKSPACE_GRID_COLS || 0;
   const cellHeight = containerSize.height / WORKSPACE_GRID_ROWS || 0;
 
+  useImperativeHandle(
+    ref,
+    () => ({
+      getWindows: () => windows,
+      applyWindows: (nextWindows) => {
+        suppressNextSaveRef.current = false;
+        replaceWindows(nextWindows);
+      },
+      clearWindows: () => {
+        suppressNextSaveRef.current = false;
+        replaceWindows([]);
+      },
+    }),
+    [replaceWindows, windows],
+  );
+
   useEffect(() => {
     void loadLayoutFromShow();
   }, []);
+
+  useEffect(() => {
+    onWindowsChange?.(windows);
+  }, [onWindowsChange, windows]);
 
   useEffect(() => {
     let active = true;
@@ -343,38 +379,4 @@ export function WorkspaceCanvas() {
     </div>
   );
 }
-
-interface LayoutDocument {
-  windows: LayoutWindow[];
-}
-
-interface LayoutWindow {
-  id: string;
-  windowType: WorkspaceWindow["type"];
-  x: number;
-  y: number;
-  w: number;
-  h: number;
-}
-
-function layoutWindowToWorkspaceWindow(window: LayoutWindow): WorkspaceWindow {
-  return {
-    id: window.id,
-    type: window.windowType,
-    x: window.x,
-    y: window.y,
-    w: window.w,
-    h: window.h,
-  };
-}
-
-function workspaceWindowToLayoutWindow(window: WorkspaceWindow): LayoutWindow {
-  return {
-    id: window.id,
-    windowType: window.type,
-    x: window.x,
-    y: window.y,
-    w: window.w,
-    h: window.h,
-  };
-}
+);

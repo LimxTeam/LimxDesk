@@ -11,9 +11,15 @@ importers:
       '@limxdesk/console':
         specifier: workspace:*
         version: link:packages/console
+      '@limxdesk/naming':
+        specifier: workspace:*
+        version: link:packages/naming
       '@limxdesk/notifications':
         specifier: workspace:*
         version: link:packages/notifications
+      '@limxdesk/settings':
+        specifier: workspace:*
+        version: link:packages/settings
       '@limxdesk/shell':
         specifier: workspace:*
         version: link:packages/shell
@@ -70,13 +76,31 @@ importers:
         specifier: ^8.0.12
         version: 8.0.16(@types/node@20.19.41)(jiti@2.7.0)
 
-  packages/console: {}
+  packages/console:
+    dependencies:
+      '@limxdesk/naming':
+        specifier: workspace:*
+        version: link:../naming
+      '@limxdesk/notifications':
+        specifier: workspace:*
+        version: link:../notifications
+      '@limxdesk/ui':
+        specifier: workspace:*
+        version: link:../ui
+
+  packages/naming: {}
 
   packages/notifications: {}
 
+  packages/settings: {}
+
   packages/shell: {}
 
-  packages/ui: {}
+  packages/ui:
+    dependencies:
+      '@limxdesk/naming':
+        specifier: workspace:*
+        version: link:../naming
 
 packages:
 

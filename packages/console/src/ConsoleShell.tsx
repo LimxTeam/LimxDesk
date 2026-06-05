@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import {
   PanelLeftClose, PanelLeftOpen,
   Keyboard,
@@ -8,8 +8,9 @@ import { LeftSidebar } from "./LeftSidebar";
 import { RightSidebar } from "./RightSidebar";
 import { CommandBar } from "./CommandBar";
 import { ControlPanel } from "./ControlPanel";
-import { WorkspaceCanvas } from "./workspace/WorkspaceCanvas";
+import { WorkspaceCanvas, type WorkspaceCanvasHandle } from "./workspace/WorkspaceCanvas";
 import { ShowFileDialog } from "./components/ShowFileDialog";
+import type { WorkspaceWindow } from "./workspace/types";
 
 /** 侧边栏宽度过渡 */
 const SLIDE = "width 0.22s cubic-bezier(0.32, 0.72, 0, 1)";
@@ -18,6 +19,8 @@ export function ConsoleShell({ children }: { children?: React.ReactNode }) {
   const [leftCollapsed, setLeftCollapsed] = useState(false);
   const [rightCollapsed, setRightCollapsed] = useState(false);
   const [showFileDialogOpen, setShowFileDialogOpen] = useState(false);
+  const [workspaceWindows, setWorkspaceWindows] = useState<WorkspaceWindow[]>([]);
+  const workspaceRef = useRef<WorkspaceCanvasHandle>(null);
 
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100%", width: "100%", overflow: "hidden" }}>
@@ -41,7 +44,12 @@ export function ConsoleShell({ children }: { children?: React.ReactNode }) {
 
         {/* 画布 */}
         <div style={{ flex: 1, background: "var(--lx-bg-void)", overflow: "hidden", minWidth: 0 }}>
-          {children ?? <WorkspaceCanvas />}
+          {children ?? (
+            <WorkspaceCanvas
+              ref={workspaceRef}
+              onWindowsChange={setWorkspaceWindows}
+            />
+          )}
         </div>
 
         {/* 右栏 — 宽度动画缩到 0 */}
@@ -56,7 +64,11 @@ export function ConsoleShell({ children }: { children?: React.ReactNode }) {
           }}
         >
           <div style={{ width: 100, height: "100%" }}>
-            <RightSidebar />
+            <RightSidebar
+              windows={workspaceWindows}
+              onApplyWindows={(windows) => workspaceRef.current?.applyWindows(windows)}
+              onClearWindows={() => workspaceRef.current?.clearWindows()}
+            />
           </div>
         </div>
       </div>

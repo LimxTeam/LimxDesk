@@ -4,5 +4,10 @@
   "private": true,
   "type": "module",
   "main": "./src/index.ts",
-  "types": "./src/index.ts"
+  "types": "./src/index.ts",
+  "dependencies": {
+    "@limxdesk/naming": "workspace:*",
+    "@limxdesk/notifications": "workspace:*",
+    "@limxdesk/ui": "workspace:*"
+  }
 }

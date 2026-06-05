@@ -12,6 +12,7 @@ export default defineConfig({
     alias: {
       "@limxdesk/shell": path.resolve(__dirname, "./packages/shell/src/index.ts"),
       "@limxdesk/notifications": path.resolve(__dirname, "./packages/notifications/src/index.ts"),
+      "@limxdesk/naming": path.resolve(__dirname, "./packages/naming/src/index.ts"),
       "@limxdesk/ui": path.resolve(__dirname, "./packages/ui/src/index.tsx"),
       "@limxdesk/console": path.resolve(__dirname, "./packages/console/src/index.ts"),
       "@limxdesk/settings": path.resolve(__dirname, "./packages/settings/src/index.ts"),

@@ -23,6 +23,8 @@
       "@limxdesk/shell/*": ["./packages/shell/src/*"],
       "@limxdesk/notifications": ["./packages/notifications/src/index.ts"],
       "@limxdesk/notifications/*": ["./packages/notifications/src/*"],
+      "@limxdesk/naming": ["./packages/naming/src/index.ts"],
+      "@limxdesk/naming/*": ["./packages/naming/src/*"],
       "@limxdesk/ui": ["./packages/ui/src/index.tsx"],
       "@limxdesk/ui/*": ["./packages/ui/src/*"],
       "@limxdesk/console": ["./packages/console/src/index.ts"],

@@ -111,6 +111,8 @@ pub fn run() {
             patch::patch_auto_patch,
             layout::layout_load_current_show,
             layout::layout_save_current_show,
+            layout::layout_save_view_slot,
+            layout::layout_clear_view_slot,
         ])
         .run(tauri::generate_context!())
         .expect("启动 Tauri 应用失败");

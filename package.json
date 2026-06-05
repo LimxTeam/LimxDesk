@@ -15,6 +15,7 @@
   "dependencies": {
     "@limxdesk/shell": "workspace:*",
     "@limxdesk/notifications": "workspace:*",
+    "@limxdesk/naming": "workspace:*",
     "@limxdesk/ui": "workspace:*",
     "@limxdesk/console": "workspace:*",
     "@limxdesk/settings": "workspace:*",

@@ -6,9 +6,16 @@ import {
   type ReactNode,
   type MouseEvent,
   type CSSProperties,
+  type ChangeEvent,
+  type PointerEvent as ReactPointerEvent,
 } from "react";
 import { createPortal } from "react-dom";
 import { X } from "lucide-react";
+import {
+  NAMING_COLOR_SWATCHES,
+  normalizeNamedAppearance,
+  type NamedAppearance,
+} from "@limxdesk/naming";
 
 // ═══════════════════════════════════════════════════════
 // DropdownMenu — UE5 Cobalt 风格
@@ -198,6 +205,448 @@ export function DropdownMenuDivider() {
     />
   );
 }
+
+// ═══════════════════════════════════════════════════════
+// NamedAppearanceTile — 通用命名对象渲染
+// ═══════════════════════════════════════════════════════
+
+export interface NamedAppearanceTileProps {
+  appearance: NamedAppearance;
+  fallbackLabel: string;
+  empty?: boolean;
+  active?: boolean;
+  height?: number;
+  compact?: boolean;
+}
+
+export function NamedAppearanceTile({
+  appearance,
+  fallbackLabel,
+  empty = false,
+  active = false,
+  height = 54,
+  compact = false,
+}: NamedAppearanceTileProps) {
+  const normalized = normalizeNamedAppearance(appearance, fallbackLabel);
+  const label = empty ? fallbackLabel : normalized.name || fallbackLabel;
+
+  return (
+    <div
+      style={{
+        position: "relative",
+        display: "grid",
+        placeItems: "center",
+        height,
+        minWidth: 0,
+        overflow: "hidden",
+        borderRadius: "var(--lx-radius-sm)",
+        border: active
+          ? `1px solid ${normalized.accentColor}`
+          : empty
+            ? "1px dashed var(--lx-stroke)"
+            : "1px solid rgba(255,255,255,0.10)",
+        background: empty
+          ? "var(--lx-bg-deep)"
+          : `linear-gradient(180deg, ${normalized.backgroundColor}, rgba(0,0,0,0.58))`,
+        boxShadow: active ? `0 0 0 1px ${normalized.accentColor} inset` : undefined,
+        color: empty ? "var(--lx-fg-muted)" : normalized.textColor,
+      }}
+    >
+      {!empty && normalized.image ? (
+        <img
+          alt=""
+          src={normalized.image.dataUrl}
+          style={{
+            position: "absolute",
+            inset: 0,
+            width: "100%",
+            height: "100%",
+            objectFit: normalized.image.fit,
+            opacity: normalized.image.opacity,
+          }}
+        />
+      ) : null}
+      {!empty && normalized.scribble ? (
+        <svg
+          viewBox="0 0 100 60"
+          preserveAspectRatio="none"
+          aria-hidden
+          style={{ position: "absolute", inset: 0, width: "100%", height: "100%" }}
+        >
+          {normalized.scribble.paths.map((path, index) => (
+            <path
+              key={`${path}-${index}`}
+              d={path}
+              fill="none"
+              stroke={normalized.scribble?.color}
+              strokeWidth={4}
+              strokeLinecap="round"
+              strokeLinejoin="round"
+              opacity={normalized.scribble?.opacity}
+            />
+          ))}
+        </svg>
+      ) : null}
+      <div
+        style={{
+          position: "relative",
+          zIndex: 1,
+          display: "grid",
+          gap: compact ? 1 : 3,
+          justifyItems: "center",
+          maxWidth: "100%",
+          padding: "3px 5px",
+          textShadow: empty ? undefined : "0 1px 4px rgba(0,0,0,0.9)",
+        }}
+      >
+        <strong
+          style={{
+            maxWidth: "100%",
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+            whiteSpace: "nowrap",
+            fontSize: compact ? 10 : 12,
+            lineHeight: 1.1,
+            fontWeight: 900,
+          }}
+        >
+          {label}
+        </strong>
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════
+// NamedAppearanceEditor — 通用命名对象编辑器
+// ═══════════════════════════════════════════════════════
+
+export interface NamedAppearanceEditorProps {
+  value: NamedAppearance;
+  onChange: (value: NamedAppearance) => void;
+  title?: string;
+}
+
+export function NamedAppearanceEditor({
+  value,
+  onChange,
+  title = "命名外观",
+}: NamedAppearanceEditorProps) {
+  const appearance = normalizeNamedAppearance(value);
+  const padRef = useRef<HTMLDivElement>(null);
+  const drawingRef = useRef(false);
+  const pathRef = useRef("");
+
+  function update(patch: Partial<NamedAppearance>) {
+    onChange(normalizeNamedAppearance({ ...appearance, ...patch }, appearance.name));
+  }
+
+  function updateImage(file: File | null) {
+    if (!file) return;
+    const reader = new FileReader();
+    reader.addEventListener("load", () => {
+      const dataUrl = typeof reader.result === "string" ? reader.result : "";
+      if (!dataUrl.startsWith("data:image/")) return;
+      update({
+        image: {
+          name: file.name,
+          dataUrl,
+          fit: appearance.image?.fit ?? "cover",
+          opacity: appearance.image?.opacity ?? 0.55,
+        },
+      });
+    });
+    reader.readAsDataURL(file);
+  }
+
+  function pointFromEvent(event: ReactPointerEvent<HTMLDivElement>) {
+    const rect = padRef.current?.getBoundingClientRect();
+    if (!rect) return { x: 0, y: 0 };
+    return {
+      x: Math.round(((event.clientX - rect.left) / rect.width) * 1000) / 10,
+      y: Math.round(((event.clientY - rect.top) / rect.height) * 600) / 10,
+    };
+  }
+
+  function startScribble(event: ReactPointerEvent<HTMLDivElement>) {
+    event.currentTarget.setPointerCapture(event.pointerId);
+    const point = pointFromEvent(event);
+    drawingRef.current = true;
+    pathRef.current = `M ${point.x} ${point.y}`;
+  }
+
+  function moveScribble(event: ReactPointerEvent<HTMLDivElement>) {
+    if (!drawingRef.current) return;
+    const point = pointFromEvent(event);
+    pathRef.current = `${pathRef.current} L ${point.x} ${point.y}`;
+    update({
+      scribble: {
+        paths: [...(appearance.scribble?.paths ?? []), pathRef.current],
+        color: appearance.scribble?.color ?? "#F5B84D",
+        opacity: appearance.scribble?.opacity ?? 0.9,
+      },
+    });
+  }
+
+  function endScribble() {
+    drawingRef.current = false;
+    pathRef.current = "";
+  }
+
+  return (
+    <div
+      style={{
+        display: "grid",
+        gridTemplateColumns: "250px minmax(0, 1fr)",
+        gap: 12,
+        height: "100%",
+        minHeight: 0,
+        padding: 12,
+        background: "var(--lx-bg-surface)",
+      }}
+    >
+      <div style={{ display: "grid", gridTemplateRows: "auto 1fr", gap: 10, minHeight: 0 }}>
+        <span
+          style={{
+            color: "var(--lx-fg-primary)",
+            fontSize: 12,
+            fontWeight: 900,
+            letterSpacing: "0.08em",
+            textTransform: "uppercase",
+          }}
+        >
+          {title}
+        </span>
+        <NamedAppearanceTile
+          appearance={appearance}
+          fallbackLabel="Preview"
+          height={170}
+        />
+      </div>
+
+      <div style={{ display: "grid", gap: 10, minHeight: 0, overflow: "auto" }}>
+        <label style={editorFieldStyle}>
+          <span style={editorLabelStyle}>Name</span>
+          <input
+            className="lx-input"
+            value={appearance.name}
+            maxLength={48}
+            onChange={(event) => update({ name: event.currentTarget.value })}
+          />
+        </label>
+
+        <div style={editorFieldStyle}>
+          <span style={editorLabelStyle}>Background</span>
+          <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+            {NAMING_COLOR_SWATCHES.map((color) => (
+              <button
+                key={color}
+                type="button"
+                aria-label={`背景色 ${color}`}
+                onClick={() => update({ backgroundColor: color })}
+                style={{
+                  width: 30,
+                  height: 24,
+                  borderRadius: "var(--lx-radius-xs)",
+                  border:
+                    appearance.backgroundColor.toLowerCase() === color.toLowerCase()
+                      ? "2px solid var(--lx-fg-primary)"
+                      : "1px solid var(--lx-stroke)",
+                  background: color,
+                }}
+              />
+            ))}
+            <input
+              type="color"
+              value={appearance.backgroundColor}
+              onChange={(event) => update({ backgroundColor: event.currentTarget.value })}
+              style={colorInputStyle}
+            />
+          </div>
+        </div>
+
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
+          <label style={editorFieldStyle}>
+            <span style={editorLabelStyle}>Text</span>
+            <input
+              type="color"
+              value={appearance.textColor}
+              onChange={(event) => update({ textColor: event.currentTarget.value })}
+              style={wideColorInputStyle}
+            />
+          </label>
+          <label style={editorFieldStyle}>
+            <span style={editorLabelStyle}>Accent</span>
+            <input
+              type="color"
+              value={appearance.accentColor}
+              onChange={(event) => update({ accentColor: event.currentTarget.value })}
+              style={wideColorInputStyle}
+            />
+          </label>
+        </div>
+
+        <div style={editorFieldStyle}>
+          <span style={editorLabelStyle}>Image</span>
+          <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+            <input
+              type="file"
+              accept="image/*"
+              onChange={(event: ChangeEvent<HTMLInputElement>) => {
+                updateImage(event.currentTarget.files?.[0] ?? null);
+                event.currentTarget.value = "";
+              }}
+              style={{ color: "var(--lx-fg-tertiary)", fontSize: 11 }}
+            />
+            {appearance.image ? (
+              <>
+                <select
+                  className="lx-input lx-input-sm"
+                  value={appearance.image.fit}
+                  onChange={(event) =>
+                    update({ image: { ...appearance.image!, fit: event.currentTarget.value === "contain" ? "contain" : "cover" } })
+                  }
+                >
+                  <option value="cover">Cover</option>
+                  <option value="contain">Contain</option>
+                </select>
+                <input
+                  type="range"
+                  min={0.05}
+                  max={1}
+                  step={0.05}
+                  value={appearance.image.opacity}
+                  onChange={(event) =>
+                    update({ image: { ...appearance.image!, opacity: Number(event.currentTarget.value) } })
+                  }
+                />
+                <button type="button" className="lx-btn lx-btn-ghost" onClick={() => update({ image: null })}>
+                  Remove
+                </button>
+              </>
+            ) : null}
+          </div>
+        </div>
+
+        <div style={editorFieldStyle}>
+          <span style={editorLabelStyle}>Scribble</span>
+          <div
+            ref={padRef}
+            onPointerDown={startScribble}
+            onPointerMove={moveScribble}
+            onPointerUp={endScribble}
+            onPointerCancel={endScribble}
+            style={{
+              position: "relative",
+              height: 126,
+              border: "1px solid var(--lx-stroke)",
+              borderRadius: "var(--lx-radius-sm)",
+              background:
+                "linear-gradient(135deg, rgba(255,255,255,0.035), rgba(255,255,255,0.01))",
+              overflow: "hidden",
+              touchAction: "none",
+              cursor: "crosshair",
+            }}
+          >
+            <svg viewBox="0 0 100 60" preserveAspectRatio="none" style={{ position: "absolute", inset: 0, width: "100%", height: "100%" }}>
+              {appearance.scribble?.paths.map((path, index) => (
+                <path
+                  key={`${path}-${index}`}
+                  d={path}
+                  fill="none"
+                  stroke={appearance.scribble?.color ?? "#F5B84D"}
+                  strokeWidth={3.5}
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                  opacity={appearance.scribble?.opacity ?? 0.9}
+                />
+              ))}
+            </svg>
+            <span
+              style={{
+                position: "absolute",
+                left: 8,
+                bottom: 6,
+                color: "var(--lx-fg-muted)",
+                fontSize: 10,
+                pointerEvents: "none",
+              }}
+            >
+              Draw here
+            </span>
+          </div>
+          <div style={{ display: "flex", gap: 8, alignItems: "center", marginTop: 6 }}>
+            <input
+              type="color"
+              value={appearance.scribble?.color ?? "#F5B84D"}
+              onChange={(event) =>
+                update({
+                  scribble: {
+                    paths: appearance.scribble?.paths ?? [],
+                    color: event.currentTarget.value,
+                    opacity: appearance.scribble?.opacity ?? 0.9,
+                  },
+                })
+              }
+              style={colorInputStyle}
+            />
+            <input
+              type="range"
+              min={0.05}
+              max={1}
+              step={0.05}
+              value={appearance.scribble?.opacity ?? 0.9}
+              onChange={(event) =>
+                update({
+                  scribble: {
+                    paths: appearance.scribble?.paths ?? [],
+                    color: appearance.scribble?.color ?? "#F5B84D",
+                    opacity: Number(event.currentTarget.value),
+                  },
+                })
+              }
+            />
+            <button
+              type="button"
+              className="lx-btn lx-btn-ghost"
+              onClick={() => update({ scribble: null })}
+            >
+              Clear Scribble
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+const editorFieldStyle: CSSProperties = {
+  display: "grid",
+  gap: 6,
+  minWidth: 0,
+};
+
+const editorLabelStyle: CSSProperties = {
+  color: "var(--lx-fg-tertiary)",
+  fontSize: 10,
+  fontWeight: 850,
+  letterSpacing: "0.08em",
+  textTransform: "uppercase",
+};
+
+const colorInputStyle: CSSProperties = {
+  width: 34,
+  height: 26,
+  padding: 0,
+  border: "1px solid var(--lx-stroke)",
+  borderRadius: "var(--lx-radius-xs)",
+  background: "transparent",
+};
+
+const wideColorInputStyle: CSSProperties = {
+  ...colorInputStyle,
+  width: "100%",
+};
 
 // ═══════════════════════════════════════════════════════
 // FloatingDialog — 主窗口内可拖拽弹窗
