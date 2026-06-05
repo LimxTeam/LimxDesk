@@ -58,6 +58,21 @@ pub struct NamedAppearance {
     pub scribble: Option<NamedScribble>,
     #[serde(default)]
     pub image: Option<NamedImage>,
+    #[serde(default)]
+    pub visibility: NamedAppearanceVisibility,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct NamedAppearanceVisibility {
+    #[serde(default = "default_true")]
+    pub name: bool,
+    #[serde(default = "default_true")]
+    pub background: bool,
+    #[serde(default = "default_true")]
+    pub image: bool,
+    #[serde(default = "default_true")]
+    pub scribble: bool,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -101,6 +116,18 @@ impl Default for NamedAppearance {
             accent_color: default_accent_color(),
             scribble: None,
             image: None,
+            visibility: NamedAppearanceVisibility::default(),
+        }
+    }
+}
+
+impl Default for NamedAppearanceVisibility {
+    fn default() -> Self {
+        Self {
+            name: true,
+            background: true,
+            image: true,
+            scribble: true,
         }
     }
 }
@@ -318,4 +345,8 @@ fn default_image_opacity() -> f32 {
 
 fn default_image_scale() -> f32 {
     1.0
+}
+
+fn default_true() -> bool {
+    true
 }

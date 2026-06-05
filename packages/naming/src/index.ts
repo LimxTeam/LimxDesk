@@ -15,6 +15,13 @@ export interface NamedImage {
   rotation: number;
 }
 
+export interface NamedAppearanceVisibility {
+  name: boolean;
+  background: boolean;
+  image: boolean;
+  scribble: boolean;
+}
+
 export interface NamedAppearance {
   name: string;
   backgroundColor: string;
@@ -22,6 +29,7 @@ export interface NamedAppearance {
   accentColor: string;
   scribble: NamedScribble | null;
   image: NamedImage | null;
+  visibility: NamedAppearanceVisibility;
 }
 
 export const NAMING_COLOR_SWATCHES = [
@@ -45,6 +53,7 @@ export function createDefaultNamedAppearance(name = ""): NamedAppearance {
     accentColor: "#4DA3F5",
     scribble: null,
     image: null,
+    visibility: createDefaultVisibility(),
   };
 }
 
@@ -60,6 +69,7 @@ export function normalizeNamedAppearance(
     accentColor: sanitizeColor(appearance?.accentColor, defaults.accentColor),
     scribble: normalizeScribble(appearance?.scribble),
     image: normalizeImage(appearance?.image),
+    visibility: normalizeVisibility(appearance?.visibility),
   };
 }
 
@@ -98,6 +108,27 @@ function normalizeImage(value: NamedImage | null | undefined): NamedImage | null
     offsetX: clamp(value?.offsetX ?? 0, -100, 100),
     offsetY: clamp(value?.offsetY ?? 0, -100, 100),
     rotation: clamp(value?.rotation ?? 0, -180, 180),
+  };
+}
+
+function createDefaultVisibility(): NamedAppearanceVisibility {
+  return {
+    name: true,
+    background: true,
+    image: true,
+    scribble: true,
+  };
+}
+
+function normalizeVisibility(
+  value: Partial<NamedAppearanceVisibility> | null | undefined,
+): NamedAppearanceVisibility {
+  const defaults = createDefaultVisibility();
+  return {
+    name: value?.name ?? defaults.name,
+    background: value?.background ?? defaults.background,
+    image: value?.image ?? defaults.image,
+    scribble: value?.scribble ?? defaults.scribble,
   };
 }
 

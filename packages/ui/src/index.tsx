@@ -229,6 +229,7 @@ export function NamedAppearanceTile({
 }: NamedAppearanceTileProps) {
   const normalized = normalizeNamedAppearance(appearance, fallbackLabel);
   const label = empty ? fallbackLabel : normalized.name || fallbackLabel;
+  const visibility = normalized.visibility;
 
   return (
     <div
@@ -245,14 +246,14 @@ export function NamedAppearanceTile({
           : empty
             ? "1px dashed var(--lx-stroke)"
             : "1px solid rgba(255,255,255,0.10)",
-        background: empty
+        background: empty || !visibility.background
           ? "var(--lx-bg-deep)"
           : `linear-gradient(180deg, ${normalized.backgroundColor}, rgba(0,0,0,0.58))`,
         boxShadow: active ? `0 0 0 1px ${normalized.accentColor} inset` : undefined,
         color: empty ? "var(--lx-fg-muted)" : normalized.textColor,
       }}
     >
-      {!empty && normalized.image ? (
+      {!empty && visibility.image && normalized.image ? (
         <img
           alt=""
           src={normalized.image.dataUrl}
@@ -268,7 +269,7 @@ export function NamedAppearanceTile({
           }}
         />
       ) : null}
-      {!empty && normalized.scribble ? (
+      {!empty && visibility.scribble && normalized.scribble ? (
         <svg
           viewBox="0 0 100 60"
           preserveAspectRatio="none"
@@ -301,19 +302,21 @@ export function NamedAppearanceTile({
           textShadow: empty ? undefined : "0 1px 4px rgba(0,0,0,0.9)",
         }}
       >
-        <strong
-          style={{
-            maxWidth: "100%",
-            overflow: "hidden",
-            textOverflow: "ellipsis",
-            whiteSpace: "nowrap",
-            fontSize: compact ? 10 : 12,
-            lineHeight: 1.1,
-            fontWeight: 900,
-          }}
-        >
-          {label}
-        </strong>
+        {empty || visibility.name ? (
+          <strong
+            style={{
+              maxWidth: "100%",
+              overflow: "hidden",
+              textOverflow: "ellipsis",
+              whiteSpace: "nowrap",
+              fontSize: compact ? 10 : 12,
+              lineHeight: 1.1,
+              fontWeight: 900,
+            }}
+          >
+            {label}
+          </strong>
+        ) : null}
       </div>
     </div>
   );
@@ -434,9 +437,29 @@ export function NamedAppearanceEditor({
           height={210}
         />
         <div style={editorMetaGridStyle}>
-          <MetricBadge label="Image" value={appearance.image ? "ON" : "OFF"} />
-          <MetricBadge label="Scribble" value={appearance.scribble ? `${appearance.scribble.paths.length}` : "OFF"} />
-          <MetricBadge label="Name" value={`${appearance.name.length}/48`} />
+          <VisibilityToggle
+            label="Name"
+            active={appearance.visibility.name}
+            disabled={!appearance.name}
+            onToggle={() => update({ visibility: { ...appearance.visibility, name: !appearance.visibility.name } })}
+          />
+          <VisibilityToggle
+            label="Background"
+            active={appearance.visibility.background}
+            onToggle={() => update({ visibility: { ...appearance.visibility, background: !appearance.visibility.background } })}
+          />
+          <VisibilityToggle
+            label="Image"
+            active={appearance.visibility.image}
+            disabled={!appearance.image}
+            onToggle={() => update({ visibility: { ...appearance.visibility, image: !appearance.visibility.image } })}
+          />
+          <VisibilityToggle
+            label="Scribble"
+            active={appearance.visibility.scribble}
+            disabled={!appearance.scribble}
+            onToggle={() => update({ visibility: { ...appearance.visibility, scribble: !appearance.visibility.scribble } })}
+          />
         </div>
         <EditorSection title="Basic" subtitle="Identity and tile palette">
           <label style={editorFieldStyle}>
@@ -770,14 +793,42 @@ function clampEditorNumber(value: number, min: number, max: number): number {
   return Math.min(max, Math.max(min, value));
 }
 
-function MetricBadge({ label, value }: { label: string; value: string }) {
+function VisibilityToggle({
+  label,
+  active,
+  disabled,
+  onToggle,
+}: {
+  label: string;
+  active: boolean;
+  disabled?: boolean;
+  onToggle: () => void;
+}) {
   return (
-    <div style={editorMetricStyle}>
+    <button
+      type="button"
+      disabled={disabled}
+      onClick={onToggle}
+      style={{
+        ...editorMetricStyle,
+        cursor: disabled ? "not-allowed" : "pointer",
+        opacity: disabled ? 0.45 : 1,
+        borderColor: active ? "rgba(77,163,245,0.72)" : "var(--lx-stroke)",
+        background: active ? "rgba(77,163,245,0.12)" : "rgba(255,255,255,0.025)",
+        textAlign: "left",
+      }}
+    >
       <span style={{ color: "var(--lx-fg-tertiary)", fontSize: 9 }}>{label}</span>
-      <strong className="lx-code" style={{ color: "var(--lx-fg-primary)", fontSize: 11 }}>
-        {value}
+      <strong
+        className="lx-code"
+        style={{
+          color: active ? "var(--lx-primary-bright)" : "var(--lx-fg-muted)",
+          fontSize: 11,
+        }}
+      >
+        {active ? "ON" : "OFF"}
       </strong>
-    </div>
+    </button>
   );
 }
 
@@ -821,7 +872,7 @@ const editorSectionTitleStyle: CSSProperties = {
 
 const editorMetaGridStyle: CSSProperties = {
   display: "grid",
-  gridTemplateColumns: "repeat(3, 1fr)",
+  gridTemplateColumns: "repeat(2, 1fr)",
   gap: 7,
 };
 
