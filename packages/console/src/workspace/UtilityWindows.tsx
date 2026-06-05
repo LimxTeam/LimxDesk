@@ -1496,8 +1496,9 @@ function VerticalRail({
         onPointerCancel={onPointerCancel}
         style={verticalRailTrackStyle}
       >
+        <div style={verticalRailScaleStyle} />
         <div style={{ ...verticalRailFillStyle, height: `${clamp(value, 0, 100)}%` }} />
-        <div style={{ ...verticalRailThumbStyle, bottom: `calc(${clamp(value, 0, 100)}% - 7px)` }} />
+        <div style={{ ...verticalRailThumbStyle, bottom: `${clamp(value, 0, 100)}%` }} />
       </div>
       <span className="lx-code" style={verticalRailValueStyle}>{Math.round(value)}</span>
     </div>
@@ -1906,9 +1907,10 @@ function shaperControlLabel(control: ShaperControlId) {
 const verticalRailShellStyle: React.CSSProperties = {
   display: "grid",
   gridTemplateRows: "auto minmax(0, 1fr) auto",
-  gap: 6,
+  gap: 5,
   alignItems: "center",
   minHeight: 0,
+  padding: "0 2px",
 };
 
 const verticalRailLabelStyle: React.CSSProperties = {
@@ -1923,31 +1925,49 @@ const verticalRailLabelStyle: React.CSSProperties = {
 const verticalRailTrackStyle: React.CSSProperties = {
   position: "relative",
   minHeight: 180,
-  borderRadius: "var(--lx-radius-md)",
-  border: "1px solid rgba(255,255,255,0.08)",
+  borderRadius: "var(--lx-radius-sm)",
+  border: "1px solid rgba(255,255,255,0.12)",
   background:
-    "linear-gradient(180deg, rgba(255,255,255,0.85), rgba(255,255,255,0.24) 46%, rgba(0,0,0,0.92) 100%)",
-  overflow: "hidden",
+    "linear-gradient(180deg, rgba(255,255,255,0.12), rgba(255,255,255,0.035)), linear-gradient(180deg, rgba(255,255,255,0.88), rgba(122,122,122,0.42) 50%, rgba(0,0,0,0.82))",
+  overflow: "visible",
   cursor: "ns-resize",
+  touchAction: "none",
+};
+
+const verticalRailScaleStyle: React.CSSProperties = {
+  position: "absolute",
+  left: "50%",
+  top: 7,
+  bottom: 7,
+  width: 1,
+  transform: "translateX(-50%)",
+  background:
+    "repeating-linear-gradient(180deg, rgba(0,0,0,0.58) 0 1px, transparent 1px 14px), linear-gradient(180deg, rgba(0,0,0,0.62), rgba(255,255,255,0.20), rgba(0,0,0,0.62))",
+  pointerEvents: "none",
 };
 
 const verticalRailFillStyle: React.CSSProperties = {
   position: "absolute",
-  left: 0,
-  right: 0,
+  left: "calc(50% - 3px)",
+  width: 6,
   bottom: 0,
-  background: "linear-gradient(180deg, rgba(168,78,237,0.84), rgba(77,163,245,0.58))",
+  borderRadius: 999,
+  background: "linear-gradient(180deg, rgba(255,255,255,0.72), rgba(77,163,245,0.72))",
+  boxShadow: "0 0 8px rgba(77,163,245,0.20)",
+  pointerEvents: "none",
 };
 
 const verticalRailThumbStyle: React.CSSProperties = {
   position: "absolute",
-  left: 6,
-  right: 6,
-  height: 14,
-  borderRadius: 999,
-  background: "rgba(255,255,255,0.92)",
-  border: "1px solid rgba(0,0,0,0.36)",
-  boxShadow: "0 0 8px rgba(255,255,255,0.16)",
+  left: "50%",
+  width: 34,
+  height: 10,
+  transform: "translate(-50%, 50%)",
+  borderRadius: 3,
+  background: "linear-gradient(180deg, rgba(255,255,255,0.96), rgba(191,197,204,0.92))",
+  border: "1px solid rgba(0,0,0,0.62)",
+  boxShadow: "0 1px 8px rgba(0,0,0,0.48), 0 0 0 1px rgba(255,255,255,0.18)",
+  pointerEvents: "none",
 };
 
 const verticalRailValueStyle: React.CSSProperties = {
