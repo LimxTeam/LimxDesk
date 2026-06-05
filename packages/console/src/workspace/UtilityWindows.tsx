@@ -557,7 +557,6 @@ export function ColorPickerWindow({ config, onConfigChange }: WindowToolProps) {
                   onPointerCancel={endBoardDrag}
                   style={colorBoardStyle(draft)}
                 >
-                  <div style={colorBoardCrosshairStyle(draft)} />
                   <div style={colorBoardPointerStyle(draft)} />
                 </div>
                 <div style={colorQuickStatsStyle}>
@@ -1804,32 +1803,18 @@ function colorBoardStyle(state: ColorPickerState): React.CSSProperties {
   };
 }
 
-function colorBoardCrosshairStyle(state: ColorPickerState): React.CSSProperties {
-  return {
-    position: "absolute",
-    left: `${clamp(state.hue / 360, 0, 1) * 100}%`,
-    top: `${100 - clamp(state.saturation, 0, 100)}%`,
-    width: 24,
-    height: 24,
-    transform: "translate(-50%, -50%)",
-    border: "1px solid rgba(255,255,255,0.78)",
-    boxShadow: "0 0 0 1px rgba(0,0,0,0.54), 0 0 12px rgba(255,255,255,0.35)",
-    pointerEvents: "none",
-  };
-}
-
 function colorBoardPointerStyle(state: ColorPickerState): React.CSSProperties {
   return {
     position: "absolute",
     left: `${clamp(state.hue / 360, 0, 1) * 100}%`,
     top: `${100 - clamp(state.saturation, 0, 100)}%`,
-    width: 16,
-    height: 16,
+    width: 10,
+    height: 10,
     transform: "translate(-50%, -50%)",
     borderRadius: "50%",
-    background: colorCss(state.values),
-    border: "2px solid rgba(255,255,255,0.96)",
-    boxShadow: "0 0 0 1px rgba(0,0,0,0.45), 0 0 12px rgba(255,255,255,0.16)",
+    background: "rgba(255,255,255,0.96)",
+    border: "1px solid rgba(0,0,0,0.68)",
+    boxShadow: "0 0 0 1px rgba(255,255,255,0.32), 0 0 8px rgba(0,0,0,0.45)",
     pointerEvents: "none",
   };
 }
