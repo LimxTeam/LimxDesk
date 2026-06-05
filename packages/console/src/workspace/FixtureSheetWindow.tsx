@@ -77,8 +77,20 @@ interface ProgrammerPart {
 interface ProgrammerValue {
   fixtureId: string;
   attribute: string;
+  featureGroup: string;
+  layer: ProgrammerLayer;
+  value: ProgrammerScalar;
   active: boolean;
+  source: ProgrammerValueSource;
 }
+
+interface ProgrammerScalar {
+  numeric: number | null;
+  text: string | null;
+}
+
+type ProgrammerLayer = "absolute" | "relative" | "fade" | "delay";
+type ProgrammerValueSource = "manual" | "preset" | "output";
 
 interface FixtureSheetRow {
   id: string;
@@ -114,16 +126,19 @@ export function FixtureSheetWindow() {
     () => buildRows(fixtures, fixtureTypes, expandedFixtureIds),
     [expandedFixtureIds, fixtures, fixtureTypes],
   );
-  const activeFixtureIds = useMemo(() => programmerActiveFixtureIds(programmer), [programmer]);
+  const activeValuesByFixture = useMemo(() => programmerActiveValuesByFixture(programmer), [programmer]);
   const visibleRows = useMemo(() => {
     const needle = query.trim().toLowerCase();
     if (!needle) return rows;
-    return rows.filter((row) =>
-      `${row.fidLabel} ${row.name} ${row.subFixtureName} ${row.fixture.fixtureTypeName} ${row.fixture.modeName} ${row.patchLabel} ${row.fixture.stage}`
+    return rows.filter((row) => {
+      const activeText = activeValuesForRow(row, activeValuesByFixture)
+        .map((value) => `${value.attribute} ${formatProgrammerValue(value)}`)
+        .join(" ");
+      return `${row.fidLabel} ${row.name} ${row.subFixtureName} ${row.fixture.fixtureTypeName} ${row.fixture.modeName} ${row.patchLabel} ${row.fixture.stage} ${activeText}`
         .toLowerCase()
-        .includes(needle),
-    );
-  }, [query, rows]);
+        .includes(needle);
+    });
+  }, [activeValuesByFixture, query, rows]);
 
   useEffect(() => {
     void loadFixtureTypes();
@@ -323,7 +338,7 @@ export function FixtureSheetWindow() {
         <table
           style={{
             width: "100%",
-            minWidth: 760,
+            minWidth: 980,
             borderCollapse: "collapse",
             fontSize: 11,
             color: "var(--lx-fg-secondary)",
@@ -349,6 +364,7 @@ export function FixtureSheetWindow() {
               <HeaderCell width={88}>Patch</HeaderCell>
               <HeaderCell width={72}>Ch</HeaderCell>
               <HeaderCell width={94}>Stage</HeaderCell>
+              <HeaderCell width={210}>Active Values</HeaderCell>
               <HeaderCell width={98}>State</HeaderCell>
             </tr>
           </thead>
@@ -357,9 +373,8 @@ export function FixtureSheetWindow() {
               const fixture = row.fixture;
               const selected = selectedIds.includes(row.id);
               const primary = row.id === primaryId;
-              const active =
-                activeFixtureIds.has(row.id) ||
-                (!row.isSubFixture && fixtureHasActiveValues(activeFixtureIds, fixture.id));
+              const activeValues = activeValuesForRow(row, activeValuesByFixture);
+              const active = activeValues.length > 0;
               return (
                 <tr
                   key={row.id}
@@ -412,6 +427,9 @@ export function FixtureSheetWindow() {
                   <BodyCell mono>{row.patchLabel}</BodyCell>
                   <BodyCell mono>{row.channels}</BodyCell>
                   <BodyCell>{fixture.stage}</BodyCell>
+                  <BodyCell>
+                    <ActiveValueChips values={activeValues} />
+                  </BodyCell>
                   <BodyCell>
                     <StateBadge fixture={fixture} active={active} />
                   </BodyCell>
@@ -621,24 +639,95 @@ function parentFixtureId(id: string) {
   return id.split("::sub:")[0] ?? id;
 }
 
-function programmerActiveFixtureIds(programmer: Programmer) {
+function programmerActiveValuesByFixture(programmer: Programmer) {
   const buffer = programmer.mode === "preview" ? programmer.preview : programmer.live;
-  const ids = new Set<string>();
+  const valuesByFixture = new Map<string, ProgrammerValue[]>();
   for (const part of buffer.parts) {
     for (const value of part.values) {
       if (value.active) {
-        ids.add(value.fixtureId);
+        const values = valuesByFixture.get(value.fixtureId) ?? [];
+        values.push(value);
+        valuesByFixture.set(value.fixtureId, values);
       }
     }
   }
-  return ids;
+  return valuesByFixture;
 }
 
-function fixtureHasActiveValues(activeFixtureIds: Set<string>, fixtureId: string) {
-  if (activeFixtureIds.has(fixtureId)) return true;
-  const prefix = `${fixtureId}::sub:`;
-  for (const id of activeFixtureIds) {
-    if (id.startsWith(prefix)) return true;
+function activeValuesForRow(row: FixtureSheetRow, valuesByFixture: Map<string, ProgrammerValue[]>) {
+  if (row.isSubFixture) {
+    return valuesByFixture.get(row.id) ?? [];
   }
-  return false;
+
+  const values = [...(valuesByFixture.get(row.fixture.id) ?? [])];
+  const prefix = `${row.fixture.id}::sub:`;
+  for (const [id, fixtureValues] of valuesByFixture) {
+    if (id.startsWith(prefix)) {
+      values.push(...fixtureValues);
+    }
+  }
+  return values;
+}
+
+function ActiveValueChips({ values }: { values: ProgrammerValue[] }) {
+  if (values.length === 0) {
+    return <span style={{ color: "var(--lx-fg-tertiary)" }}>-</span>;
+  }
+
+  const visible = values.slice(0, 4);
+  return (
+    <div style={{ display: "flex", alignItems: "center", gap: 4, minWidth: 0, overflow: "hidden" }}>
+      {visible.map((value) => (
+        <span
+          key={`${value.fixtureId}-${value.attribute}-${value.layer}`}
+          className="lx-code"
+          title={`${value.fixtureId} ${value.attribute} ${formatProgrammerValue(value)} ${value.layer}`}
+          style={{
+            display: "inline-flex",
+            alignItems: "center",
+            maxWidth: 86,
+            height: 18,
+            border: "1px solid rgba(120,217,120,0.48)",
+            borderRadius: "var(--lx-radius-xs)",
+            background: "rgba(120,217,120,0.11)",
+            color: "var(--lx-action-bright)",
+            padding: "0 5px",
+            fontSize: 9,
+            fontWeight: 800,
+            whiteSpace: "nowrap",
+            overflow: "hidden",
+            textOverflow: "ellipsis",
+          }}
+        >
+          {compactAttributeName(value.attribute)}:{formatProgrammerValue(value)}
+        </span>
+      ))}
+      {values.length > visible.length ? (
+        <span className="lx-code" style={{ color: "var(--lx-fg-tertiary)", fontSize: 9 }}>
+          +{values.length - visible.length}
+        </span>
+      ) : null}
+    </div>
+  );
+}
+
+function compactAttributeName(attribute: string) {
+  return attribute
+    .replace(/^ColorAdd_/i, "")
+    .replace(/^Color/i, "Col")
+    .replace(/^Shutter/i, "Shut")
+    .replace(/^Dimmer/i, "Dim");
+}
+
+function formatProgrammerValue(value: ProgrammerValue) {
+  if (value.value.text?.trim()) return value.value.text.trim();
+  if (typeof value.value.numeric === "number" && Number.isFinite(value.value.numeric)) {
+    if (value.layer === "fade" || value.layer === "delay") {
+      return `${value.value.numeric.toFixed(1)}s`;
+    }
+    return Number.isInteger(value.value.numeric)
+      ? String(value.value.numeric)
+      : value.value.numeric.toFixed(1);
+  }
+  return "-";
 }
