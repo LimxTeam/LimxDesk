@@ -1,13 +1,20 @@
 import { FixtureSheetWindow } from "./FixtureSheetWindow";
 import { DmxSheetWindow } from "./DmxSheetWindow";
+import {
+  ColorPickerWindow,
+  GroupsWindow,
+  PresetsWindow,
+  ShapersWindow,
+} from "./UtilityWindows";
 import { getWorkspaceWindowItem } from "./windowCatalog";
 import type { WorkspaceWindow } from "./types";
 
 export interface WindowSurfaceProps {
   window: WorkspaceWindow;
+  onConfigChange: (config: Record<string, unknown>) => void;
 }
 
-export function WindowSurface({ window }: WindowSurfaceProps) {
+export function WindowSurface({ window, onConfigChange }: WindowSurfaceProps) {
   const item = getWorkspaceWindowItem(window.type);
 
   if (window.type === "fixture-sheet") {
@@ -16,6 +23,22 @@ export function WindowSurface({ window }: WindowSurfaceProps) {
 
   if (window.type === "dmx-sheet") {
     return <DmxSheetWindow />;
+  }
+
+  if (window.type === "groups") {
+    return <GroupsWindow config={window.config} onConfigChange={onConfigChange} />;
+  }
+
+  if (window.type === "color-picker") {
+    return <ColorPickerWindow config={window.config} onConfigChange={onConfigChange} />;
+  }
+
+  if (window.type === "presets") {
+    return <PresetsWindow config={window.config} onConfigChange={onConfigChange} />;
+  }
+
+  if (window.type === "shapers") {
+    return <ShapersWindow config={window.config} onConfigChange={onConfigChange} />;
   }
 
   return (

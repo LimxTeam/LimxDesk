@@ -13,6 +13,7 @@ export interface GridWindowFrameProps {
   onMoveStart: (windowId: string, event: React.PointerEvent<HTMLDivElement>) => void;
   onResizeStart: (windowId: string, event: React.PointerEvent<HTMLDivElement>) => void;
   onRemove: (windowId: string) => void;
+  onConfigChange: (windowId: string, config: Record<string, unknown>) => void;
 }
 
 export function GridWindowFrame({
@@ -26,6 +27,7 @@ export function GridWindowFrame({
   onMoveStart,
   onResizeStart,
   onRemove,
+  onConfigChange,
 }: GridWindowFrameProps) {
   const item = getWorkspaceWindowItem(window.type);
 
@@ -127,7 +129,10 @@ export function GridWindowFrame({
       </div>
 
       <div style={{ height: `calc(100% - 28px)` }}>
-        <WindowSurface window={window} />
+        <WindowSurface
+          window={window}
+          onConfigChange={(config) => onConfigChange(window.id, config)}
+        />
       </div>
 
       <div

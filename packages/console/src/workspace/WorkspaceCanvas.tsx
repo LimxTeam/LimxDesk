@@ -52,6 +52,7 @@ function WorkspaceCanvas({ onWindowsChange }, ref) {
     addWindow,
     updateWindowRect,
     removeWindow,
+    updateWindowConfig,
     replaceWindows,
     selectWindow,
     isCellOccupied,
@@ -368,6 +369,7 @@ function WorkspaceCanvas({ onWindowsChange }, ref) {
             beginDrag("resize", windowId, event)
           }
           onRemove={removeWindow}
+          onConfigChange={updateWindowConfig}
         />
       ))}
 

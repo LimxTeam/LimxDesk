@@ -115,6 +115,14 @@ export function useWorkspaceLayout() {
     setSelectedWindowId((prev) => (prev === windowId ? null : prev));
   }, []);
 
+  const updateWindowConfig = useCallback((windowId: string, config: Record<string, unknown>) => {
+    setWindows((prev) =>
+      prev.map((window) =>
+        window.id === windowId ? { ...window, config } : window,
+      ),
+    );
+  }, []);
+
   const isCellOccupied = useCallback(
     (x: number, y: number) =>
       windows.some(
@@ -143,6 +151,7 @@ export function useWorkspaceLayout() {
     addWindow,
     updateWindowRect,
     removeWindow,
+    updateWindowConfig,
     replaceWindows,
     selectWindow: setSelectedWindowId,
     isCellOccupied,

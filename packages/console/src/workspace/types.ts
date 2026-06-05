@@ -5,6 +5,8 @@ export type WorkspaceWindowType =
   | "timecode"
   | "color-picker"
   | "groups"
+  | "presets"
+  | "shapers"
   | "layout";
 
 export interface GridCell {
