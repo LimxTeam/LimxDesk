@@ -1,7 +1,14 @@
 import { useEffect, useMemo, useState } from "react";
 import type { CSSProperties, ReactNode } from "react";
-import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import {
+  clearWorkspaceRuntimeCache,
+  loadCachedDmxFrames,
+  loadCachedFixtureTypes,
+  loadCachedPatch,
+  loadCachedSelection,
+  setWorkspaceRuntimeValue,
+} from "./workspaceRuntime";
 
 interface PatchDocument {
   fixtures: PatchFixture[];
@@ -117,21 +124,35 @@ export function DmxSheetWindow() {
 
     const register = async () => {
       const events = await Promise.all([
-        listen("output:sent", () => void loadFrames()),
-        listen("programmer:changed", () => void loadFrames()),
+        listen("output:sent", () => {
+          clearWorkspaceRuntimeCache(["frames"]);
+          void loadFrames();
+        }),
+        listen("programmer:changed", () => {
+          clearWorkspaceRuntimeCache(["programmer", "frames"]);
+          void loadFrames();
+        }),
         listen("patch:changed", () => {
+          clearWorkspaceRuntimeCache(["patch", "frames"]);
           void loadPatch();
           void loadFrames();
         }),
         listen("fixture-types:changed", () => {
+          clearWorkspaceRuntimeCache(["fixtureTypes", "frames"]);
           void loadFixtureTypes();
           void loadFrames();
         }),
         listen("fixture-selection:changed", (event) => {
-          setSelection(event.payload as FixtureSelection);
+          const payload = event.payload as FixtureSelection;
+          setWorkspaceRuntimeValue("selection", payload);
+          setSelection(payload);
         }),
-        listen("show:loaded", () => void reloadAll()),
+        listen("show:loaded", () => {
+          clearWorkspaceRuntimeCache();
+          void reloadAll();
+        }),
         listen("show:deleted", () => {
+          clearWorkspaceRuntimeCache();
           setFixtures([]);
           setFixtureTypes([]);
           setFrames([]);
@@ -161,7 +182,7 @@ export function DmxSheetWindow() {
 
   async function loadPatch() {
     try {
-      const document = await invoke<PatchDocument | null>("patch_load_current_show");
+      const document = await loadCachedPatch<PatchDocument | null>();
       const nextFixtures = document?.fixtures ?? [];
       setFixtures(nextFixtures);
       setStatus(`${nextFixtures.length} fixture${nextFixtures.length === 1 ? "" : "s"}`);
@@ -173,7 +194,7 @@ export function DmxSheetWindow() {
 
   async function loadFixtureTypes() {
     try {
-      setFixtureTypes(await invoke<FixtureTypeEntry[]>("fixture_type_scan_current_show"));
+      setFixtureTypes(await loadCachedFixtureTypes<FixtureTypeEntry[]>());
     } catch {
       setFixtureTypes([]);
     }
@@ -181,7 +202,7 @@ export function DmxSheetWindow() {
 
   async function loadSelection() {
     try {
-      setSelection(await invoke<FixtureSelection>("fixture_selection_get"));
+      setSelection(await loadCachedSelection<FixtureSelection>());
     } catch {
       setSelection({ fixtureIds: [], primaryFixtureId: null, version: 0 });
     }
@@ -189,7 +210,7 @@ export function DmxSheetWindow() {
 
   async function loadFrames() {
     try {
-      const nextFrames = await invoke<DmxUniverseFrame[]>("output_render_dmx");
+      const nextFrames = await loadCachedDmxFrames<DmxUniverseFrame[]>();
       nextFrames.sort((left, right) => left.universe - right.universe);
       setFrames(nextFrames);
       setSelectedUniverse((current) => {

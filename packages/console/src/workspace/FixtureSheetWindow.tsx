@@ -2,6 +2,15 @@ import { useEffect, useMemo, useState } from "react";
 import type { CSSProperties, ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import {
+  clearWorkspaceRuntimeCache,
+  loadCachedDmxFrames,
+  loadCachedFixtureTypes,
+  loadCachedPatch,
+  loadCachedProgrammer,
+  loadCachedSelection,
+  setWorkspaceRuntimeValue,
+} from "./workspaceRuntime";
 
 interface PatchDocument {
   fixtures: PatchFixture[];
@@ -202,19 +211,23 @@ export function FixtureSheetWindow() {
 
     const register = async () => {
       const patchChanged = await listen("patch:changed", () => {
+        clearWorkspaceRuntimeCache(["patch", "frames"]);
         void loadPatch();
         void loadFrames();
       });
       const fixtureTypesChanged = await listen("fixture-types:changed", () => {
+        clearWorkspaceRuntimeCache(["fixtureTypes", "frames"]);
         void loadFixtureTypes();
         void loadFrames();
       });
       const showLoaded = await listen("show:loaded", () => {
+        clearWorkspaceRuntimeCache();
         void loadFixtureTypes();
         void loadPatch();
         void loadFrames();
       });
       const showDeleted = await listen("show:deleted", () => {
+        clearWorkspaceRuntimeCache();
         setFixtures([]);
         setFixtureTypes([]);
         setSelectedIds([]);
@@ -227,15 +240,19 @@ export function FixtureSheetWindow() {
       const selectionChanged = await listen<FixtureSelection>(
         "fixture-selection:changed",
         (event) => {
+          setWorkspaceRuntimeValue("selection", event.payload);
           setSelectedIds(event.payload.fixtureIds);
           setPrimaryId(event.payload.primaryFixtureId ?? "");
         },
       );
       const programmerChanged = await listen<Programmer>("programmer:changed", (event) => {
+        setWorkspaceRuntimeValue("programmer", event.payload);
+        clearWorkspaceRuntimeCache(["frames"]);
         setProgrammer(event.payload);
         void loadFrames();
       });
       const outputSent = await listen("output:sent", () => {
+        clearWorkspaceRuntimeCache(["frames"]);
         void loadFrames();
       });
 
@@ -261,7 +278,7 @@ export function FixtureSheetWindow() {
 
   async function loadPatch() {
     try {
-      const document = await invoke<PatchDocument | null>("patch_load_current_show");
+      const document = await loadCachedPatch<PatchDocument | null>();
       const nextFixtures = document?.fixtures ?? [];
       setFixtures(nextFixtures);
       setSelectedIds((current) => current.filter((id) => nextFixtures.some((fixture) => fixture.id === parentFixtureId(id))));
@@ -279,7 +296,7 @@ export function FixtureSheetWindow() {
 
   async function loadFixtureTypes() {
     try {
-      const types = await invoke<FixtureTypeEntry[]>("fixture_type_scan_current_show");
+      const types = await loadCachedFixtureTypes<FixtureTypeEntry[]>();
       setFixtureTypes(types);
     } catch {
       setFixtureTypes([]);
@@ -288,7 +305,7 @@ export function FixtureSheetWindow() {
 
   async function loadSelection() {
     try {
-      const selection = await invoke<FixtureSelection>("fixture_selection_get");
+      const selection = await loadCachedSelection<FixtureSelection>();
       setSelectedIds(selection.fixtureIds);
       setPrimaryId(selection.primaryFixtureId ?? "");
       setAnchorId(selection.primaryFixtureId ?? "");
@@ -301,7 +318,7 @@ export function FixtureSheetWindow() {
 
   async function loadProgrammer() {
     try {
-      setProgrammer(await invoke<Programmer>("programmer_get"));
+      setProgrammer(await loadCachedProgrammer<Programmer>());
     } catch {
       setProgrammer({
         live: { selectedPartId: 0, parts: [] },
@@ -315,7 +332,7 @@ export function FixtureSheetWindow() {
 
   async function loadFrames() {
     try {
-      const nextFrames = await invoke<DmxUniverseFrame[]>("output_render_dmx");
+      const nextFrames = await loadCachedDmxFrames<DmxUniverseFrame[]>();
       nextFrames.sort((left, right) => left.universe - right.universe);
       setFrames(nextFrames);
     } catch {
