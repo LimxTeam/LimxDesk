@@ -51,11 +51,14 @@ const MODE_LABELS: Record<NetworkOutputMode, string> = {
 export function NetworkSettingsPage() {
   const [targets, setTargets] = useState<NetworkOutputTarget[]>([]);
   const [interfaces, setInterfaces] = useState<NetworkInterfaceInfo[]>([]);
+  const [activeProtocol, setActiveProtocol] = useState<NetworkProtocol>("artNet");
   const [busy, setBusy] = useState(false);
   const [logLine, setLogLine] = useState("Ready");
 
   const validation = useMemo(() => validateTargets(targets), [targets]);
   const enabledTargets = targets.filter((target) => target.enabled);
+  const activeTargets = targets.filter((target) => target.protocol === activeProtocol);
+  const activeValidation = useMemo(() => validateTargets(activeTargets), [activeTargets]);
 
   useEffect(() => {
     void loadNetworkState();
@@ -169,6 +172,7 @@ export function NetworkSettingsPage() {
 
   function addTarget(protocol: NetworkProtocol, mode: NetworkOutputMode) {
     const index = targets.length + 1;
+    setActiveProtocol(protocol);
     setTargets((current) => [
       ...current,
       createTarget(protocol, mode, index, preferredLocalAddress(interfaces)),
@@ -185,7 +189,7 @@ export function NetworkSettingsPage() {
         display: "grid",
         minHeight: 0,
         height: "100%",
-        gridTemplateRows: "auto minmax(0, 1fr) 116px",
+        gridTemplateRows: "auto auto minmax(0, 1fr) 116px",
         gap: 10,
       }}
     >
@@ -223,125 +227,48 @@ export function NetworkSettingsPage() {
         </div>
       </div>
 
+      <div className="lx-panel" style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", padding: 4, gap: 4 }}>
+        <ProtocolTab
+          active={activeProtocol === "artNet"}
+          label="Art-Net"
+          count={targets.filter((target) => target.protocol === "artNet").length}
+          enabled={targets.filter((target) => target.protocol === "artNet" && target.enabled).length}
+          invalid={targets.filter((target) => target.protocol === "artNet" && validateTarget(target)).length}
+          onClick={() => setActiveProtocol("artNet")}
+        />
+        <ProtocolTab
+          active={activeProtocol === "sacn"}
+          label="sACN"
+          count={targets.filter((target) => target.protocol === "sacn").length}
+          enabled={targets.filter((target) => target.protocol === "sacn" && target.enabled).length}
+          invalid={targets.filter((target) => target.protocol === "sacn" && validateTarget(target)).length}
+          onClick={() => setActiveProtocol("sacn")}
+        />
+      </div>
+
       <div className="lx-panel" style={{ minHeight: 0, overflow: "auto" }}>
-        <table style={{ width: "100%", minWidth: 1580, borderCollapse: "collapse", color: "var(--lx-fg-secondary)", fontSize: 11 }}>
-          <thead>
-            <tr style={{ height: 30, color: "var(--lx-fg-tertiary)", background: "var(--lx-bg-deep)", textTransform: "uppercase" }}>
-              <HeaderCell width={64}>Valid</HeaderCell>
-              <HeaderCell width={88}>Requested</HeaderCell>
-              <HeaderCell width={112}>Protocol</HeaderCell>
-              <HeaderCell width={150}>Mode</HeaderCell>
-              <HeaderCell width={230}>Local Host</HeaderCell>
-              <HeaderCell width={180}>Destination IP</HeaderCell>
-              <HeaderCell width={86}>LocalSt</HeaderCell>
-              <HeaderCell width={82}>Amount</HeaderCell>
-              <HeaderCell width={76}>Net</HeaderCell>
-              <HeaderCell width={76}>Subnet</HeaderCell>
-              <HeaderCell width={84}>Art Univ</HeaderCell>
-              <HeaderCell width={92}>sACN Univ</HeaderCell>
-              <HeaderCell width={84}>Priority</HeaderCell>
-              <HeaderCell width={72}>TTL</HeaderCell>
-              <HeaderCell width={90}>Delay</HeaderCell>
-              <HeaderCell width={84}>Port</HeaderCell>
-              <HeaderCell width={72}>Delete</HeaderCell>
-            </tr>
-          </thead>
-          <tbody>
-            {targets.length > 0 ? (
-              targets.map((target) => {
-                const rowError = validateTarget(target);
-                return (
-                  <tr key={target.id} style={{ height: 42, borderTop: "1px solid rgba(255,255,255,0.055)", background: rowError ? "rgba(255, 65, 86, 0.08)" : "transparent" }}>
-                    <BodyCell>
-                      <span className={`lx-badge ${rowError ? "lx-badge-warn" : "lx-badge-success"}`}>{rowError ? "No" : "Yes"}</span>
-                    </BodyCell>
-                    <BodyCell>
-                      <input type="checkbox" checked={target.enabled} onChange={(event) => updateTarget(target.id, { enabled: event.currentTarget.checked })} />
-                    </BodyCell>
-                    <BodyCell>
-                      <select className="lx-input lx-input-sm" value={target.protocol} onChange={(event) => updateTarget(target.id, protocolDefaults(event.currentTarget.value as NetworkProtocol))}>
-                        <option value="artNet">Art-Net</option>
-                        <option value="sacn">sACN</option>
-                      </select>
-                    </BodyCell>
-                    <BodyCell>
-                      <select className="lx-input lx-input-sm" value={target.mode} onChange={(event) => updateTarget(target.id, modeDefaults(target.protocol, event.currentTarget.value as NetworkOutputMode))}>
-                        {allowedModes(target.protocol).map((mode) => (
-                          <option key={mode} value={mode}>{MODE_LABELS[mode]}</option>
-                        ))}
-                      </select>
-                    </BodyCell>
-                    <BodyCell>
-                      <select className="lx-input lx-input-sm" value={target.localAddress} onChange={(event) => updateTarget(target.id, { localAddress: event.currentTarget.value })}>
-                        {interfaces.map((item) => (
-                          <option key={item.id} value={item.address}>
-                            {item.address} - {item.name}
-                          </option>
-                        ))}
-                      </select>
-                    </BodyCell>
-                    <BodyCell>
-                      <input
-                        className="lx-input lx-input-sm"
-                        value={target.destination}
-                        disabled={target.mode === "outputMulticast"}
-                        onChange={(event) => updateTarget(target.id, { destination: event.currentTarget.value })}
-                      />
-                    </BodyCell>
-                    <BodyCell>
-                      <NumberInput value={target.localUniverse} min={1} max={63999} onChange={(value) => updateTarget(target.id, { localUniverse: value })} />
-                    </BodyCell>
-                    <BodyCell>
-                      <NumberInput value={target.amount} min={1} max={target.protocol === "artNet" ? 256 : 512} onChange={(value) => updateTarget(target.id, { amount: value })} />
-                    </BodyCell>
-                    <BodyCell>
-                      <NumberInput value={target.artnetNet} min={0} max={127} disabled={target.protocol !== "artNet"} onChange={(value) => updateTarget(target.id, { artnetNet: value })} />
-                    </BodyCell>
-                    <BodyCell>
-                      <NumberInput value={target.artnetSubnet} min={0} max={15} disabled={target.protocol !== "artNet"} onChange={(value) => updateTarget(target.id, { artnetSubnet: value })} />
-                    </BodyCell>
-                    <BodyCell>
-                      <NumberInput value={target.artnetUniverse} min={0} max={15} disabled={target.protocol !== "artNet"} onChange={(value) => updateTarget(target.id, { artnetUniverse: value })} />
-                    </BodyCell>
-                    <BodyCell>
-                      <NumberInput value={target.sacnUniverse} min={1} max={63999} disabled={target.protocol !== "sacn"} onChange={(value) => updateTarget(target.id, { sacnUniverse: value })} />
-                    </BodyCell>
-                    <BodyCell>
-                      <NumberInput value={target.priority} min={0} max={200} disabled={target.protocol !== "sacn"} onChange={(value) => updateTarget(target.id, { priority: value })} />
-                    </BodyCell>
-                    <BodyCell>
-                      <NumberInput value={target.ttl} min={1} max={255} onChange={(value) => updateTarget(target.id, { ttl: value })} />
-                    </BodyCell>
-                    <BodyCell>
-                      <NumberInput value={target.delayMs} min={0} max={10000} step={0.1} onChange={(value) => updateTarget(target.id, { delayMs: value })} />
-                    </BodyCell>
-                    <BodyCell>
-                      <NumberInput value={target.port} min={1} max={65535} onChange={(value) => updateTarget(target.id, { port: value })} />
-                    </BodyCell>
-                    <BodyCell>
-                      <button type="button" className="lx-icon-btn" onClick={() => deleteTarget(target.id)} title="Delete">
-                        <Trash2 size={13} />
-                      </button>
-                    </BodyCell>
-                  </tr>
-                );
-              })
-            ) : (
-              <tr>
-                <td colSpan={17} style={{ padding: 18, textAlign: "center", color: "var(--lx-fg-tertiary)" }}>
-                  没有输出目标。
-                </td>
-              </tr>
-            )}
-          </tbody>
-        </table>
+        {activeProtocol === "artNet" ? (
+          <ArtNetTable
+            targets={activeTargets}
+            interfaces={interfaces}
+            updateTarget={updateTarget}
+            deleteTarget={deleteTarget}
+          />
+        ) : (
+          <SacnTable
+            targets={activeTargets}
+            interfaces={interfaces}
+            updateTarget={updateTarget}
+            deleteTarget={deleteTarget}
+          />
+        )}
       </div>
 
       <div className="lx-panel" style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr) minmax(260px, 1.4fr)", gap: 8, padding: 10, minHeight: 0 }}>
-        <Metric label="Targets" value={targets.length} />
-        <Metric label="Enabled" value={enabledTargets.length} />
-        <Metric label="Art-Net" value={targets.filter((target) => target.protocol === "artNet").length} />
-        <Metric label="sACN" value={targets.filter((target) => target.protocol === "sacn").length} />
+        <Metric label={`${PROTOCOL_LABELS[activeProtocol]} Targets`} value={activeTargets.length} />
+        <Metric label="Enabled" value={activeTargets.filter((target) => target.enabled).length} />
+        <Metric label="Invalid" value={activeValidation.length} />
+        <Metric label="All Enabled" value={enabledTargets.length} />
         <div style={{ border: "1px solid var(--lx-stroke)", borderRadius: "var(--lx-radius-sm)", background: "var(--lx-bg-deep)", padding: "8px 10px", overflow: "auto" }}>
           <div style={{ color: "var(--lx-fg-tertiary)", fontSize: 9, marginBottom: 7 }}>Local IPv4 Sources</div>
           <div style={{ display: "flex", flexWrap: "wrap", gap: 5 }}>
@@ -379,6 +306,213 @@ function createTarget(protocol: NetworkProtocol, mode: NetworkOutputMode, index:
   });
 }
 
+function ProtocolTab({ active, label, count, enabled, invalid, onClick }: { active: boolean; label: string; count: number; enabled: number; invalid: number; onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      style={{
+        display: "flex",
+        alignItems: "center",
+        justifyContent: "space-between",
+        minHeight: 46,
+        padding: "8px 12px",
+        borderRadius: "var(--lx-radius-sm)",
+        border: active ? "1px solid var(--lx-primary-trace)" : "1px solid transparent",
+        background: active ? "rgba(0, 120, 212, 0.15)" : "var(--lx-bg-deep)",
+        color: active ? "var(--lx-fg-primary)" : "var(--lx-fg-secondary)",
+      }}
+    >
+      <span style={{ display: "grid", gap: 3, textAlign: "left" }}>
+        <span style={{ fontSize: 13, fontWeight: 850 }}>{label}</span>
+        <span className="lx-code" style={{ color: "var(--lx-fg-tertiary)" }}>
+          {count} targets / {enabled} enabled
+        </span>
+      </span>
+      <span className={`lx-badge ${invalid > 0 ? "lx-badge-warn" : "lx-badge-success"}`}>
+        {invalid > 0 ? `${invalid} invalid` : "valid"}
+      </span>
+    </button>
+  );
+}
+
+function ArtNetTable({
+  targets,
+  interfaces,
+  updateTarget,
+  deleteTarget,
+}: {
+  targets: NetworkOutputTarget[];
+  interfaces: NetworkInterfaceInfo[];
+  updateTarget: (id: string, patch: Partial<NetworkOutputTarget>) => void;
+  deleteTarget: (id: string) => void;
+}) {
+  return (
+    <table style={{ width: "100%", minWidth: 1220, borderCollapse: "collapse", color: "var(--lx-fg-secondary)", fontSize: 11 }}>
+      <thead>
+        <tr style={{ height: 30, color: "var(--lx-fg-tertiary)", background: "var(--lx-bg-deep)", textTransform: "uppercase" }}>
+          <HeaderCell width={64}>Valid</HeaderCell>
+          <HeaderCell width={88}>Requested</HeaderCell>
+          <HeaderCell width={160}>Mode</HeaderCell>
+          <HeaderCell width={250}>Local Host</HeaderCell>
+          <HeaderCell width={180}>Destination IP</HeaderCell>
+          <HeaderCell width={86}>LocalSt</HeaderCell>
+          <HeaderCell width={82}>Amount</HeaderCell>
+          <HeaderCell width={76}>Net</HeaderCell>
+          <HeaderCell width={76}>Subnet</HeaderCell>
+          <HeaderCell width={84}>Universe</HeaderCell>
+          <HeaderCell width={90}>Delay</HeaderCell>
+          <HeaderCell width={84}>Port</HeaderCell>
+          <HeaderCell width={72}>Delete</HeaderCell>
+        </tr>
+      </thead>
+      <tbody>
+        {targets.length > 0 ? (
+          targets.map((target) => {
+            const rowError = validateTarget(target);
+            return (
+              <tr key={target.id} style={rowStyle(rowError)}>
+                <ValidityCell rowError={rowError} />
+                <BodyCell>
+                  <input type="checkbox" checked={target.enabled} onChange={(event) => updateTarget(target.id, { enabled: event.currentTarget.checked })} />
+                </BodyCell>
+                <BodyCell>
+                  <select className="lx-input lx-input-sm" value={target.mode} onChange={(event) => updateTarget(target.id, modeDefaults("artNet", event.currentTarget.value as NetworkOutputMode))}>
+                    {allowedModes("artNet").map((mode) => (
+                      <option key={mode} value={mode}>{MODE_LABELS[mode]}</option>
+                    ))}
+                  </select>
+                </BodyCell>
+                <LocalInterfaceCell target={target} interfaces={interfaces} updateTarget={updateTarget} />
+                <BodyCell>
+                  <input
+                    className="lx-input lx-input-sm"
+                    value={target.destination}
+                    onChange={(event) => updateTarget(target.id, { destination: event.currentTarget.value })}
+                  />
+                </BodyCell>
+                <BodyCell>
+                  <NumberInput value={target.localUniverse} min={1} max={63999} onChange={(value) => updateTarget(target.id, { localUniverse: value })} />
+                </BodyCell>
+                <BodyCell>
+                  <NumberInput value={target.amount} min={1} max={256} onChange={(value) => updateTarget(target.id, { amount: value })} />
+                </BodyCell>
+                <BodyCell>
+                  <NumberInput value={target.artnetNet} min={0} max={127} onChange={(value) => updateTarget(target.id, { artnetNet: value })} />
+                </BodyCell>
+                <BodyCell>
+                  <NumberInput value={target.artnetSubnet} min={0} max={15} onChange={(value) => updateTarget(target.id, { artnetSubnet: value })} />
+                </BodyCell>
+                <BodyCell>
+                  <NumberInput value={target.artnetUniverse} min={0} max={15} onChange={(value) => updateTarget(target.id, { artnetUniverse: value })} />
+                </BodyCell>
+                <BodyCell>
+                  <NumberInput value={target.delayMs} min={0} max={10000} step={0.1} onChange={(value) => updateTarget(target.id, { delayMs: value })} />
+                </BodyCell>
+                <BodyCell>
+                  <NumberInput value={target.port} min={1} max={65535} onChange={(value) => updateTarget(target.id, { port: value })} />
+                </BodyCell>
+                <DeleteCell id={target.id} deleteTarget={deleteTarget} />
+              </tr>
+            );
+          })
+        ) : (
+          <EmptyRow colSpan={13} label="没有 Art-Net 输出目标。" />
+        )}
+      </tbody>
+    </table>
+  );
+}
+
+function SacnTable({
+  targets,
+  interfaces,
+  updateTarget,
+  deleteTarget,
+}: {
+  targets: NetworkOutputTarget[];
+  interfaces: NetworkInterfaceInfo[];
+  updateTarget: (id: string, patch: Partial<NetworkOutputTarget>) => void;
+  deleteTarget: (id: string) => void;
+}) {
+  return (
+    <table style={{ width: "100%", minWidth: 1180, borderCollapse: "collapse", color: "var(--lx-fg-secondary)", fontSize: 11 }}>
+      <thead>
+        <tr style={{ height: 30, color: "var(--lx-fg-tertiary)", background: "var(--lx-bg-deep)", textTransform: "uppercase" }}>
+          <HeaderCell width={64}>Valid</HeaderCell>
+          <HeaderCell width={88}>Requested</HeaderCell>
+          <HeaderCell width={160}>Mode</HeaderCell>
+          <HeaderCell width={250}>Local Host</HeaderCell>
+          <HeaderCell width={180}>Destination IP</HeaderCell>
+          <HeaderCell width={86}>LocalSt</HeaderCell>
+          <HeaderCell width={82}>Amount</HeaderCell>
+          <HeaderCell width={96}>sACN Univ</HeaderCell>
+          <HeaderCell width={84}>Priority</HeaderCell>
+          <HeaderCell width={72}>TTL</HeaderCell>
+          <HeaderCell width={90}>Delay</HeaderCell>
+          <HeaderCell width={84}>Port</HeaderCell>
+          <HeaderCell width={72}>Delete</HeaderCell>
+        </tr>
+      </thead>
+      <tbody>
+        {targets.length > 0 ? (
+          targets.map((target) => {
+            const rowError = validateTarget(target);
+            return (
+              <tr key={target.id} style={rowStyle(rowError)}>
+                <ValidityCell rowError={rowError} />
+                <BodyCell>
+                  <input type="checkbox" checked={target.enabled} onChange={(event) => updateTarget(target.id, { enabled: event.currentTarget.checked })} />
+                </BodyCell>
+                <BodyCell>
+                  <select className="lx-input lx-input-sm" value={target.mode} onChange={(event) => updateTarget(target.id, modeDefaults("sacn", event.currentTarget.value as NetworkOutputMode))}>
+                    {allowedModes("sacn").map((mode) => (
+                      <option key={mode} value={mode}>{MODE_LABELS[mode]}</option>
+                    ))}
+                  </select>
+                </BodyCell>
+                <LocalInterfaceCell target={target} interfaces={interfaces} updateTarget={updateTarget} />
+                <BodyCell>
+                  <input
+                    className="lx-input lx-input-sm"
+                    value={target.destination}
+                    disabled={target.mode === "outputMulticast"}
+                    onChange={(event) => updateTarget(target.id, { destination: event.currentTarget.value })}
+                  />
+                </BodyCell>
+                <BodyCell>
+                  <NumberInput value={target.localUniverse} min={1} max={63999} onChange={(value) => updateTarget(target.id, { localUniverse: value })} />
+                </BodyCell>
+                <BodyCell>
+                  <NumberInput value={target.amount} min={1} max={512} onChange={(value) => updateTarget(target.id, { amount: value })} />
+                </BodyCell>
+                <BodyCell>
+                  <NumberInput value={target.sacnUniverse} min={1} max={63999} onChange={(value) => updateTarget(target.id, { sacnUniverse: value })} />
+                </BodyCell>
+                <BodyCell>
+                  <NumberInput value={target.priority} min={0} max={200} onChange={(value) => updateTarget(target.id, { priority: value })} />
+                </BodyCell>
+                <BodyCell>
+                  <NumberInput value={target.ttl} min={1} max={255} onChange={(value) => updateTarget(target.id, { ttl: value })} />
+                </BodyCell>
+                <BodyCell>
+                  <NumberInput value={target.delayMs} min={0} max={10000} step={0.1} onChange={(value) => updateTarget(target.id, { delayMs: value })} />
+                </BodyCell>
+                <BodyCell>
+                  <NumberInput value={target.port} min={1} max={65535} onChange={(value) => updateTarget(target.id, { port: value })} />
+                </BodyCell>
+                <DeleteCell id={target.id} deleteTarget={deleteTarget} />
+              </tr>
+            );
+          })
+        ) : (
+          <EmptyRow colSpan={13} label="没有 sACN 输出目标。" />
+        )}
+      </tbody>
+    </table>
+  );
+}
+
 function completeTarget(target: NetworkOutputTarget): NetworkOutputTarget {
   const protocol = target.protocol ?? "artNet";
   const mode = normalizeMode(protocol, target.mode);
@@ -399,17 +533,6 @@ function completeTarget(target: NetworkOutputTarget): NetworkOutputTarget {
     ttl: clampNumber(target.ttl || 8, 1, 255),
     delayMs: clampNumber(target.delayMs || 0, 0, 10000),
     enabled: Boolean(target.enabled),
-  };
-}
-
-function protocolDefaults(protocol: NetworkProtocol): Partial<NetworkOutputTarget> {
-  const mode = protocol === "sacn" ? "outputMulticast" : "outputBroadcast";
-  return {
-    protocol,
-    mode,
-    destination: defaultDestination(protocol, mode),
-    port: protocol === "sacn" ? 5568 : 6454,
-    amount: protocol === "sacn" ? 8 : 256,
   };
 }
 
@@ -483,6 +606,56 @@ function BodyCell({ children }: { children: ReactNode }) {
   return <td style={{ padding: "0 10px" }}>{children}</td>;
 }
 
+function ValidityCell({ rowError }: { rowError: string | null }) {
+  return (
+    <BodyCell>
+      <span className={`lx-badge ${rowError ? "lx-badge-warn" : "lx-badge-success"}`}>{rowError ? "No" : "Yes"}</span>
+    </BodyCell>
+  );
+}
+
+function LocalInterfaceCell({
+  target,
+  interfaces,
+  updateTarget,
+}: {
+  target: NetworkOutputTarget;
+  interfaces: NetworkInterfaceInfo[];
+  updateTarget: (id: string, patch: Partial<NetworkOutputTarget>) => void;
+}) {
+  return (
+    <BodyCell>
+      <select className="lx-input lx-input-sm" value={target.localAddress} onChange={(event) => updateTarget(target.id, { localAddress: event.currentTarget.value })}>
+        {interfaces.map((item) => (
+          <option key={item.id} value={item.address}>
+            {item.address} - {item.name}
+          </option>
+        ))}
+      </select>
+    </BodyCell>
+  );
+}
+
+function DeleteCell({ id, deleteTarget }: { id: string; deleteTarget: (id: string) => void }) {
+  return (
+    <BodyCell>
+      <button type="button" className="lx-icon-btn" onClick={() => deleteTarget(id)} title="Delete">
+        <Trash2 size={13} />
+      </button>
+    </BodyCell>
+  );
+}
+
+function EmptyRow({ colSpan, label }: { colSpan: number; label: string }) {
+  return (
+    <tr>
+      <td colSpan={colSpan} style={{ padding: 18, textAlign: "center", color: "var(--lx-fg-tertiary)" }}>
+        {label}
+      </td>
+    </tr>
+  );
+}
+
 function NumberInput({ value, min, max, step = 1, disabled, onChange }: { value: number; min: number; max: number; step?: number; disabled?: boolean; onChange: (value: number) => void }) {
   return (
     <input
@@ -510,6 +683,14 @@ function Metric({ label, value }: { label: string; value: number }) {
 function clampNumber(value: number, min: number, max: number) {
   if (!Number.isFinite(value)) return min;
   return Math.min(max, Math.max(min, value));
+}
+
+function rowStyle(rowError: string | null) {
+  return {
+    height: 42,
+    borderTop: "1px solid rgba(255,255,255,0.055)",
+    background: rowError ? "rgba(255, 65, 86, 0.08)" : "transparent",
+  };
 }
 
 function errorToMessage(error: unknown) {
