@@ -101,6 +101,12 @@ pub struct LoadedShow {
     pub size_bytes: u64,
 }
 
+#[derive(Clone, Debug)]
+pub struct LoadedShowDocument {
+    pub loaded: LoadedShow,
+    pub sections: Vec<ShowSection>,
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct ActiveShowPointer {
@@ -177,6 +183,38 @@ impl ShowRepository {
     pub fn load(&self, path: impl AsRef<Path>) -> ShowFileResult<LoadedShow> {
         self.ensure_library()?;
         self.load_path(path.as_ref())
+    }
+
+    pub fn load_document(&self, path: impl AsRef<Path>) -> ShowFileResult<LoadedShowDocument> {
+        self.ensure_library()?;
+        let path = path.as_ref();
+        self.validate_show_path(path)?;
+        let container = self.read_container(path)?;
+        let size_bytes = self.fs.file_size(path)?;
+        Ok(LoadedShowDocument {
+            loaded: LoadedShow {
+                manifest: container.manifest,
+                path: path_to_string(path),
+                size_bytes,
+            },
+            sections: container.sections,
+        })
+    }
+
+    pub fn save_document(
+        &self,
+        path: impl AsRef<Path>,
+        sections: Vec<ShowSection>,
+    ) -> ShowFileResult<LoadedShowDocument> {
+        self.ensure_library()?;
+
+        let path = path.as_ref();
+        self.validate_show_path(path)?;
+        let mut container = self.read_container(path)?;
+        container.sections = sections;
+        container.manifest.modified_at_ms = current_timestamp_millis()?;
+        self.write_container(path, &container)?;
+        self.load_document(path)
     }
 
     pub fn save(&self, path: impl AsRef<Path>) -> ShowFileResult<LoadedShow> {
@@ -270,6 +308,31 @@ impl ShowRepository {
 
         self.write_container(&target_path, &container)?;
         self.load_path(&target_path)
+    }
+
+    pub fn save_document_as(
+        &self,
+        source_path: impl AsRef<Path>,
+        name: impl AsRef<str>,
+        sections: Vec<ShowSection>,
+    ) -> ShowFileResult<LoadedShowDocument> {
+        self.ensure_library()?;
+
+        let source_path = source_path.as_ref();
+        self.validate_show_path(source_path)?;
+        let mut container = self.read_container(source_path)?;
+        let now = current_timestamp_millis()?;
+        let name = sanitize_show_name(name.as_ref())?;
+        let target_path = self.unique_path_for_name(&name);
+
+        container.manifest.id = Uuid::new_v4();
+        container.manifest.name = name;
+        container.manifest.created_at_ms = now;
+        container.manifest.modified_at_ms = now;
+        container.sections = sections;
+
+        self.write_container(&target_path, &container)?;
+        self.load_document(&target_path)
     }
 
     pub fn delete(&self, path: impl AsRef<Path>) -> ShowFileResult<()> {

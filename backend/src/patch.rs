@@ -1,13 +1,13 @@
 use crate::{
-    events, fixture_selection::FixtureSelectionState, output, programmer, programmer::ProgrammerState,
-    show::ShowRuntimeState,
+    events, fixture_selection::FixtureSelectionState, output, programmer,
+    programmer::ProgrammerState, show::ShowRuntimeState,
 };
 use limxdesk_patch::{
     apply_wizard, auto_patch, delete_fixture, duplicate_fixture, normalize_document,
     update_fixture, validate_fixtures, FixtureTypeRef, PatchCommandResult, PatchDocument,
     PatchFixturePatch, PatchWizardDraft,
 };
-use limxdesk_showfile::{LoadedShow, ShowRepository};
+use limxdesk_showfile::LoadedShow;
 use tauri::{AppHandle, State};
 
 const PATCH_SECTION_KEY: &str = "patch.v1";
@@ -17,11 +17,11 @@ const PATCH_SECTION_VERSION: u16 = 1;
 pub fn patch_load_current_show(
     state: State<'_, ShowRuntimeState>,
 ) -> Result<Option<PatchDocument>, String> {
-    let Some(show) = state.current()? else {
+    let Some(_show) = state.current()? else {
         return Ok(None);
     };
 
-    Ok(Some(load_patch_document(&show)?))
+    Ok(Some(load_patch_document(&state)?))
 }
 
 #[tauri::command]
@@ -30,14 +30,14 @@ pub fn patch_save_current_show(
     state: State<'_, ShowRuntimeState>,
     app: AppHandle,
 ) -> Result<(), String> {
-    let Some(show) = state.current()? else {
+    let Some(_show) = state.current()? else {
         return Err("No show file loaded. Create or load a show before editing patch.".to_string());
     };
 
     let fixtures = serde_json::from_value(fixtures).map_err(|error| error.to_string())?;
     let document = normalize_document(PatchDocument { fixtures });
     validate_fixtures(&document.fixtures).map_err(|error| error.to_string())?;
-    let saved_show = save_patch_document(&show, &document, &state)?;
+    let saved_show = save_patch_document(&document, &state)?;
     events::emit_patch_changed(&app, &saved_show);
     request_patch_output(&app);
     Ok(())
@@ -114,13 +114,13 @@ fn mutate_patch_document(
     app: AppHandle,
     mutation: impl FnOnce(PatchDocument) -> limxdesk_patch::PatchResult<PatchCommandResult>,
 ) -> Result<PatchCommandResult, String> {
-    let Some(show) = state.current()? else {
+    let Some(_show) = state.current()? else {
         return Err("No show file loaded. Create or load a show before editing patch.".to_string());
     };
 
-    let document = load_patch_document(&show)?;
+    let document = load_patch_document(&state)?;
     let result = mutation(document).map_err(|error| error.to_string())?;
-    let saved_show = save_patch_document(&show, &result.document, &state)?;
+    let saved_show = save_patch_document(&result.document, &state)?;
     if result.selected_id.is_some() {
         programmer::sync_programmer_selection(
             &programmer_state,
@@ -140,28 +140,18 @@ fn request_patch_output(app: &AppHandle) {
     }
 }
 
-fn load_patch_document(show: &LoadedShow) -> Result<PatchDocument, String> {
-    let document = ShowRepository::default_for_current_os()
-        .read_section::<PatchDocument>(&show.path, PATCH_SECTION_KEY)
-        .map_err(|error| error.to_string())?
+pub(crate) fn load_patch_document(
+    state: &State<'_, ShowRuntimeState>,
+) -> Result<PatchDocument, String> {
+    let document = state
+        .read_section::<PatchDocument>(PATCH_SECTION_KEY)?
         .unwrap_or_default();
     Ok(normalize_document(document))
 }
 
 fn save_patch_document(
-    show: &LoadedShow,
     document: &PatchDocument,
     state: &State<'_, ShowRuntimeState>,
 ) -> Result<LoadedShow, String> {
-    let loaded = ShowRepository::default_for_current_os()
-        .write_section(
-            &show.path,
-            PATCH_SECTION_KEY,
-            PATCH_SECTION_VERSION,
-            document,
-        )
-        .map_err(|error| error.to_string())?;
-
-    state.set_current(loaded.clone())?;
-    Ok(loaded)
+    state.write_section(PATCH_SECTION_KEY, PATCH_SECTION_VERSION, document)
 }

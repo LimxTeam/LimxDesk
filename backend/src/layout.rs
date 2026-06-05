@@ -1,5 +1,5 @@
 use crate::{events, show::ShowRuntimeState};
-use limxdesk_showfile::{LoadedShow, ShowRepository};
+use limxdesk_showfile::LoadedShow;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -136,11 +136,11 @@ impl Default for NamedAppearanceVisibility {
 pub fn layout_load_current_show(
     state: State<'_, ShowRuntimeState>,
 ) -> Result<Option<LayoutDocument>, String> {
-    let Some(show) = state.current()? else {
+    let Some(_show) = state.current()? else {
         return Ok(None);
     };
 
-    Ok(Some(load_layout_document(&show)?))
+    Ok(Some(load_layout_document(&state)?))
 }
 
 #[tauri::command]
@@ -149,15 +149,15 @@ pub fn layout_save_current_show(
     state: State<'_, ShowRuntimeState>,
     app: AppHandle,
 ) -> Result<LayoutDocument, String> {
-    let Some(show) = state.current()? else {
+    let Some(_show) = state.current()? else {
         return Err(
             "No show file loaded. Create or load a show before editing layout.".to_string(),
         );
     };
 
-    let mut document = load_layout_document(&show)?;
+    let mut document = load_layout_document(&state)?;
     document.windows = windows.into_iter().map(normalize_window).collect();
-    let saved_show = save_layout_document(&show, &document, &state)?;
+    let saved_show = save_layout_document(&document, &state)?;
     events::emit_layout_changed(&app, &saved_show);
     Ok(document)
 }
@@ -168,19 +168,19 @@ pub fn layout_save_view_slot(
     state: State<'_, ShowRuntimeState>,
     app: AppHandle,
 ) -> Result<LayoutDocument, String> {
-    let Some(show) = state.current()? else {
+    let Some(_show) = state.current()? else {
         return Err(
             "No show file loaded. Create or load a show before saving view slots.".to_string(),
         );
     };
 
-    let mut document = load_layout_document(&show)?;
+    let mut document = load_layout_document(&state)?;
     let normalized = normalize_view_slot(slot);
     document.view_slots.retain(|item| item.id != normalized.id);
     document.view_slots.push(normalized);
 
     let document = normalize_document(document);
-    let saved_show = save_layout_document(&show, &document, &state)?;
+    let saved_show = save_layout_document(&document, &state)?;
     events::emit_layout_changed(&app, &saved_show);
     Ok(document)
 }
@@ -191,46 +191,34 @@ pub fn layout_clear_view_slot(
     state: State<'_, ShowRuntimeState>,
     app: AppHandle,
 ) -> Result<LayoutDocument, String> {
-    let Some(show) = state.current()? else {
+    let Some(_show) = state.current()? else {
         return Err(
             "No show file loaded. Create or load a show before clearing view slots.".to_string(),
         );
     };
 
-    let mut document = load_layout_document(&show)?;
+    let mut document = load_layout_document(&state)?;
     let normalized_id = normalize_slot_id(slot_id);
     document.view_slots.retain(|item| item.id != normalized_id);
 
     let document = normalize_document(document);
-    let saved_show = save_layout_document(&show, &document, &state)?;
+    let saved_show = save_layout_document(&document, &state)?;
     events::emit_layout_changed(&app, &saved_show);
     Ok(document)
 }
 
-fn load_layout_document(show: &LoadedShow) -> Result<LayoutDocument, String> {
-    let document = ShowRepository::default_for_current_os()
-        .read_section::<LayoutDocument>(&show.path, LAYOUT_SECTION_KEY)
-        .map_err(|error| error.to_string())?
+fn load_layout_document(state: &State<'_, ShowRuntimeState>) -> Result<LayoutDocument, String> {
+    let document = state
+        .read_section::<LayoutDocument>(LAYOUT_SECTION_KEY)?
         .unwrap_or_default();
     Ok(normalize_document(document))
 }
 
 fn save_layout_document(
-    show: &LoadedShow,
     document: &LayoutDocument,
     state: &State<'_, ShowRuntimeState>,
 ) -> Result<LoadedShow, String> {
-    let loaded = ShowRepository::default_for_current_os()
-        .write_section(
-            &show.path,
-            LAYOUT_SECTION_KEY,
-            LAYOUT_SECTION_VERSION,
-            document,
-        )
-        .map_err(|error| error.to_string())?;
-
-    state.set_current(loaded.clone())?;
-    Ok(loaded)
+    state.write_section(LAYOUT_SECTION_KEY, LAYOUT_SECTION_VERSION, document)
 }
 
 fn normalize_window(mut window: LayoutWindow) -> LayoutWindow {

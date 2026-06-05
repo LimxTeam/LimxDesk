@@ -14,7 +14,6 @@ use limxdesk_network::{
 };
 use limxdesk_patch::PatchDocument;
 use limxdesk_programmer::{Programmer, ProgrammerMode};
-use limxdesk_showfile::ShowRepository;
 use serde::{Deserialize, Serialize};
 use std::net::Ipv4Addr;
 use std::sync::Mutex;
@@ -96,25 +95,20 @@ pub fn output_set_targets(
 ) -> Result<Vec<NetworkOutputTarget>, String> {
     let targets = normalize_targets(targets);
     validate_targets(&targets)?;
-    let Some(show) = show_state.current()? else {
+    let Some(_show) = show_state.current()? else {
         return Err(
             "No show file loaded. Create or load a show before saving output settings.".to_string(),
         );
     };
-    let loaded = ShowRepository::default_for_current_os()
-        .write_section(
-            &show.path,
-            OUTPUT_SECTION_KEY,
-            OUTPUT_SECTION_VERSION,
-            &OutputDocument {
-                targets: targets.clone(),
-            },
-        )
-        .map_err(|error| error.to_string())?;
-    show_state.set_current(loaded)?;
-    let changed_show = show_state.current()?;
+    let changed_show = show_state.write_section(
+        OUTPUT_SECTION_KEY,
+        OUTPUT_SECTION_VERSION,
+        &OutputDocument {
+            targets: targets.clone(),
+        },
+    )?;
     set_runtime_targets(&state, targets.clone())?;
-    events::emit_output_changed(&app, changed_show.as_ref());
+    events::emit_output_changed(&app, Some(&changed_show));
     request_output_send(&app)?;
     Ok(targets)
 }
@@ -543,12 +537,10 @@ fn dmx_profiles_from_fixture_types(
 fn load_targets_from_show(
     show_state: &State<'_, ShowRuntimeState>,
 ) -> Result<Option<Vec<NetworkOutputTarget>>, String> {
-    let Some(show) = show_state.current()? else {
+    let Some(_show) = show_state.current()? else {
         return Ok(None);
     };
-    let document = ShowRepository::default_for_current_os()
-        .read_section::<OutputDocument>(&show.path, OUTPUT_SECTION_KEY)
-        .map_err(|error| error.to_string())?;
+    let document = show_state.read_section::<OutputDocument>(OUTPUT_SECTION_KEY)?;
     Ok(document.map(|document| normalize_targets(document.targets)))
 }
 

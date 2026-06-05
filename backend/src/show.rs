@@ -1,11 +1,24 @@
-use crate::{events, fixture_selection::FixtureSelectionState, output, programmer::ProgrammerState};
-use limxdesk_showfile::{LoadedShow, ShowFileEntry, ShowRepository};
+use crate::{
+    events, fixture_selection::FixtureSelectionState, output, programmer::ProgrammerState,
+};
+use limxdesk_platform::current_timestamp_millis;
+use limxdesk_showfile::{
+    LoadedShow, LoadedShowDocument, ShowFileEntry, ShowRepository, ShowSection,
+};
+use serde::{Deserialize, Serialize};
 use std::sync::Mutex;
 use tauri::{AppHandle, State};
 
 #[derive(Default)]
 pub struct ShowRuntimeState {
-    current: Mutex<Option<LoadedShow>>,
+    current: Mutex<Option<RuntimeShowDocument>>,
+}
+
+#[derive(Clone)]
+struct RuntimeShowDocument {
+    loaded: LoadedShow,
+    sections: Vec<ShowSection>,
+    dirty: bool,
 }
 
 impl ShowRuntimeState {
@@ -15,8 +28,8 @@ impl ShowRuntimeState {
                 .current
                 .lock()
                 .map_err(|_| "show runtime state lock poisoned".to_string())?;
-            if current.is_some() {
-                return Ok(current.clone());
+            if let Some(current) = current.as_ref() {
+                return Ok(Some(current.loaded.clone()));
             }
         }
 
@@ -32,16 +45,154 @@ impl ShowRuntimeState {
     }
 
     pub(crate) fn set_current(&self, loaded: LoadedShow) -> Result<(), String> {
-        ShowRepository::default_for_current_os()
+        let repository = ShowRepository::default_for_current_os();
+        repository
             .activate(&loaded)
+            .map_err(|error| error.to_string())?;
+        let document = repository
+            .load_document(&loaded.path)
+            .map_err(|error| error.to_string())?;
+
+        self.set_current_document(document, false)
+    }
+
+    pub(crate) fn set_current_document(
+        &self,
+        document: LoadedShowDocument,
+        dirty: bool,
+    ) -> Result<(), String> {
+        ShowRepository::default_for_current_os()
+            .activate(&document.loaded)
             .map_err(|error| error.to_string())?;
 
         let mut current = self
             .current
             .lock()
             .map_err(|_| "show runtime state lock poisoned".to_string())?;
-        *current = Some(loaded);
+        *current = Some(RuntimeShowDocument {
+            loaded: document.loaded,
+            sections: document.sections,
+            dirty,
+        });
         Ok(())
+    }
+
+    pub(crate) fn read_section<T>(&self, key: &str) -> Result<Option<T>, String>
+    where
+        T: for<'de> Deserialize<'de>,
+    {
+        let _ = self.current()?;
+        let current = self
+            .current
+            .lock()
+            .map_err(|_| "show runtime state lock poisoned".to_string())?;
+        let Some(current) = current.as_ref() else {
+            return Ok(None);
+        };
+        let Some(section) = current.sections.iter().find(|section| section.key == key) else {
+            return Ok(None);
+        };
+        serde_json::from_slice(&section.payload)
+            .map(Some)
+            .map_err(|error| error.to_string())
+    }
+
+    pub(crate) fn write_section<T>(
+        &self,
+        key: impl Into<String>,
+        version: u16,
+        value: &T,
+    ) -> Result<LoadedShow, String>
+    where
+        T: Serialize,
+    {
+        let Some(_) = self.current()? else {
+            return Err(
+                "No show file loaded. Create or load a show before editing show data.".to_string(),
+            );
+        };
+
+        let key = key.into();
+        let payload = serde_json::to_vec(value).map_err(|error| error.to_string())?;
+        let mut current = self
+            .current
+            .lock()
+            .map_err(|_| "show runtime state lock poisoned".to_string())?;
+        let Some(current) = current.as_mut() else {
+            return Err(
+                "No show file loaded. Create or load a show before editing show data.".to_string(),
+            );
+        };
+
+        if let Some(section) = current
+            .sections
+            .iter_mut()
+            .find(|section| section.key == key)
+        {
+            section.version = version;
+            section.payload = payload;
+        } else {
+            current.sections.push(ShowSection {
+                key,
+                version,
+                payload,
+            });
+        }
+
+        current.loaded.manifest.modified_at_ms =
+            current_timestamp_millis().map_err(|error| error.to_string())?;
+        current.dirty = true;
+        Ok(current.loaded.clone())
+    }
+
+    pub(crate) fn flush_current(&self) -> Result<Option<LoadedShow>, String> {
+        let document = {
+            let current = self
+                .current
+                .lock()
+                .map_err(|_| "show runtime state lock poisoned".to_string())?;
+            let Some(current) = current.as_ref() else {
+                return Ok(None);
+            };
+            if !current.dirty {
+                return Ok(Some(current.loaded.clone()));
+            }
+            LoadedShowDocument {
+                loaded: current.loaded.clone(),
+                sections: current.sections.clone(),
+            }
+        };
+
+        let saved = ShowRepository::default_for_current_os()
+            .save_document(&document.loaded.path, document.sections)
+            .map_err(|error| error.to_string())?;
+        self.set_current_document(saved.clone(), false)?;
+        Ok(Some(saved.loaded))
+    }
+
+    pub(crate) fn save_current_as(&self, name: String) -> Result<LoadedShow, String> {
+        let document = {
+            let Some(_) = self.current()? else {
+                return Err("No show file loaded. Create or load a show before saving.".to_string());
+            };
+            let current = self
+                .current
+                .lock()
+                .map_err(|_| "show runtime state lock poisoned".to_string())?;
+            let Some(current) = current.as_ref() else {
+                return Err("No show file loaded. Create or load a show before saving.".to_string());
+            };
+            LoadedShowDocument {
+                loaded: current.loaded.clone(),
+                sections: current.sections.clone(),
+            }
+        };
+
+        let saved = ShowRepository::default_for_current_os()
+            .save_document_as(&document.loaded.path, name, document.sections)
+            .map_err(|error| error.to_string())?;
+        self.set_current_document(saved.clone(), false)?;
+        Ok(saved.loaded)
     }
 
     fn clear_current(&self) -> Result<(), String> {
@@ -117,10 +268,17 @@ pub fn show_save(
     state: State<'_, ShowRuntimeState>,
     app: AppHandle,
 ) -> Result<LoadedShow, String> {
-    let loaded = ShowRepository::default_for_current_os()
-        .save(path)
-        .map_err(|error| error.to_string())?;
-    state.set_current(loaded.clone())?;
+    let Some(current) = state.current()? else {
+        return Err("No show file loaded. Create or load a show before saving.".to_string());
+    };
+    if current.path != path {
+        return Err(
+            "Saving an inactive show path is not supported by the runtime cache.".to_string(),
+        );
+    }
+    let loaded = state
+        .flush_current()?
+        .ok_or_else(|| "No show file loaded. Create or load a show before saving.".to_string())?;
     events::emit_show_saved(&app, &loaded);
     Ok(loaded)
 }
@@ -134,10 +292,15 @@ pub fn show_save_as(
     programmer_state: State<'_, ProgrammerState>,
     app: AppHandle,
 ) -> Result<LoadedShow, String> {
-    let loaded = ShowRepository::default_for_current_os()
-        .save_as(source_path, name)
-        .map_err(|error| error.to_string())?;
-    state.set_current(loaded.clone())?;
+    let Some(current) = state.current()? else {
+        return Err("No show file loaded. Create or load a show before saving.".to_string());
+    };
+    if current.path != source_path {
+        return Err(
+            "Saving an inactive show path is not supported by the runtime cache.".to_string(),
+        );
+    }
+    let loaded = state.save_current_as(name)?;
     reset_runtime_context(&selection_state, &programmer_state, &app)?;
     events::emit_show_loaded(&app, &loaded);
     request_default_output(&app);
