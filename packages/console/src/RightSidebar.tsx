@@ -369,7 +369,7 @@ export function RightSidebar({
         onClose={() => setEditor(null)}
       >
         {editor ? (
-          <div style={{ display: "grid", gridTemplateRows: "minmax(0, 1fr) 44px", height: "100%" }}>
+          <div style={{ display: "grid", gridTemplateRows: "minmax(0, 1fr) 44px", height: "100%", minHeight: 0, overflow: "hidden" }}>
             <NamedAppearanceEditor
               title="View Naming"
               value={editor.draft}

@@ -416,6 +416,7 @@ export function NamedAppearanceEditor({
         height: "100%",
         minHeight: 0,
         padding: 14,
+        overflow: "hidden",
         background: "var(--lx-bg-surface)",
       }}
     >
@@ -838,6 +839,7 @@ const editorPreviewPanelStyle: CSSProperties = {
   alignContent: "start",
   gap: 12,
   minHeight: 0,
+  overflow: "auto",
   padding: 12,
   border: "1px solid var(--lx-stroke)",
   borderRadius: "var(--lx-radius-md)",
