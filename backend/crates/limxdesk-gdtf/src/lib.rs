@@ -86,6 +86,10 @@ pub struct GdtfModeAttributeSummary {
     pub feature_group: String,
     pub occurrence_count: u16,
     pub module_ids: Vec<String>,
+    pub min_value: Option<f64>,
+    pub max_value: Option<f64>,
+    pub default_value: Option<f64>,
+    pub value_kind: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -135,6 +139,9 @@ struct ChannelAttributeOccurrence {
     feature_group: String,
     geometry: String,
     offsets: Vec<u16>,
+    physical_from: Option<f64>,
+    physical_to: Option<f64>,
+    default_value: Option<f64>,
 }
 
 pub fn read_gdtf(path: impl AsRef<Path>) -> GdtfResult<GdtfFixtureSummary> {
@@ -281,7 +288,8 @@ fn parse_modes(
                     max_channel = max_channel.max(*offset);
                 }
 
-                if let Some(attribute) = channel_attribute(dmx_channel) {
+                if let Some(channel) = channel_attribute_occurrence(dmx_channel) {
+                    let attribute = channel.name;
                     let feature_group = features_by_attribute
                         .get(&attribute)
                         .cloned()
@@ -294,6 +302,9 @@ fn parse_modes(
                             .unwrap_or_default()
                             .to_string(),
                         offsets,
+                        physical_from: channel.physical_from,
+                        physical_to: channel.physical_to,
+                        default_value: channel.default_value,
                     });
                 }
             }
@@ -329,13 +340,25 @@ fn parse_modes(
     modes
 }
 
-fn channel_attribute(dmx_channel: Node<'_, '_>) -> Option<String> {
+fn channel_attribute_occurrence(dmx_channel: Node<'_, '_>) -> Option<ChannelAttributeOccurrence> {
     for logical_channel in dmx_channel
         .children()
         .filter(|node| node.has_tag_name("LogicalChannel"))
     {
         if let Some(attribute) = normalize_attribute_link(logical_channel.attribute("Attribute")) {
-            return Some(attribute);
+            let function = logical_channel
+                .children()
+                .find(|node| node.has_tag_name("ChannelFunction"));
+            return Some(ChannelAttributeOccurrence {
+                name: attribute,
+                feature_group: String::new(),
+                geometry: String::new(),
+                offsets: Vec::new(),
+                physical_from: function.and_then(|node| parse_f64(node.attribute("PhysicalFrom"))),
+                physical_to: function.and_then(|node| parse_f64(node.attribute("PhysicalTo"))),
+                default_value: function
+                    .and_then(|node| parse_gdtf_number(node.attribute("Default"))),
+            });
         }
 
         for function in logical_channel
@@ -343,17 +366,43 @@ fn channel_attribute(dmx_channel: Node<'_, '_>) -> Option<String> {
             .filter(|node| node.has_tag_name("ChannelFunction"))
         {
             if let Some(attribute) = normalize_attribute_link(function.attribute("Attribute")) {
-                return Some(attribute);
+                return Some(ChannelAttributeOccurrence {
+                    name: attribute,
+                    feature_group: String::new(),
+                    geometry: String::new(),
+                    offsets: Vec::new(),
+                    physical_from: parse_f64(function.attribute("PhysicalFrom")),
+                    physical_to: parse_f64(function.attribute("PhysicalTo")),
+                    default_value: parse_gdtf_number(function.attribute("Default")),
+                });
             }
             if let Some(attribute) =
                 normalize_attribute_link(function.attribute("OriginalAttribute"))
             {
-                return Some(attribute);
+                return Some(ChannelAttributeOccurrence {
+                    name: attribute,
+                    feature_group: String::new(),
+                    geometry: String::new(),
+                    offsets: Vec::new(),
+                    physical_from: parse_f64(function.attribute("PhysicalFrom")),
+                    physical_to: parse_f64(function.attribute("PhysicalTo")),
+                    default_value: parse_gdtf_number(function.attribute("Default")),
+                });
             }
         }
     }
 
-    attribute_from_initial_function(dmx_channel.attribute("InitialFunction"))
+    attribute_from_initial_function(dmx_channel.attribute("InitialFunction")).map(|attribute| {
+        ChannelAttributeOccurrence {
+            name: attribute,
+            feature_group: String::new(),
+            geometry: String::new(),
+            offsets: Vec::new(),
+            physical_from: None,
+            physical_to: None,
+            default_value: None,
+        }
+    })
 }
 
 fn summarize_mode_attributes(
@@ -383,12 +432,34 @@ fn summarize_mode_attributes(
             .filter(|item| item.name == occurrence.name)
             .count()
             .min(u16::MAX as usize) as u16;
+        let matching = occurrences
+            .iter()
+            .filter(|item| item.name == occurrence.name)
+            .collect::<Vec<_>>();
+        let physical_values = matching
+            .iter()
+            .flat_map(|item| [item.physical_from, item.physical_to])
+            .flatten()
+            .collect::<Vec<_>>();
+        let min_value = physical_values.iter().copied().reduce(f64::min);
+        let max_value = physical_values.iter().copied().reduce(f64::max);
+        let default_value = matching.iter().find_map(|item| item.default_value);
+        let value_kind = infer_value_kind(
+            &occurrence.name,
+            &occurrence.feature_group,
+            min_value,
+            max_value,
+        );
 
         attributes.push(GdtfModeAttributeSummary {
             name: occurrence.name.clone(),
             feature_group: occurrence.feature_group.clone(),
             occurrence_count,
             module_ids,
+            min_value,
+            max_value,
+            default_value,
+            value_kind,
         });
     }
 
@@ -735,6 +806,28 @@ fn parse_offsets(value: &str) -> Vec<u16> {
         .collect()
 }
 
+fn parse_f64(value: Option<&str>) -> Option<f64> {
+    value?.trim().parse::<f64>().ok()
+}
+
+fn parse_gdtf_number(value: Option<&str>) -> Option<f64> {
+    let value = value?.trim();
+    if value.is_empty() {
+        return None;
+    }
+
+    if let Some((left, right)) = value.split_once('/') {
+        let numerator = left.trim().parse::<f64>().ok()?;
+        let denominator = right.trim().parse::<f64>().ok()?;
+        if denominator == 0.0 {
+            return None;
+        }
+        return Some(numerator / denominator);
+    }
+
+    value.parse::<f64>().ok()
+}
+
 fn normalize_attribute_link(value: Option<&str>) -> Option<String> {
     let value = value?.trim();
     if value.is_empty()
@@ -796,6 +889,35 @@ fn infer_attribute_group(attribute: &str) -> String {
     } else {
         "Control".to_string()
     }
+}
+
+fn infer_value_kind(
+    attribute: &str,
+    feature_group: &str,
+    min_value: Option<f64>,
+    max_value: Option<f64>,
+) -> String {
+    let lower_attribute = attribute.to_lowercase();
+    let lower_group = feature_group.to_lowercase();
+    if lower_attribute.contains("pan")
+        || lower_attribute.contains("tilt")
+        || lower_attribute.contains("rotate")
+        || lower_attribute.contains("rot")
+    {
+        return "angle".to_string();
+    }
+
+    if matches!(lower_group.as_str(), "dimmer" | "color" | "colour") {
+        return "percent".to_string();
+    }
+
+    if let (Some(min), Some(max)) = (min_value, max_value) {
+        if min >= 0.0 && max <= 1.0 {
+            return "percent".to_string();
+        }
+    }
+
+    "range".to_string()
 }
 
 fn groups_for_attributes<'a>(attributes: impl Iterator<Item = &'a String>) -> BTreeSet<String> {
@@ -898,12 +1020,12 @@ mod tests {
         <DMXChannels>
           <DMXChannel Offset="1" InitialFunction="Beam_Dimmer.Dimmer.Dimmer">
             <LogicalChannel Attribute="Attributes.Dimmer">
-              <ChannelFunction Attribute="Attributes.Dimmer"/>
+              <ChannelFunction Attribute="Attributes.Dimmer" PhysicalFrom="0" PhysicalTo="1"/>
             </LogicalChannel>
           </DMXChannel>
           <DMXChannel Offset="2" InitialFunction="Beam_ColorAdd_R.ColorAdd_R.ColorAdd_R">
             <LogicalChannel Attribute="Attributes.ColorAdd_R">
-              <ChannelFunction Attribute="Attributes.ColorAdd_R"/>
+              <ChannelFunction Attribute="Attributes.ColorAdd_R" PhysicalFrom="0" PhysicalTo="1"/>
             </LogicalChannel>
           </DMXChannel>
         </DMXChannels>
@@ -919,6 +1041,9 @@ mod tests {
             "Dimmer"
         );
         assert_eq!(summary.modes[0].attribute_details[1].feature_group, "Color");
+        assert_eq!(summary.modes[0].attribute_details[0].min_value, Some(0.0));
+        assert_eq!(summary.modes[0].attribute_details[0].max_value, Some(1.0));
+        assert_eq!(summary.modes[0].attribute_details[0].value_kind, "percent");
         assert!(summary
             .attribute_groups
             .iter()

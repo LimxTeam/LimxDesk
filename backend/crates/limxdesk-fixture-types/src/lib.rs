@@ -100,6 +100,10 @@ pub struct FixtureModeAttributeEntry {
     pub feature_group: String,
     pub occurrence_count: u16,
     pub module_ids: Vec<String>,
+    pub min_value: Option<f64>,
+    pub max_value: Option<f64>,
+    pub default_value: Option<f64>,
+    pub value_kind: String,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -365,6 +369,10 @@ impl From<GdtfModeAttributeSummary> for FixtureModeAttributeEntry {
             feature_group: value.feature_group,
             occurrence_count: value.occurrence_count,
             module_ids: value.module_ids,
+            min_value: value.min_value,
+            max_value: value.max_value,
+            default_value: value.default_value,
+            value_kind: value.value_kind,
         }
     }
 }

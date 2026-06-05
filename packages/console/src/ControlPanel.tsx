@@ -15,6 +15,10 @@ interface EncoderParam {
   attribute?: string;
   featureGroup?: string;
   layer?: ProgrammerLayer;
+  valueKind?: FixtureAttributeValueKind;
+  minValue?: number | null;
+  maxValue?: number | null;
+  defaultValue?: number | null;
 }
 
 interface EncoderGroup {
@@ -65,6 +69,10 @@ interface FixtureModeAttribute {
   featureGroup: string;
   occurrenceCount?: number;
   moduleIds?: string[];
+  minValue?: number | null;
+  maxValue?: number | null;
+  defaultValue?: number | null;
+  valueKind?: FixtureAttributeValueKind;
 }
 
 interface FixtureModeSubFixture {
@@ -121,6 +129,7 @@ type ProgrammerMode = "live" | "preview";
 type ProgrammerLayer = "absolute" | "relative" | "fade" | "delay";
 type ProgrammerValueSource = "manual" | "preset" | "output";
 type AttributeGroupId = "dimmer" | "position" | "gobo" | "color" | "beam" | "focus" | "control";
+type FixtureAttributeValueKind = "percent" | "angle" | "range" | string;
 interface ProgrammerSetAttributeRequest {
   attribute: string;
   featureGroup: string;
@@ -310,8 +319,8 @@ export function ControlPanel() {
 
   function handleEncoderDelta(encoder: EncoderParam, delta: number) {
     if (!selectedFixtureIdRef.current || !encoder.attribute || !encoder.featureGroup || !encoder.layer) return;
-    const current = resolveProgrammerNumeric(programmer, selectedFixtureIdRef.current, encoder.attribute);
-    const value = deriveProgrammerValue(encoder.attribute, current, delta);
+    const current = resolveProgrammerNumeric(programmer, selectedFixtureIdRef.current, encoder);
+    const value = deriveProgrammerValue(encoder, current, delta);
     void invoke<Programmer>("programmer_set_attribute_for_selection", {
       request: {
         attribute: encoder.attribute,
@@ -498,7 +507,11 @@ function groupAttributes(
       attribute: attribute.name,
       featureGroup: attribute.featureGroup,
       layer: "absolute",
-      value: resolveProgrammerValue(programmer, selectedId || fixture.id, attribute.name) ?? "--",
+      value: resolveProgrammerValue(programmer, selectedId || fixture.id, attribute) ?? "--",
+      valueKind: attribute.valueKind,
+      minValue: attribute.minValue,
+      maxValue: attribute.maxValue,
+      defaultValue: attribute.defaultValue,
     });
   }
 
@@ -513,6 +526,7 @@ function resolveModeAttributes(mode: FixtureTypeMode, subFixtureId: string): Fix
         .map((attribute) => ({
           name: attribute,
           featureGroup: "Control",
+          valueKind: "range",
         }));
 
   if (!subFixtureId) {
@@ -545,36 +559,38 @@ function formatAttributeName(attribute: string) {
     .replace(/\b(\w)/g, (match) => match.toUpperCase());
 }
 
-function resolveProgrammerValue(programmer: Programmer, fixtureId: string, attribute: string) {
+function resolveProgrammerValue(programmer: Programmer, fixtureId: string, attribute: FixtureModeAttribute) {
   const buffer = programmer.mode === "preview" ? programmer.preview : programmer.live;
   const values = buffer.parts.flatMap((part) => part.values);
   const match = values.find(
-    (value) => value.fixtureId === fixtureId && value.attribute === attribute && value.active,
+    (value) => value.fixtureId === fixtureId && value.attribute === attribute.name && value.active,
   );
   if (!match) return null;
   return formatProgrammerScalar(match.value, attribute);
 }
 
-function resolveProgrammerNumeric(programmer: Programmer, fixtureId: string, attribute: string) {
+function resolveProgrammerNumeric(programmer: Programmer, fixtureId: string, encoder: EncoderParam) {
   const buffer = programmer.mode === "preview" ? programmer.preview : programmer.live;
   const values = buffer.parts.flatMap((part) => part.values);
   const match = values.find(
-    (value) => value.fixtureId === fixtureId && value.attribute === attribute && value.active,
+    (value) => value.fixtureId === fixtureId && value.attribute === encoder.attribute && value.active,
   );
   if (typeof match?.value.numeric === "number" && Number.isFinite(match.value.numeric)) {
     return match.value.numeric;
   }
-  return defaultAttributeNumeric(attribute);
+  return defaultAttributeNumeric(encoder);
 }
 
-function formatProgrammerScalar(value: ProgrammerScalar, attribute: string) {
+function formatProgrammerScalar(value: ProgrammerScalar, attribute: FixtureModeAttribute | string) {
   if (value.text && value.text.trim()) return value.text;
   if (typeof value.numeric === "number" && Number.isFinite(value.numeric)) {
-    const lower = attribute.toLowerCase();
-    if (lower.includes("pan") || lower.includes("tilt") || lower.includes("rotate") || lower.includes("rot")) {
+    const detail: FixtureModeAttribute =
+      typeof attribute === "string" ? { name: attribute, featureGroup: "Control" } : attribute;
+    const lower = detail.name.toLowerCase();
+    if (detail.valueKind === "angle" || lower.includes("pan") || lower.includes("tilt") || lower.includes("rotate") || lower.includes("rot")) {
       return `${value.numeric.toFixed(1)}°`;
     }
-    if (lower.includes("gobo")) {
+    if (detail.valueKind === "range" || lower.includes("gobo")) {
       return value.numeric.toFixed(0);
     }
     return `${value.numeric.toFixed(0)}%`;
@@ -613,13 +629,27 @@ function buildAttributeTabs(pageInfo: Record<string, EncoderGroup>): AttributeTa
   return tabs;
 }
 
-function deriveProgrammerValue(attribute: string, current: number, delta: number): ProgrammerScalar {
+function deriveProgrammerValue(encoder: EncoderParam, current: number, delta: number): ProgrammerScalar {
+  const attribute = encoder.attribute ?? "";
   const lower = attribute.toLowerCase();
-  if (lower.includes("pan") || lower.includes("tilt") || lower.includes("rotate") || lower.includes("rot")) {
-    const value = clamp(current + delta * 0.5, -180, 180);
+  if (encoder.valueKind === "angle" || lower.includes("pan") || lower.includes("tilt") || lower.includes("rotate") || lower.includes("rot")) {
+    const min = encoder.minValue ?? -180;
+    const max = encoder.maxValue ?? 180;
+    const value = clamp(current + delta * 0.5, Math.min(min, max), Math.max(min, max));
     return {
       numeric: value,
       text: `${value.toFixed(1)}°`,
+    };
+  }
+
+  if (encoder.valueKind === "range") {
+    const min = encoder.minValue ?? 0;
+    const max = encoder.maxValue ?? 255;
+    const span = Math.max(1, Math.abs(max - min));
+    const value = clamp(current + (delta / 360) * span, Math.min(min, max), Math.max(min, max));
+    return {
+      numeric: Math.round(value),
+      text: String(Math.round(value)),
     };
   }
 
@@ -634,12 +664,17 @@ function titleCase(value: string) {
   return value.charAt(0).toUpperCase() + value.slice(1);
 }
 
-function defaultAttributeNumeric(attribute: string) {
+function defaultAttributeNumeric(encoder: EncoderParam) {
+  if (typeof encoder.defaultValue === "number" && Number.isFinite(encoder.defaultValue)) {
+    return encoder.defaultValue;
+  }
+
+  const attribute = encoder.attribute ?? "";
   const lower = attribute.toLowerCase();
   if (lower.includes("pan") || lower.includes("tilt") || lower.includes("rotate") || lower.includes("rot")) {
     return 0;
   }
-  return 0;
+  return encoder.minValue ?? 0;
 }
 
 function clamp(value: number, min: number, max: number) {
