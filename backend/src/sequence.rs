@@ -415,7 +415,15 @@ fn request_sequence_output(app: &AppHandle) {
     }
 }
 
-fn now_ms() -> Result<u64, String> {
+pub(crate) fn save_and_emit_sequence_document(
+    document: &SequenceDocument,
+    show_state: &State<'_, ShowRuntimeState>,
+    app: &AppHandle,
+) -> Result<LoadedShow, String> {
+    save_and_emit(document, show_state, app)
+}
+
+pub(crate) fn now_ms() -> Result<u64, String> {
     current_timestamp_millis().map_err(|error| error.to_string())
 }
 

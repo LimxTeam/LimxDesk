@@ -116,6 +116,7 @@ pub fn run() {
             sequence::sequence_set_master,
             playback::playback_load_current_show,
             playback::playback_assign_executor,
+            playback::playback_store_programmer_on_executor,
             playback::playback_clear_executor,
             playback::playback_fire_executor,
             playback::playback_set_executor_master,

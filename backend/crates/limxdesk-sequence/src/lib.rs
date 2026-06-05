@@ -97,6 +97,7 @@ pub struct SequenceStoreRequest {
 #[serde(rename_all = "camelCase")]
 pub struct SingleStepStoreRequest {
     pub sequence_id: Option<String>,
+    pub sequence_number: Option<u32>,
     pub name: Option<String>,
     pub store_mode: CueStoreMode,
 }
@@ -289,9 +290,13 @@ pub fn store_single_step_program(
         return Err(SequenceError::EmptyProgrammer);
     }
 
-    let target_sequence_id = request.sequence_id.clone();
+    let target_sequence_id = request.sequence_id.clone().or_else(|| {
+        request
+            .sequence_number
+            .and_then(|number| document.sequences.iter().find(|sequence| sequence.number == number).map(|sequence| sequence.id.clone()))
+    });
     if target_sequence_id.is_none() {
-        let number = next_sequence_number(&document);
+        let number = request.sequence_number.unwrap_or_else(|| next_sequence_number(&document));
         let name = request
             .name
             .clone()
@@ -723,6 +728,7 @@ mod tests {
             result.document,
             SingleStepStoreRequest {
                 sequence_id: Some(sequence_id),
+                sequence_number: None,
                 name: Some("Look A".to_string()),
                 store_mode: CueStoreMode::Overwrite,
             },

@@ -53,6 +53,17 @@ interface SequenceLoadResult {
   runtime: SequenceRuntimeSnapshot;
 }
 
+interface PlaybackStoreExecutorResult {
+  playback: PlaybackDocument;
+  sequence: SequenceCommandResult;
+}
+
+interface SequenceCommandResult {
+  document: SequenceDocument;
+  sequence: SequenceModel;
+  cue: CueModel | null;
+}
+
 interface SequenceDocument {
   sequences: SequenceModel[];
   selectedSequenceId: string | null;
@@ -213,8 +224,9 @@ export function PlaybackWindow() {
   }
 
   async function assignExecutor(executor: Executor, recordHistory = true) {
-    if (!page || !selectedSequence) {
-      setStatus("Create or select a sequence before assigning playback.");
+    if (!page) return;
+    if (!selectedSequence) {
+      await storeProgrammerOnExecutor(executor, "overwrite");
       return;
     }
     const previousAssignment = executor.assignment;
@@ -229,6 +241,7 @@ export function PlaybackWindow() {
       });
       setPlayback(document);
       setSelectedExecutorId(executorId);
+      setStatus(`Assigned ${selectedSequence.name} to executor ${executor.number}`);
       if (recordHistory) {
         pushCommandHistory({
           label: `Assign Executor ${executor.number}`,
@@ -248,6 +261,42 @@ export function PlaybackWindow() {
           },
         });
       }
+    } catch (error) {
+      setStatus(String(error));
+    }
+  }
+
+  async function storeProgrammerOnExecutor(executor: Executor, storeMode: "merge" | "overwrite") {
+    if (!page) return;
+    try {
+      const result = await invoke<PlaybackStoreExecutorResult>("playback_store_programmer_on_executor", {
+        pageId: page.id,
+        executorId: executor.id,
+        storeMode,
+      });
+      setPlayback(result.playback);
+      setSequences(result.sequence.document.sequences);
+      setSelectedSequenceId(result.sequence.sequence.id);
+      setSelectedExecutorId(executor.id);
+      setStatus(`Stored ${result.sequence.sequence.name} to executor ${executor.number}`);
+      pushCommandHistory({
+        label: `Store Executor ${executor.number}`,
+        undo: async () => {
+          setPlayback(await invoke<PlaybackDocument>("playback_clear_executor", {
+            pageId: page.id,
+            executorId: executor.id,
+          }));
+        },
+        redo: async () => {
+          const next = await invoke<PlaybackStoreExecutorResult>("playback_store_programmer_on_executor", {
+            pageId: page.id,
+            executorId: executor.id,
+            storeMode,
+          });
+          setPlayback(next.playback);
+          setSequences(next.sequence.document.sequences);
+        },
+      });
     } catch (error) {
       setStatus(String(error));
     }
@@ -285,7 +334,7 @@ export function PlaybackWindow() {
 
   function handleExecutorPrimary(executor: Executor) {
     if (commandState.mode === "store" || commandState.mode === "update") {
-      void assignExecutor(executor);
+      void storeProgrammerOnExecutor(executor, commandState.mode === "update" ? "overwrite" : "merge");
       clearCommandEntry();
       return;
     }

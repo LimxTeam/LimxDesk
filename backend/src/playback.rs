@@ -1,12 +1,31 @@
-use crate::{events, output, sequence, sequence::SequenceState, show::ShowRuntimeState};
+use crate::{
+    events,
+    fixture_selection::FixtureSelectionState,
+    output,
+    programmer::ProgrammerState,
+    sequence,
+    sequence::SequenceState,
+    show::ShowRuntimeState,
+};
+use limxdesk_cue::CueStoreMode;
 use limxdesk_playback::{
     assign_executor, clear_executor, find_executor, normalize_document, set_executor_master,
     ExecutorAssignment, ExecutorAssignmentKind, PlaybackAction, PlaybackDocument,
 };
+use limxdesk_programmer::StoreUseSelection;
+use limxdesk_sequence::{store_single_step_program, SequenceCommandResult, SingleStepStoreRequest};
+use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, State};
 
 const PLAYBACK_SECTION_KEY: &str = "playback.v1";
 const PLAYBACK_SECTION_VERSION: u16 = 1;
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PlaybackStoreExecutorResult {
+    pub playback: PlaybackDocument,
+    pub sequence: SequenceCommandResult,
+}
 
 #[tauri::command]
 pub fn playback_load_current_show(
@@ -38,6 +57,64 @@ pub fn playback_assign_executor(
         .map_err(|error| error.to_string())?;
     save_and_emit(&document, &show_state, &app)?;
     Ok(document)
+}
+
+#[tauri::command]
+pub fn playback_store_programmer_on_executor(
+    page_id: String,
+    executor_id: String,
+    store_mode: CueStoreMode,
+    show_state: State<'_, ShowRuntimeState>,
+    selection_state: State<'_, FixtureSelectionState>,
+    programmer_state: State<'_, ProgrammerState>,
+    app: AppHandle,
+) -> Result<PlaybackStoreExecutorResult, String> {
+    let Some(_show) = show_state.current()? else {
+        return Err("No show file loaded. Create or load a show before editing playback.".to_string());
+    };
+
+    let playback_document = load_playback_document(&show_state)?;
+    let executor = find_executor(&playback_document, &page_id, &executor_id)
+        .map_err(|error| error.to_string())?
+        .clone();
+    let existing_sequence_id = executor.assignment.as_ref().and_then(|assignment| match assignment.kind {
+        ExecutorAssignmentKind::Sequence => Some(assignment.object_id.clone()),
+    });
+    let selection = selection_state.current()?;
+    let values = programmer_state
+        .current()?
+        .store_values(StoreUseSelection::Active, &selection);
+    let sequence_result = store_single_step_program(
+        sequence::load_sequence_document(&show_state)?,
+        SingleStepStoreRequest {
+            sequence_id: existing_sequence_id,
+            sequence_number: None,
+            name: Some(if executor.label.trim().is_empty() {
+                format!("Executor {}", executor.number)
+            } else {
+                executor.label.clone()
+            }),
+            store_mode,
+        },
+        values,
+        sequence::now_ms()?,
+    )
+    .map_err(|error| error.to_string())?;
+    sequence::save_and_emit_sequence_document(&sequence_result.document, &show_state, &app)?;
+
+    let assignment = ExecutorAssignment {
+        kind: ExecutorAssignmentKind::Sequence,
+        object_id: sequence_result.sequence.id.clone(),
+        object_name: sequence_result.sequence.name.clone(),
+    };
+    let playback_document = assign_executor(playback_document, &page_id, &executor_id, assignment)
+        .map_err(|error| error.to_string())?;
+    save_and_emit(&playback_document, &show_state, &app)?;
+    request_playback_output(&app);
+    Ok(PlaybackStoreExecutorResult {
+        playback: playback_document,
+        sequence: sequence_result,
+    })
 }
 
 #[tauri::command]
