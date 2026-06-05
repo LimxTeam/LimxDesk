@@ -7,13 +7,16 @@ name = "LimxDesk"
 version = "0.1.0"
 dependencies = [
  "limxdesk-artnet",
+ "limxdesk-cue",
  "limxdesk-dmx",
  "limxdesk-fixture-selection",
  "limxdesk-fixture-types",
  "limxdesk-network",
  "limxdesk-patch",
  "limxdesk-platform",
+ "limxdesk-playback",
  "limxdesk-programmer",
+ "limxdesk-sequence",
  "limxdesk-showfile",
  "serde",
  "serde_json",
@@ -1862,6 +1865,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "limxdesk-cue"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "uuid",
+]
+
+[[package]]
 name = "limxdesk-dmx"
 version = "0.1.0"
 dependencies = [
@@ -1919,11 +1930,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "limxdesk-playback"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "uuid",
+]
+
+[[package]]
 name = "limxdesk-programmer"
 version = "0.1.0"
 dependencies = [
  "limxdesk-fixture-selection",
  "serde",
+]
+
+[[package]]
+name = "limxdesk-sequence"
+version = "0.1.0"
+dependencies = [
+ "limxdesk-cue",
+ "limxdesk-programmer",
+ "serde",
+ "uuid",
 ]
 
 [[package]]

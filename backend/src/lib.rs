@@ -33,7 +33,9 @@ mod fixture_types;
 mod layout;
 mod output;
 mod patch;
+mod playback;
 mod programmer;
+mod sequence;
 mod show;
 mod titlebar;
 mod tray;
@@ -47,6 +49,7 @@ pub fn run() {
     tauri::Builder::default()
         .manage(fixture_selection::FixtureSelectionState::default())
         .manage(output::OutputState::default())
+        .manage(sequence::SequenceState::default())
         .manage(programmer::ProgrammerState::default())
         .manage(show::ShowRuntimeState::default())
         .plugin(tauri_plugin_shell::init())
@@ -98,6 +101,23 @@ pub fn run() {
             programmer::programmer_clear,
             programmer::programmer_store_values,
             programmer::programmer_reset,
+            sequence::sequence_load_current_show,
+            sequence::sequence_create,
+            sequence::sequence_select,
+            sequence::sequence_delete,
+            sequence::sequence_store_programmer,
+            sequence::sequence_update_cue,
+            sequence::sequence_delete_cue,
+            sequence::sequence_go,
+            sequence::sequence_back,
+            sequence::sequence_goto_cue,
+            sequence::sequence_off,
+            sequence::sequence_set_master,
+            playback::playback_load_current_show,
+            playback::playback_assign_executor,
+            playback::playback_clear_executor,
+            playback::playback_fire_executor,
+            playback::playback_set_executor_master,
             output::output_get_targets,
             output::output_network_interfaces,
             output::output_set_targets,

@@ -11,6 +11,10 @@ pub const PATCH_CHANGED: &str = "patch:changed";
 pub const LAYOUT_CHANGED: &str = "layout:changed";
 pub const FIXTURE_SELECTION_CHANGED: &str = "fixture-selection:changed";
 pub const PROGRAMMER_CHANGED: &str = "programmer:changed";
+pub const SEQUENCE_CHANGED: &str = "sequence:changed";
+pub const SEQUENCE_STATE_CHANGED: &str = "sequence:state-changed";
+pub const PLAYBACK_CHANGED: &str = "playback:changed";
+pub const PLAYBACK_STATE_CHANGED: &str = "playback:state-changed";
 pub const OUTPUT_CHANGED: &str = "output:changed";
 pub const OUTPUT_SENT: &str = "output:sent";
 
@@ -86,6 +90,30 @@ where
     T: Serialize + Clone,
 {
     let _ = app.emit(PROGRAMMER_CHANGED, programmer.clone());
+}
+
+pub fn emit_sequence_changed(app: &AppHandle, show: &LoadedShow) {
+    emit_show(app, SEQUENCE_CHANGED, show);
+    emit_show(app, SHOW_CHANGED, show);
+}
+
+pub fn emit_sequence_state_changed<T>(app: &AppHandle, state: &T)
+where
+    T: Serialize + Clone,
+{
+    let _ = app.emit(SEQUENCE_STATE_CHANGED, state.clone());
+}
+
+pub fn emit_playback_changed(app: &AppHandle, show: &LoadedShow) {
+    emit_show(app, PLAYBACK_CHANGED, show);
+    emit_show(app, SHOW_CHANGED, show);
+}
+
+pub fn emit_playback_state_changed<T>(app: &AppHandle, state: &T)
+where
+    T: Serialize + Clone,
+{
+    let _ = app.emit(PLAYBACK_STATE_CHANGED, state.clone());
 }
 
 fn emit_show(app: &AppHandle, event: &str, show: &LoadedShow) {

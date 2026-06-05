@@ -1,5 +1,6 @@
 use crate::{
     events, fixture_selection::FixtureSelectionState, output, programmer::ProgrammerState,
+    sequence::SequenceState,
 };
 use limxdesk_platform::current_timestamp_millis;
 use limxdesk_showfile::{
@@ -232,13 +233,14 @@ pub fn show_create(
     state: State<'_, ShowRuntimeState>,
     selection_state: State<'_, FixtureSelectionState>,
     programmer_state: State<'_, ProgrammerState>,
+    sequence_state: State<'_, SequenceState>,
     app: AppHandle,
 ) -> Result<LoadedShow, String> {
     let loaded = ShowRepository::default_for_current_os()
         .create(name)
         .map_err(|error| error.to_string())?;
     state.set_current(loaded.clone())?;
-    reset_runtime_context(&selection_state, &programmer_state, &app)?;
+    reset_runtime_context(&selection_state, &programmer_state, &sequence_state, &app)?;
     events::emit_show_loaded(&app, &loaded);
     request_default_output(&app);
     Ok(loaded)
@@ -250,13 +252,14 @@ pub fn show_load(
     state: State<'_, ShowRuntimeState>,
     selection_state: State<'_, FixtureSelectionState>,
     programmer_state: State<'_, ProgrammerState>,
+    sequence_state: State<'_, SequenceState>,
     app: AppHandle,
 ) -> Result<LoadedShow, String> {
     let loaded = ShowRepository::default_for_current_os()
         .load(path)
         .map_err(|error| error.to_string())?;
     state.set_current(loaded.clone())?;
-    reset_runtime_context(&selection_state, &programmer_state, &app)?;
+    reset_runtime_context(&selection_state, &programmer_state, &sequence_state, &app)?;
     events::emit_show_loaded(&app, &loaded);
     request_default_output(&app);
     Ok(loaded)
@@ -290,6 +293,7 @@ pub fn show_save_as(
     state: State<'_, ShowRuntimeState>,
     selection_state: State<'_, FixtureSelectionState>,
     programmer_state: State<'_, ProgrammerState>,
+    sequence_state: State<'_, SequenceState>,
     app: AppHandle,
 ) -> Result<LoadedShow, String> {
     let Some(current) = state.current()? else {
@@ -301,7 +305,7 @@ pub fn show_save_as(
         );
     }
     let loaded = state.save_current_as(name)?;
-    reset_runtime_context(&selection_state, &programmer_state, &app)?;
+    reset_runtime_context(&selection_state, &programmer_state, &sequence_state, &app)?;
     events::emit_show_loaded(&app, &loaded);
     request_default_output(&app);
     Ok(loaded)
@@ -313,6 +317,7 @@ pub fn show_delete(
     state: State<'_, ShowRuntimeState>,
     selection_state: State<'_, FixtureSelectionState>,
     programmer_state: State<'_, ProgrammerState>,
+    sequence_state: State<'_, SequenceState>,
     app: AppHandle,
 ) -> Result<(), String> {
     ShowRepository::default_for_current_os()
@@ -321,7 +326,7 @@ pub fn show_delete(
 
     if state.current()?.is_some_and(|show| show.path == path) {
         state.clear_current()?;
-        reset_runtime_context(&selection_state, &programmer_state, &app)?;
+        reset_runtime_context(&selection_state, &programmer_state, &sequence_state, &app)?;
     }
 
     events::emit_show_deleted(&app, path);
@@ -336,6 +341,7 @@ pub fn show_current(state: State<'_, ShowRuntimeState>) -> Result<Option<LoadedS
 fn reset_runtime_context(
     selection_state: &State<'_, FixtureSelectionState>,
     programmer_state: &State<'_, ProgrammerState>,
+    sequence_state: &State<'_, SequenceState>,
     app: &AppHandle,
 ) -> Result<(), String> {
     let selection = selection_state.current()?;
@@ -345,6 +351,9 @@ fn reset_runtime_context(
 
     let programmer = programmer_state.set_current(limxdesk_programmer::Programmer::default())?;
     events::emit_programmer_changed(app, &programmer);
+
+    sequence_state.clear()?;
+    events::emit_sequence_state_changed(app, &sequence_state.snapshot()?);
     Ok(())
 }
 

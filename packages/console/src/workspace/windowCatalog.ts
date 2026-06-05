@@ -20,6 +20,15 @@ export const WORKSPACE_WINDOW_CATALOG: WorkspaceWindowCatalogItem[] = [
     metrics: ["Universe", "Channel", "Value"],
   },
   {
+    type: "sequence-sheet",
+    title: "Sequence Sheet",
+    icon: "SQ",
+    accent: "#F5B84D",
+    blurb: "Cue stack editor for storing programmer data, timing cues, and running sequence playback.",
+    defaultSize: { w: 9, h: 6 },
+    metrics: ["Cue", "Part", "Tracking"],
+  },
+  {
     type: "playback",
     title: "Playback",
     icon: "PB",

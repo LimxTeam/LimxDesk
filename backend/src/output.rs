@@ -1,4 +1,7 @@
-use crate::{events, fixture_types, patch, programmer::ProgrammerState, show::ShowRuntimeState};
+use crate::{
+    events, fixture_types, patch, programmer::ProgrammerState, sequence,
+    sequence::SequenceState, show::ShowRuntimeState,
+};
 use limxdesk_artnet::{
     encode_artdmx, encode_sacn_dmp_with_priority, DmxUniverseFrame as ProtocolUniverseFrame,
     ARTNET_PORT, SACN_PORT,
@@ -117,19 +120,21 @@ pub fn output_set_targets(
 pub fn output_render_dmx(
     show_state: State<'_, ShowRuntimeState>,
     programmer_state: State<'_, ProgrammerState>,
+    sequence_state: State<'_, SequenceState>,
     output_state: State<'_, OutputState>,
 ) -> Result<Vec<DmxUniverseFrame>, String> {
-    render_current_dmx(&show_state, &programmer_state, &output_state)
+    render_current_dmx(&show_state, &programmer_state, &sequence_state, &output_state)
 }
 
 #[tauri::command]
 pub fn output_send_current(
     show_state: State<'_, ShowRuntimeState>,
     programmer_state: State<'_, ProgrammerState>,
+    sequence_state: State<'_, SequenceState>,
     output_state: State<'_, OutputState>,
     app: AppHandle,
 ) -> Result<OutputSendReport, String> {
-    let report = send_current_output(&show_state, &programmer_state, &output_state)?;
+    let report = send_current_output(&show_state, &programmer_state, &sequence_state, &output_state)?;
     events::emit_output_sent(&app, &report);
     Ok(report)
 }
@@ -137,9 +142,10 @@ pub fn output_send_current(
 pub(crate) fn send_current_output(
     show_state: &State<'_, ShowRuntimeState>,
     programmer_state: &State<'_, ProgrammerState>,
+    sequence_state: &State<'_, SequenceState>,
     output_state: &State<'_, OutputState>,
 ) -> Result<OutputSendReport, String> {
-    let frames = render_current_dmx(show_state, programmer_state, output_state)?;
+    let frames = render_current_dmx(show_state, programmer_state, sequence_state, output_state)?;
     let sequence = next_sequence(output_state)?;
     let targets = runtime_targets(show_state, output_state)?;
     let packets = build_network_packets(&frames, &targets, sequence)?;
@@ -182,8 +188,9 @@ pub(crate) fn request_output_send(app: &AppHandle) -> Result<(), String> {
 
         let show_state = app.state::<ShowRuntimeState>();
         let programmer_state = app.state::<ProgrammerState>();
+        let sequence_state = app.state::<SequenceState>();
         let output_state = app.state::<OutputState>();
-        match send_current_output(&show_state, &programmer_state, &output_state) {
+        match send_current_output(&show_state, &programmer_state, &sequence_state, &output_state) {
             Ok(report) => events::emit_output_sent(&app, &report),
             Err(error) => tracing::warn!("failed to send programmer output: {error}"),
         }
@@ -209,22 +216,30 @@ pub(crate) fn request_output_send(app: &AppHandle) -> Result<(), String> {
 fn render_current_dmx(
     show_state: &State<'_, ShowRuntimeState>,
     programmer_state: &State<'_, ProgrammerState>,
+    sequence_state: &State<'_, SequenceState>,
     output_state: &State<'_, OutputState>,
 ) -> Result<Vec<DmxUniverseFrame>, String> {
     let Some(cache) = runtime_cache(show_state, output_state)? else {
         return Ok(Vec::new());
     };
     let programmer = programmer_state.current()?;
-    let input = render_input_from_cache(&cache, &programmer);
+    let input = render_input_from_cache(&cache, &programmer, show_state, sequence_state)?;
     render_dmx(&input).map_err(|error| error.to_string())
 }
 
-fn render_input_from_cache(cache: &OutputRuntimeCache, programmer: &Programmer) -> DmxRenderInput {
-    DmxRenderInput {
+fn render_input_from_cache(
+    cache: &OutputRuntimeCache,
+    programmer: &Programmer,
+    show_state: &State<'_, ShowRuntimeState>,
+    sequence_state: &State<'_, SequenceState>,
+) -> Result<DmxRenderInput, String> {
+    let mut output_values = sequence::active_sequence_output_values(show_state, sequence_state)?;
+    output_values.extend(active_output_values(programmer));
+    Ok(DmxRenderInput {
         fixtures: cache.fixtures.clone(),
         fixture_types: cache.fixture_types.clone(),
-        output_values: active_output_values(programmer),
-    }
+        output_values,
+    })
 }
 
 fn active_output_values(programmer: &Programmer) -> Vec<DmxOutputValue> {
