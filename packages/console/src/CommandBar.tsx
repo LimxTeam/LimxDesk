@@ -1,6 +1,11 @@
 import { useState, useRef, type KeyboardEvent } from "react";
 import { Keyboard, Globe, Mail, Network, Play } from "lucide-react";
-import { appendCommandToken, clearCommandEntry, useCommandRuntimeSnapshot } from "./command/commandRuntime";
+import {
+  cancelCommandStep,
+  commandLineText,
+  submitCommandText,
+  useCommandRuntimeSnapshot,
+} from "./command/commandRuntime";
 
 export function CommandBar() {
   const [value, setValue] = useState("");
@@ -9,13 +14,13 @@ export function CommandBar() {
 
   function handleKeyDown(e: KeyboardEvent<HTMLInputElement>) {
     if (e.key === "Enter" && value.trim()) {
-      appendCommandToken(value.trim());
+      void submitCommandText(value.trim());
       setValue("");
       return;
     }
 
     if (e.key === "Escape") {
-      clearCommandEntry();
+      cancelCommandStep();
       setValue("");
     }
   }
@@ -58,9 +63,22 @@ export function CommandBar() {
         }}
         onClick={() => inputRef.current?.focus()}
       >
+        {!value && commandState.mode !== "idle" ? (
+          <span
+            className="lx-code"
+            style={{
+              color: "var(--lx-accent-bright)",
+              fontSize: 11,
+              marginRight: 8,
+              whiteSpace: "nowrap",
+            }}
+          >
+            {commandLineText(commandState)}
+          </span>
+        ) : null}
         <input
           ref={inputRef}
-          value={value || commandLinePreview(commandState.tokens)}
+          value={value}
           onChange={(e) => setValue(e.target.value)}
           onKeyDown={handleKeyDown}
           placeholder={commandState.status || "输入命令…"}
@@ -103,8 +121,4 @@ export function CommandBar() {
       </div>
     </div>
   );
-}
-
-function commandLinePreview(tokens: string[]) {
-  return tokens.length > 0 ? tokens.join(" ") : "";
 }

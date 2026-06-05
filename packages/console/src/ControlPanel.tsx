@@ -10,7 +10,9 @@ import { EncoderInfoBar } from "./components/EncoderInfoBar";
 import {
   activateCommandMode,
   appendCommandToken,
+  cancelCommandStep,
   clearCommandEntry,
+  executeCurrentCommand,
   redoLastCommand,
   setCommandTarget,
   undoLastCommand,
@@ -424,7 +426,7 @@ export function ControlPanel() {
     }
 
     if (label === "ESC") {
-      clearCommandEntry();
+      cancelCommandStep();
       return;
     }
 
@@ -448,12 +450,11 @@ export function ControlPanel() {
     const target = commandTargetForButton(label);
     if (target) {
       setCommandTarget(target);
-      appendCommandToken(label);
       return;
     }
 
     if (label === "Please") {
-      clearCommandEntry("Command executed");
+      void executeCurrentCommand();
       return;
     }
 

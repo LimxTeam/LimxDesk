@@ -2,7 +2,13 @@ import { useEffect, useMemo, useState } from "react";
 import type { CSSProperties } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { clearCommandEntry, pushCommandHistory, useCommandRuntimeSnapshot } from "../command/commandRuntime";
+import {
+  clearCommandEntry,
+  commandSlotNumber,
+  pushCommandHistory,
+  registerCommandHandler,
+  useCommandRuntimeSnapshot,
+} from "../command/commandRuntime";
 import { clearWorkspaceRuntimeCache } from "./workspaceRuntime";
 
 interface PlaybackDocument {
@@ -187,6 +193,48 @@ export function PlaybackWindow() {
       unlisteners.forEach((unlisten) => unlisten());
     };
   }, []);
+
+  useEffect(() => {
+    return registerCommandHandler("playback-window", async (command) => {
+      if (command.target !== "executor") return false;
+      const number = commandSlotNumber(command);
+      if (!number) {
+        setStatus("Executor command needs an executor number");
+        return { handled: true, keepCommand: true, status: "Executor command needs an executor number" };
+      }
+      const executor = page?.executors.find((item) => item.number === number);
+      if (!executor) {
+        setStatus(`Executor ${number} not found on current page`);
+        return { handled: true, keepCommand: true, status: `Executor ${number} not found on current page` };
+      }
+      if (command.mode === "store") {
+        await storeProgrammerOnExecutor(executor, "merge");
+        return { handled: true, status: `Stored Executor ${number}` };
+      }
+      if (command.mode === "update") {
+        await storeProgrammerOnExecutor(executor, "overwrite");
+        return { handled: true, status: `Updated Executor ${number}` };
+      }
+      if (command.mode === "delete") {
+        await clearExecutor(executor);
+        return { handled: true, status: `Cleared Executor ${number}` };
+      }
+      if (command.mode === "on") {
+        await fireExecutor(executor, "go");
+        return { handled: true, status: `Go Executor ${number}` };
+      }
+      if (command.mode === "off") {
+        await fireExecutor(executor, "off");
+        return { handled: true, status: `Off Executor ${number}` };
+      }
+      if (command.mode === "select" || command.mode === "idle") {
+        setSelectedExecutorId(executor.id);
+        setStatus(`Selected executor ${executor.number}`);
+        return { handled: true, status: `Selected Executor ${number}` };
+      }
+      return false;
+    });
+  }, [page, selectedSequence, commandState.mode]);
 
   async function loadAll() {
     await Promise.all([loadPlayback(), loadSequences()]);

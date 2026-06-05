@@ -2,7 +2,12 @@ import { useEffect, useMemo, useState } from "react";
 import type { CSSProperties } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { clearCommandEntry, useCommandRuntimeSnapshot } from "../command/commandRuntime";
+import {
+  clearCommandEntry,
+  commandSlotNumber,
+  registerCommandHandler,
+  useCommandRuntimeSnapshot,
+} from "../command/commandRuntime";
 import {
   clearWorkspaceRuntimeCache,
 } from "./workspaceRuntime";
@@ -206,6 +211,45 @@ export function SequenceSheetWindow() {
       unlisteners.forEach((unlisten) => unlisten());
     };
   }, []);
+
+  useEffect(() => {
+    return registerCommandHandler("sequence-sheet-window", async (command) => {
+      if (command.target !== "sequence") return false;
+      const number = commandSlotNumber(command);
+      if (!number || number < 1 || number > SEQUENCE_POOL_SLOT_COUNT) {
+        setStatus("Sequence command needs a pool number");
+        return { handled: true, keepCommand: true, status: "Sequence command needs a pool number" };
+      }
+      const sequence = sequencesByNumber.get(number);
+      if (command.mode === "store") {
+        await storeSequenceSlot(number, sequence, false);
+        return { handled: true, status: `Stored Sequence ${number}` };
+      }
+      if (command.mode === "update") {
+        await storeSequenceSlot(number, sequence, true);
+        return { handled: true, status: `Updated Sequence ${number}` };
+      }
+      if (command.mode === "delete") {
+        if (sequence) {
+          await deleteSequenceSlot(sequence);
+          return { handled: true, status: `Deleted Sequence ${number}` };
+        } else {
+          setStatus(`Sequence ${number} is empty`);
+          return { handled: true, keepCommand: true, status: `Sequence ${number} is empty` };
+        }
+      }
+      if (command.mode === "select" || command.mode === "idle") {
+        if (sequence) {
+          handleSelectSequence(sequence.id);
+          return { handled: true, status: `Selected Sequence ${number}` };
+        } else {
+          setStatus(`Sequence ${number} is empty`);
+          return { handled: true, keepCommand: true, status: `Sequence ${number} is empty` };
+        }
+      }
+      return false;
+    });
+  }, [sequencesByNumber, runtime, selectedSequence]);
 
   async function loadSequences() {
     try {

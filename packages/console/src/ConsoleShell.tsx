@@ -10,12 +10,14 @@ import { CommandBar } from "./CommandBar";
 import { ControlPanel } from "./ControlPanel";
 import { WorkspaceCanvas, type WorkspaceCanvasHandle } from "./workspace/WorkspaceCanvas";
 import { ShowFileDialog } from "./components/ShowFileDialog";
+import { useConsoleCommandHandlers } from "./command/useConsoleCommandHandlers";
 import type { WorkspaceWindow } from "./workspace/types";
 
 /** 侧边栏宽度过渡 */
 const SLIDE = "width 0.22s cubic-bezier(0.32, 0.72, 0, 1)";
 
 export function ConsoleShell({ children }: { children?: React.ReactNode }) {
+  useConsoleCommandHandlers();
   const [leftCollapsed, setLeftCollapsed] = useState(false);
   const [rightCollapsed, setRightCollapsed] = useState(false);
   const [showFileDialogOpen, setShowFileDialogOpen] = useState(false);

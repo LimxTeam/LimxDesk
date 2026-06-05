@@ -13,7 +13,9 @@ import { FloatingDialog, NamedAppearanceEditor, NamedAppearanceTile } from "@lim
 import {
   activateCommandMode,
   clearCommandEntry,
+  commandSlotNumber,
   pushCommandHistory,
+  registerCommandHandler,
   setCommandSource,
   useCommandRuntimeSnapshot,
 } from "../command/commandRuntime";
@@ -237,6 +239,42 @@ export function GroupsWindow({ config, onConfigChange }: WindowToolProps) {
       unlisten?.();
     };
   }, []);
+
+  useEffect(() => {
+    return registerCommandHandler("groups-window", async (command) => {
+      if (command.target !== "group") return false;
+      const id = commandSlotNumber(command);
+      if (!id || id < 1 || id > GROUP_SLOT_COUNT) {
+        return { handled: true, keepCommand: true, status: "Group command needs a slot number" };
+      }
+      const slot = slots.find((item) => item.id === id);
+      if (command.mode === "store" || command.mode === "update") {
+        if (!storeSlot(id)) {
+          return { handled: true, keepCommand: true, status: "Select fixtures before storing a group" };
+        }
+        return { handled: true, status: `${command.mode === "update" ? "Updated" : "Stored"} Group ${id}` };
+      }
+      if (command.mode === "delete") {
+        if (!clearSlot(id)) {
+          return { handled: true, keepCommand: true, status: `Group ${id} is empty` };
+        }
+        return { handled: true, status: `Deleted Group ${id}` };
+      }
+      if (command.mode === "edit") {
+        setEditor(slot ?? createEmptyGroupSlot(id));
+        return { handled: true, status: `Edit Group ${id}` };
+      }
+      if (command.mode === "select" || command.mode === "idle") {
+        if (slot) {
+          await recallSlot(slot);
+          return { handled: true, status: `Selected Group ${id}` };
+        } else {
+          return { handled: true, keepCommand: true, status: `Group ${id} is empty` };
+        }
+      }
+      return false;
+    });
+  }, [selection, slots, config]);
 
   async function loadSelection() {
     try {
@@ -749,6 +787,44 @@ export function PresetsWindow({ config, onConfigChange }: WindowToolProps) {
   const slots = useMemo(() => normalizePresetSlots(config.presets), [config.presets]);
   const categorySlots = slots.filter((slot) => slot.category === category);
   const storeMode = commandState.mode === "store";
+
+  useEffect(() => {
+    return registerCommandHandler("presets-window", async (command) => {
+      if (command.target !== "preset") return false;
+      const id = commandSlotNumber(command);
+      if (!id || id < 1 || id > PRESET_SLOT_COUNT) {
+        return { handled: true, keepCommand: true, status: "Preset command needs a slot number" };
+      }
+      const slot = slots.find((item) => item.category === category && item.id === id);
+      if (command.mode === "store" || command.mode === "update") {
+        if (!(await storeSlot(id))) {
+          return { handled: true, keepCommand: true, status: "No active programmer values to store" };
+        }
+        return { handled: true, status: `${command.mode === "update" ? "Updated" : "Stored"} ${presetCategoryLabel(category)} Preset ${id}` };
+      }
+      if (command.mode === "delete") {
+        if (slot) {
+          clearSlot(slot);
+          return { handled: true, status: `Deleted ${presetCategoryLabel(category)} Preset ${id}` };
+        } else {
+          return { handled: true, keepCommand: true, status: `${presetCategoryLabel(category)} Preset ${id} is empty` };
+        }
+      }
+      if (command.mode === "edit") {
+        setEditor(slot ?? createEmptyPresetSlot(id, category));
+        return { handled: true, status: `Edit ${presetCategoryLabel(category)} Preset ${id}` };
+      }
+      if (command.mode === "select" || command.mode === "idle") {
+        if (slot) {
+          await recallSlot(slot);
+          return { handled: true, status: `Recalled ${presetCategoryLabel(category)} Preset ${id}` };
+        } else {
+          return { handled: true, keepCommand: true, status: `${presetCategoryLabel(category)} Preset ${id} is empty` };
+        }
+      }
+      return false;
+    });
+  }, [category, slots, config]);
 
   function updateSlots(nextSlots: PresetSlot[]) {
     onConfigChange({ ...config, presets: nextSlots });
