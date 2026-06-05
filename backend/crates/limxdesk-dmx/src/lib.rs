@@ -92,13 +92,24 @@ pub struct DmxProgrammerValue {
 pub struct DmxUniverseFrame {
     pub universe: u16,
     pub data: Vec<u8>,
+    pub sources: Vec<DmxChannelSource>,
+}
+
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum DmxChannelSource {
+    #[default]
+    None,
+    Default,
+    Programmer,
 }
 
 pub fn render_programmer_to_dmx(input: &DmxRenderInput) -> DmxResult<Vec<DmxUniverseFrame>> {
     let mut universes = BTreeMap::<u16, [u8; DMX_UNIVERSE_SIZE]>::new();
+    let mut sources = BTreeMap::<u16, [DmxChannelSource; DMX_UNIVERSE_SIZE]>::new();
 
     for fixture in &input.fixtures {
-        render_fixture_defaults(input, fixture, &mut universes)?;
+        render_fixture_defaults(input, fixture, &mut universes, &mut sources)?;
     }
 
     for value in input.programmer_values.iter().filter(|value| value.active) {
@@ -134,6 +145,9 @@ pub fn render_programmer_to_dmx(input: &DmxRenderInput) -> DmxResult<Vec<DmxUniv
         let universe_data = universes
             .entry(universe)
             .or_insert([0_u8; DMX_UNIVERSE_SIZE]);
+        let universe_sources = sources
+            .entry(universe)
+            .or_insert([DmxChannelSource::None; DMX_UNIVERSE_SIZE]);
 
         for slot in &attribute.dmx_slots {
             if module_id.is_some() && slot.module_id.as_deref() != module_id {
@@ -153,6 +167,7 @@ pub fn render_programmer_to_dmx(input: &DmxRenderInput) -> DmxResult<Vec<DmxUniv
                 let index = usize::from(address - 1) + usize::from(*offset - 1);
                 if index < DMX_UNIVERSE_SIZE {
                     universe_data[index] = dmx_bytes.get(byte_index).copied().unwrap_or(0);
+                    universe_sources[index] = DmxChannelSource::Programmer;
                 }
             }
         }
@@ -160,9 +175,15 @@ pub fn render_programmer_to_dmx(input: &DmxRenderInput) -> DmxResult<Vec<DmxUniv
 
     Ok(universes
         .into_iter()
-        .map(|(universe, data)| DmxUniverseFrame {
-            universe,
-            data: data.to_vec(),
+        .map(|(universe, data)| {
+            let source_data = sources
+                .remove(&universe)
+                .unwrap_or([DmxChannelSource::None; DMX_UNIVERSE_SIZE]);
+            DmxUniverseFrame {
+                universe,
+                data: data.to_vec(),
+                sources: source_data.to_vec(),
+            }
         })
         .collect())
 }
@@ -171,6 +192,7 @@ fn render_fixture_defaults(
     input: &DmxRenderInput,
     fixture: &DmxFixturePatch,
     universes: &mut BTreeMap<u16, [u8; DMX_UNIVERSE_SIZE]>,
+    sources: &mut BTreeMap<u16, [DmxChannelSource; DMX_UNIVERSE_SIZE]>,
 ) -> DmxResult<()> {
     let (Some(universe), Some(address)) = (fixture.universe, fixture.address) else {
         return Ok(());
@@ -188,6 +210,9 @@ fn render_fixture_defaults(
     let universe_data = universes
         .entry(universe)
         .or_insert([0_u8; DMX_UNIVERSE_SIZE]);
+    let universe_sources = sources
+        .entry(universe)
+        .or_insert([DmxChannelSource::None; DMX_UNIVERSE_SIZE]);
 
     for attribute in &mode.attributes {
         for slot in &attribute.dmx_slots {
@@ -202,6 +227,7 @@ fn render_fixture_defaults(
                 let index = usize::from(address - 1) + usize::from(*offset - 1);
                 if index < DMX_UNIVERSE_SIZE {
                     universe_data[index] = dmx_bytes.get(byte_index).copied().unwrap_or(0);
+                    universe_sources[index] = DmxChannelSource::Default;
                 }
             }
         }
@@ -370,6 +396,8 @@ mod tests {
         assert_eq!(frames.len(), 1);
         assert_eq!(frames[0].data[0], 7);
         assert_eq!(frames[0].data[3], 9);
+        assert_eq!(frames[0].sources[0], DmxChannelSource::Default);
+        assert_eq!(frames[0].sources[3], DmxChannelSource::Default);
     }
 
     #[test]
@@ -383,6 +411,8 @@ mod tests {
 
         assert_eq!(frames[0].data[0], 255);
         assert_eq!(frames[0].data[3], 255);
+        assert_eq!(frames[0].sources[0], DmxChannelSource::Programmer);
+        assert_eq!(frames[0].sources[3], DmxChannelSource::Programmer);
     }
 
     fn input(fixture_id: &str) -> DmxRenderInput {

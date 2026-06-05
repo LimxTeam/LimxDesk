@@ -769,8 +769,16 @@ mod tests {
         let mut data = vec![0_u8; 512];
         data[25] = 3;
 
-        let packets =
-            build_network_packets(&[DmxUniverseFrame { universe: 1, data }], &[target], 1).unwrap();
+        let packets = build_network_packets(
+            &[DmxUniverseFrame {
+                universe: 1,
+                data,
+                sources: Vec::new(),
+            }],
+            &[target],
+            1,
+        )
+        .unwrap();
 
         assert_eq!(packets.len(), 1);
         assert_eq!(&packets[0].payload[16..18], &512_u16.to_be_bytes());

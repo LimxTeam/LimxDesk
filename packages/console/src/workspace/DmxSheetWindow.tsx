@@ -5,7 +5,10 @@ import { listen } from "@tauri-apps/api/event";
 interface DmxUniverseFrame {
   universe: number;
   data: number[];
+  sources?: DmxChannelSource[];
 }
+
+type DmxChannelSource = "none" | "default" | "programmer";
 
 const CHANNELS_PER_ROW = 16;
 
@@ -152,15 +155,26 @@ export function DmxSheetWindow() {
             }}
           >
             {frame.data.slice(0, 512).map((value, index) => {
-              const active = value > 0;
+              const source = frame.sources?.[index] ?? "none";
+              const hasOutput = value > 0;
+              const programmed = source === "programmer";
+              const defaulted = source === "default";
               return (
                 <div
                   key={index}
                   style={{
                     height: 38,
-                    border: active ? "1px solid rgba(120,217,120,0.52)" : "1px solid rgba(255,255,255,0.055)",
-                    background: active ? "rgba(120,217,120,0.13)" : "rgba(255,255,255,0.025)",
-                    color: active ? "var(--lx-fg-primary)" : "var(--lx-fg-tertiary)",
+                    border: programmed
+                      ? "1px solid rgba(240,157,28,0.62)"
+                      : defaulted
+                        ? "1px solid rgba(120,217,120,0.46)"
+                        : "1px solid rgba(255,255,255,0.055)",
+                    background: programmed
+                      ? "rgba(240,157,28,0.15)"
+                      : defaulted
+                        ? "rgba(120,217,120,0.10)"
+                        : "rgba(255,255,255,0.025)",
+                    color: hasOutput || source !== "none" ? "var(--lx-fg-primary)" : "var(--lx-fg-tertiary)",
                     display: "grid",
                     gridTemplateRows: "13px 1fr",
                     alignItems: "center",
@@ -169,8 +183,11 @@ export function DmxSheetWindow() {
                     fontVariantNumeric: "tabular-nums",
                   }}
                 >
-                  <span className="lx-code" style={{ fontSize: 9, opacity: 0.78 }}>
-                    {index + 1}
+                  <span className="lx-code" style={{ display: "flex", justifyContent: "space-between", gap: 4, fontSize: 9, opacity: 0.78 }}>
+                    <span>{index + 1}</span>
+                    <span style={{ color: programmed ? "var(--lx-accent-bright)" : defaulted ? "var(--lx-action-bright)" : "inherit" }}>
+                      {sourceLabel(source)}
+                    </span>
                   </span>
                   <span className="lx-code" style={{ fontSize: 16, fontWeight: 850, lineHeight: 1 }}>
                     {value}
@@ -214,4 +231,10 @@ export function DmxSheetWindow() {
       </div>
     </div>
   );
+}
+
+function sourceLabel(source: DmxChannelSource) {
+  if (source === "programmer") return "P";
+  if (source === "default") return "D";
+  return "";
 }

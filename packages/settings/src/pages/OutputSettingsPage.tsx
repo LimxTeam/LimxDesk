@@ -7,7 +7,10 @@ import { Activity, RadioTower, RefreshCw, Send } from "lucide-react";
 interface DmxUniverseFrame {
   universe: number;
   data: number[];
+  sources?: DmxChannelSource[];
 }
+
+type DmxChannelSource = "none" | "default" | "programmer";
 
 interface OutputSendReport {
   frames: number;
@@ -210,7 +213,11 @@ export function OutputSettingsPage() {
               {frames.length > 0 ? (
                 frames.map((frame) => {
                   const active = frame.data
-                    .map((value, index) => ({ channel: index + 1, value }))
+                    .map((value, index) => ({
+                      channel: index + 1,
+                      value,
+                      source: frame.sources?.[index] ?? "none",
+                    }))
                     .filter((item) => item.value > 0)
                     .slice(0, 28);
                   return (
@@ -222,7 +229,7 @@ export function OutputSettingsPage() {
                           {active.length > 0 ? (
                             active.map((item) => (
                               <span key={item.channel} className="lx-badge lx-badge-success">
-                                {item.channel}:{item.value}
+                                {item.channel}:{item.value} {sourceLabel(item.source)}
                               </span>
                             ))
                           ) : (
@@ -272,6 +279,12 @@ export function OutputSettingsPage() {
       </div>
     </div>
   );
+}
+
+function sourceLabel(source: DmxChannelSource) {
+  if (source === "programmer") return "P";
+  if (source === "default") return "D";
+  return "";
 }
 
 function Metric({ label, value }: { label: string; value: number }) {
