@@ -295,26 +295,40 @@ impl Programmer {
         selection: &FixtureSelection,
         request: ProgrammerSetAttributeRequest,
     ) -> ProgrammerResult<Self> {
+        self = self.set_attributes_for_selection(selection, vec![request])?;
+        Ok(self)
+    }
+
+    pub fn set_attributes_for_selection(
+        mut self,
+        selection: &FixtureSelection,
+        requests: Vec<ProgrammerSetAttributeRequest>,
+    ) -> ProgrammerResult<Self> {
         self = self.sync_selection(selection);
         let effective_selection = self.effective_fixture_selection();
         if effective_selection.fixture_ids.is_empty() {
             return Err(ProgrammerError::EmptySelection);
         }
-        validate_attribute(&request.attribute)?;
+        if requests.is_empty() {
+            return Ok(self);
+        }
 
         let buffer = self.active_buffer_mut();
         let selected_part_id = buffer.selected_part_id;
         let part = buffer.ensure_part(selected_part_id)?;
-        for fixture_id in &effective_selection.fixture_ids {
-            part.upsert_value(ProgrammerValue {
-                fixture_id: fixture_id.clone(),
-                attribute: request.attribute.clone(),
-                feature_group: default_if_empty(&request.feature_group, "Control").to_string(),
-                layer: request.layer,
-                value: request.value.clone(),
-                active: true,
-                source: request.source,
-            });
+        for request in requests {
+            validate_attribute(&request.attribute)?;
+            for fixture_id in &effective_selection.fixture_ids {
+                part.upsert_value(ProgrammerValue {
+                    fixture_id: fixture_id.clone(),
+                    attribute: request.attribute.clone(),
+                    feature_group: default_if_empty(&request.feature_group, "Control").to_string(),
+                    layer: request.layer,
+                    value: request.value.clone(),
+                    active: true,
+                    source: request.source,
+                });
+            }
         }
 
         self.bump_version();

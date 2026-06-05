@@ -129,6 +129,28 @@ pub fn programmer_set_attribute_for_selection(
 }
 
 #[tauri::command]
+pub fn programmer_set_attributes_for_selection(
+    requests: Vec<ProgrammerSetAttributeRequest>,
+    programmer_state: State<'_, ProgrammerState>,
+    selection_state: State<'_, FixtureSelectionState>,
+    _show_state: State<'_, ShowRuntimeState>,
+    _output_state: State<'_, output::OutputState>,
+    app: AppHandle,
+) -> Result<Programmer, String> {
+    let selection = selection_state.current()?;
+    let programmer = programmer_state
+        .current()?
+        .set_attributes_for_selection(&selection, requests)
+        .map_err(|error| error.to_string())?;
+    let programmer = programmer_state.set_current(programmer)?;
+    events::emit_programmer_changed(&app, &programmer);
+    if let Err(error) = output::request_output_send(&app) {
+        tracing::warn!("failed to request programmer output after batch set: {error}");
+    }
+    Ok(programmer)
+}
+
+#[tauri::command]
 pub fn programmer_adjust_attribute_for_selection(
     request: ProgrammerAdjustAttributeRequest,
     selection: Option<FixtureSelection>,

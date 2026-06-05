@@ -1,4 +1,11 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type MutableRefObject,
+  type PointerEvent as ReactPointerEvent,
+} from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { createDefaultNamedAppearance, normalizeNamedAppearance, type NamedAppearance } from "@limxdesk/naming";
@@ -116,10 +123,25 @@ interface PresetSlot {
 type PresetCategoryId = "all" | "dimmer" | "position" | "gobo" | "color" | "beam" | "focus" | "shapers" | "control";
 type ColorChannelId = "R" | "G" | "B" | "W" | "C" | "M" | "Y" | "A" | "L";
 type ShaperControlId = "top" | "bottom" | "left" | "right" | "iris" | "rotate" | "soft";
+type ColorPickerMode = "cie" | "fader" | "book";
+
+interface ColorPickerState {
+  mode: ColorPickerMode;
+  hue: number;
+  saturation: number;
+  brightness: number;
+  warmth: number;
+  values: Record<ColorChannelId, number>;
+}
 
 const GROUP_SLOT_COUNT = 255;
 const PRESET_SLOT_COUNT = 120;
 const COLOR_CHANNELS: ColorChannelId[] = ["R", "G", "B", "W", "C", "M", "Y", "A", "L"];
+const COLOR_PICKER_MODES: Array<{ id: ColorPickerMode; label: string; hint: string }> = [
+  { id: "cie", label: "CIE", hint: "Board" },
+  { id: "fader", label: "Fader", hint: "Channels" },
+  { id: "book", label: "Book", hint: "Swatches" },
+];
 const PRESET_CATEGORIES: Array<{ id: PresetCategoryId; label: string }> = [
   { id: "all", label: "All" },
   { id: "dimmer", label: "Dimmer" },
@@ -283,74 +305,322 @@ export function GroupsWindow({ config, onConfigChange }: WindowToolProps) {
 
 export function ColorPickerWindow({ config, onConfigChange }: WindowToolProps) {
   const { selection, attributes, fixtureLabel } = useSelectedFixtureAttributes();
-  const [values, setValues] = useState<Record<ColorChannelId, number>>(() => normalizeColorValues(config.colorValues));
+  const initialColorPickerState = normalizeColorPickerState(config);
+  const [draft, setDraft] = useState<ColorPickerState>(() => initialColorPickerState);
+  const draftRef = useRef<ColorPickerState>(initialColorPickerState);
   const supported = useMemo(() => mapColorAttributes(attributes), [attributes]);
+  const boardRef = useRef<HTMLDivElement | null>(null);
+  const brightnessRailRef = useRef<HTMLDivElement | null>(null);
+  const warmRailRef = useRef<HTMLDivElement | null>(null);
+  const pendingApplyRef = useRef<ColorPickerState | null>(null);
+  const applyInFlightRef = useRef(false);
 
-  function updateValues(nextValues: Record<ColorChannelId, number>) {
-    setValues(nextValues);
-    onConfigChange({ ...config, colorValues: nextValues });
+  useEffect(() => {
+    const next = normalizeColorPickerState(config);
+    if (colorPickerSignature(next) === colorPickerSignature(draftRef.current)) return;
+    draftRef.current = next;
+    setDraft(next);
+  }, [config.colorPicker, config.colorValues]);
+
+  function commitDraft(next: ColorPickerState, send = true) {
+    draftRef.current = next;
+    setDraft(next);
+    onConfigChange({
+      ...config,
+      colorPicker: next,
+      colorValues: next.values,
+    });
+    if (send) {
+      queueColorApply(next);
+    }
   }
 
-  async function setChannel(channel: ColorChannelId, value: number) {
-    const nextValues = { ...values, [channel]: value };
-    updateValues(nextValues);
-    const attribute = supported[channel];
-    if (!attribute || selection.fixtureIds.length === 0) return;
-    await setProgrammerAttribute(attribute, value, "manual");
+  function queueColorApply(next: ColorPickerState) {
+    pendingApplyRef.current = next;
+    if (applyInFlightRef.current) return;
+    applyInFlightRef.current = true;
+    void flushColorApplyQueue();
   }
 
-  async function applySwatch(swatch: (typeof COLOR_SWATCHES)[number]) {
-    updateValues(swatch.values);
-    await Promise.all(
-      COLOR_CHANNELS.map((channel) => {
-        const attribute = supported[channel];
-        return attribute ? setProgrammerAttribute(attribute, swatch.values[channel], "manual") : Promise.resolve();
-      }),
-    );
+  async function flushColorApplyQueue() {
+    while (pendingApplyRef.current) {
+      const next = pendingApplyRef.current;
+      pendingApplyRef.current = null;
+      const requests = buildColorRequests(next.values, supported);
+      if (requests.length > 0 && selection.fixtureIds.length > 0) {
+        await invoke("programmer_set_attributes_for_selection", { requests });
+      }
+    }
+    applyInFlightRef.current = false;
+  }
+
+  function setChannel(channel: ColorChannelId, value: number) {
+    const current = draftRef.current;
+    const nextValues = { ...current.values, [channel]: clamp(value, 0, 100) };
+    commitDraft(composeColorState(current, nextValues));
+  }
+
+  function applySwatch(swatch: (typeof COLOR_SWATCHES)[number]) {
+    const current = draftRef.current;
+    const nextValues = { ...current.values, ...swatch.values };
+    commitDraft(composeColorState(current, nextValues));
+  }
+
+  function updateFromBoard(clientX: number, clientY: number) {
+    const rect = boardRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    const hue = clamp(((clientX - rect.left) / rect.width) * 360, 0, 360);
+    const saturation = clamp(100 - ((clientY - rect.top) / rect.height) * 100, 0, 100);
+    const current = draftRef.current;
+    const nextValues = deriveColorValuesFromBoard({ ...current, hue, saturation });
+    commitDraft(composeColorState(current, nextValues));
+  }
+
+  function updateVerticalRail(
+    ref: MutableRefObject<HTMLDivElement | null>,
+    updater: (value: number) => void,
+    clientY: number,
+  ) {
+    const rect = ref.current?.getBoundingClientRect();
+    if (!rect) return;
+    const value = clamp(100 - ((clientY - rect.top) / rect.height) * 100, 0, 100);
+    updater(value);
+  }
+
+  function activateBoardDrag(event: ReactPointerEvent<HTMLDivElement>) {
+    event.currentTarget.setPointerCapture(event.pointerId);
+    updateFromBoard(event.clientX, event.clientY);
+    const move = (moveEvent: PointerEvent) => updateFromBoard(moveEvent.clientX, moveEvent.clientY);
+    const up = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+  }
+
+  function activateBrightnessDrag(event: ReactPointerEvent<HTMLDivElement>) {
+    event.currentTarget.setPointerCapture(event.pointerId);
+    const nextBrightness = (clientY: number) => {
+      updateVerticalRail(brightnessRailRef, (value) => {
+        const current = draftRef.current;
+        const nextValues = deriveColorValuesFromBoard({ ...current, brightness: value });
+        commitDraft(composeColorState(current, nextValues));
+      }, clientY);
+    };
+    nextBrightness(event.clientY);
+    const move = (moveEvent: PointerEvent) => nextBrightness(moveEvent.clientY);
+    const up = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
+  }
+
+  function activateWarmthDrag(event: ReactPointerEvent<HTMLDivElement>) {
+    event.currentTarget.setPointerCapture(event.pointerId);
+    const nextWarmth = (clientY: number) => {
+      updateVerticalRail(warmRailRef, (value) => {
+        const current = draftRef.current;
+        const nextValues = deriveColorValuesFromBoard({ ...current, warmth: value });
+        commitDraft(composeColorState(current, nextValues));
+      }, clientY);
+    };
+    nextWarmth(event.clientY);
+    const move = (moveEvent: PointerEvent) => nextWarmth(moveEvent.clientY);
+    const up = () => {
+      window.removeEventListener("pointermove", move);
+      window.removeEventListener("pointerup", up);
+    };
+    window.addEventListener("pointermove", move);
+    window.addEventListener("pointerup", up);
   }
 
   return (
     <ToolWindowShell
-      title="Color Picker"
-      subtitle={fixtureLabel}
+      title="Color Board"
+      subtitle={`${fixtureLabel} · ${COLOR_PICKER_MODES.find((mode) => mode.id === draft.mode)?.label ?? "CIE"}`}
       right={<span className="lx-code">{Object.values(supported).filter(Boolean).length}/9 attrs</span>}
     >
-      <div style={{ display: "grid", gridTemplateRows: "112px minmax(0, 1fr)", gap: 8, minHeight: 0 }}>
-        <div style={colorPreviewStyle(values)}>
-          <strong>{fixtureLabel}</strong>
-          <span className="lx-code">{selection.fixtureIds.length} selected</span>
+      <div style={{ display: "grid", gridTemplateColumns: "240px minmax(0, 1fr) 170px", gap: 10, minHeight: 0, height: "100%" }}>
+        <div style={colorPickerSidebarStyle}>
+          <div style={colorPreviewStyle(colorCss(draft.values))}>
+            <strong>{fixtureLabel}</strong>
+            <span className="lx-code">{selection.fixtureIds.length} selected</span>
+          </div>
+          <div style={editorMetaGridStyle}>
+            <ToggleButton active={draft.mode === "cie"} onClick={() => commitDraft({ ...draftRef.current, mode: "cie" }, false)}>
+              CIE
+            </ToggleButton>
+            <ToggleButton active={draft.mode === "fader"} onClick={() => commitDraft({ ...draftRef.current, mode: "fader" }, false)}>
+              Fader
+            </ToggleButton>
+            <ToggleButton active={draft.mode === "book"} onClick={() => commitDraft({ ...draftRef.current, mode: "book" }, false)}>
+              Book
+            </ToggleButton>
+            <ToggleButton active={false} onClick={() => commitDraft(normalizeColorPickerState(config), true)}>
+              Reset
+            </ToggleButton>
+          </div>
+          <div style={colorSidebarRailStyle}>
+            <VerticalRail
+              label="B"
+              value={draft.brightness}
+              onPointerDown={activateBrightnessDrag}
+              railRef={brightnessRailRef}
+            />
+            <VerticalRail
+              label="Q"
+              value={draft.warmth}
+              onPointerDown={activateWarmthDrag}
+              railRef={warmRailRef}
+            />
+          </div>
+          <div style={colorSidebarMetaStyle}>
+            <span className="lx-code">Hue {Math.round(draft.hue)}°</span>
+            <span className="lx-code">Sat {Math.round(draft.saturation)}%</span>
+            <span className="lx-code">Bright {Math.round(draft.brightness)}%</span>
+            <span className="lx-code">Warm {Math.round(draft.warmth)}%</span>
+          </div>
         </div>
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 1.05fr", gap: 8, minHeight: 0 }}>
-          <div style={colorChannelPanelStyle}>
-            {COLOR_CHANNELS.map((channel) => (
-              <label key={channel} style={channelRowStyle(!supported[channel])}>
-                <span>{channel}</span>
-                <input
-                  type="range"
-                  min={0}
-                  max={100}
-                  value={values[channel]}
-                  disabled={!supported[channel]}
-                  onChange={(event) => void setChannel(channel, Number(event.currentTarget.value))}
-                />
-                <output className="lx-code">{Math.round(values[channel])}</output>
-              </label>
+
+        <div style={colorBoardPanelStyle}>
+          <div style={colorPickerModeBarStyle}>
+            {COLOR_PICKER_MODES.map((mode) => (
+              <ToggleButton
+                key={mode.id}
+                active={draft.mode === mode.id}
+                onClick={() => commitDraft({ ...draftRef.current, mode: mode.id }, false)}
+              >
+                <span style={{ display: "grid", gap: 1 }}>
+                  <span>{mode.label}</span>
+                  <small className="lx-code" style={{ color: "inherit", fontSize: 9, opacity: 0.72 }}>{mode.hint}</small>
+                </span>
+              </ToggleButton>
             ))}
           </div>
-          <div style={swatchGridStyle}>
-            {COLOR_SWATCHES.map((swatch) => (
-              <button
-                key={swatch.label}
-                type="button"
-                onClick={() => void applySwatch(swatch)}
-                style={{
-                  ...swatchButtonStyle,
-                  background: colorCss(swatch.values),
-                }}
+
+          {draft.mode === "cie" ? (
+            <div style={{ display: "grid", gridTemplateRows: "minmax(0, 1fr) auto", gap: 10, minHeight: 0 }}>
+              <div
+                ref={boardRef}
+                onPointerDown={activateBoardDrag}
+                style={colorBoardStyle(draft)}
               >
-                <span>{swatch.label}</span>
-              </button>
-            ))}
+                <div style={colorBoardCrosshairStyle(draft)} />
+                <div style={colorBoardPointerStyle(draft)} />
+              </div>
+              <div style={colorQuickStatsStyle}>
+                <NumberControl label="Hue" value={draft.hue} min={0} max={360} step={1} onChange={(value) => {
+                  const nextValues = deriveColorValuesFromBoard({ ...draftRef.current, hue: value });
+                  commitDraft(composeColorState(draftRef.current, nextValues));
+                }} />
+                <NumberControl label="Sat" value={draft.saturation} min={0} max={100} step={1} onChange={(value) => {
+                  const nextValues = deriveColorValuesFromBoard({ ...draftRef.current, saturation: value });
+                  commitDraft(composeColorState(draftRef.current, nextValues));
+                }} />
+                <NumberControl label="Bright" value={draft.brightness} min={0} max={100} step={1} onChange={(value) => {
+                  const nextValues = deriveColorValuesFromBoard({ ...draftRef.current, brightness: value });
+                  commitDraft(composeColorState(draftRef.current, nextValues));
+                }} />
+                <NumberControl label="Warm" value={draft.warmth} min={0} max={100} step={1} onChange={(value) => {
+                  const nextValues = deriveColorValuesFromBoard({ ...draftRef.current, warmth: value });
+                  commitDraft(composeColorState(draftRef.current, nextValues));
+                }} />
+              </div>
+            </div>
+          ) : draft.mode === "fader" ? (
+            <div style={colorFaderGridStyle}>
+              {COLOR_CHANNELS.map((channel) => {
+                const attribute = supported[channel];
+                return (
+                  <label key={channel} style={colorFaderRowStyle(!attribute)}>
+                    <span style={editorLabelStyle}>{channel}</span>
+                    <input
+                      className="lx-input lx-input-sm"
+                      type="number"
+                      min={0}
+                      max={100}
+                      value={Math.round(draft.values[channel])}
+                      disabled={!attribute}
+                      onChange={(event) => {
+                        const value = clamp(Number(event.currentTarget.value), 0, 100);
+                        setChannel(channel, value);
+                      }}
+                    />
+                    <input
+                      type="range"
+                      min={0}
+                      max={100}
+                      value={draft.values[channel]}
+                      disabled={!attribute}
+                      onChange={(event) => setChannel(channel, Number(event.currentTarget.value))}
+                    />
+                  </label>
+                );
+              })}
+            </div>
+          ) : (
+            <div style={swatchModeStyle}>
+              <div style={swatchHeaderStyle}>
+                <strong style={editorSectionTitleStyle}>Color Book</strong>
+                <span className="lx-code" style={{ color: "var(--lx-fg-tertiary)" }}>Tap a swatch to drive the active fixture color.</span>
+              </div>
+              <div style={swatchGridStyle}>
+                {COLOR_SWATCHES.map((swatch) => (
+                  <button
+                    key={swatch.label}
+                    type="button"
+                    onClick={() => applySwatch(swatch)}
+                    style={{
+                      ...swatchButtonStyle,
+                      minHeight: 64,
+                      background: `linear-gradient(180deg, ${colorCss(swatch.values)}, rgba(0,0,0,0.85))`,
+                    }}
+                  >
+                    <span>{swatch.label}</span>
+                    <small className="lx-code" style={{ color: "rgba(255,255,255,0.76)", fontSize: 9 }}>
+                      {Math.round(swatch.values.R)} / {Math.round(swatch.values.G)} / {Math.round(swatch.values.B)}
+                    </small>
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+
+        <div style={colorDetailRailStyle}>
+          <div style={colorDetailCardStyle}>
+            <span style={editorSectionTitleStyle}>Supported</span>
+            <div style={colorSupportListStyle}>
+              {COLOR_CHANNELS.map((channel) => (
+                <div key={channel} style={colorSupportRowStyle(Boolean(supported[channel]))}>
+                  <span>{channel}</span>
+                  <strong>{supported[channel] ? "On" : "Off"}</strong>
+                </div>
+              ))}
+            </div>
+          </div>
+          <div style={colorDetailCardStyle}>
+            <span style={editorSectionTitleStyle}>Preview</span>
+            <div style={{ display: "grid", gap: 6 }}>
+              <div style={colorPreviewSmallStyle(colorCss(draft.values))} />
+              <span className="lx-code" style={{ color: "var(--lx-fg-tertiary)", fontSize: 10 }}>
+                {draft.values.R.toFixed(0)} / {draft.values.G.toFixed(0)} / {draft.values.B.toFixed(0)}
+              </span>
+            </div>
+          </div>
+          <div style={colorDetailCardStyle}>
+            <span style={editorSectionTitleStyle}>Channels</span>
+            <div style={{ display: "grid", gap: 4 }}>
+              {COLOR_CHANNELS.map((channel) => (
+                <div key={channel} style={colorChipStyle(Boolean(supported[channel]))}>
+                  <span>{channel}</span>
+                  <strong>{Math.round(draft.values[channel])}</strong>
+                </div>
+              ))}
+            </div>
           </div>
         </div>
       </div>
@@ -726,6 +996,167 @@ function normalizeColorValues(value: unknown): Record<ColorChannelId, number> {
   return Object.fromEntries(COLOR_CHANNELS.map((channel) => [channel, clampNumber(record[channel], 0, 100)])) as Record<ColorChannelId, number>;
 }
 
+function normalizeColorPickerState(value: unknown): ColorPickerState {
+  const record = asRecord(value);
+  const source = asRecord(record.colorPicker);
+  const values = normalizeColorValues(source.values ?? source.colorValues ?? record.values ?? record.colorValues ?? record);
+  const derived = deriveColorStateFromValues(values);
+  const modeValue = source.mode ?? record.mode;
+  return {
+    mode: isColorPickerMode(modeValue) ? modeValue : "cie",
+    hue: clampNumber(source.hue ?? record.hue ?? derived.hue, 0, 360),
+    saturation: clampNumber(source.saturation ?? record.saturation ?? derived.saturation, 0, 100),
+    brightness: clampNumber(source.brightness ?? record.brightness ?? derived.brightness, 0, 100),
+    warmth: clampNumber(source.warmth ?? record.warmth ?? derived.warmth, 0, 100),
+    values,
+  };
+}
+
+function colorPickerSignature(state: ColorPickerState) {
+  return JSON.stringify({
+    mode: state.mode,
+    hue: state.hue,
+    saturation: state.saturation,
+    brightness: state.brightness,
+    warmth: state.warmth,
+    values: state.values,
+  });
+}
+
+function deriveColorStateFromValues(values: Record<ColorChannelId, number>) {
+  const rgb = rgbFromColorValues(values);
+  const hsv = rgbToHsv(rgb.r, rgb.g, rgb.b);
+  const warmth = clamp(Math.round((values.A * 0.85 + values.L * 0.35 + values.W * 0.25) - values.B * 0.15), 0, 100);
+  return {
+    hue: hsv.h,
+    saturation: hsv.s,
+    brightness: clamp(Math.round(Math.max(hsv.v, values.W, values.A, values.L)), 0, 100),
+    warmth,
+  };
+}
+
+function deriveColorValuesFromBoard(state: Pick<ColorPickerState, "hue" | "saturation" | "brightness" | "warmth">) {
+  const rgb = hsvToRgb(state.hue, state.saturation, state.brightness);
+  const complement = {
+    c: clamp(100 - rgb.r, 0, 100),
+    m: clamp(100 - rgb.g, 0, 100),
+    y: clamp(100 - rgb.b, 0, 100),
+  };
+  const white = clamp(Math.round(state.brightness * (1 - state.saturation / 140)), 0, 100);
+  const warmth = clamp(state.warmth / 100, 0, 1);
+  const amber = clamp(Math.round(state.brightness * (0.25 + warmth * 0.75)), 0, 100);
+  const lime = clamp(Math.round(state.brightness * (0.20 + (1 - warmth) * 0.55)), 0, 100);
+  return {
+    R: rgb.r,
+    G: rgb.g,
+    B: rgb.b,
+    W: white,
+    C: complement.c,
+    M: complement.m,
+    Y: complement.y,
+    A: amber,
+    L: lime,
+  } satisfies Record<ColorChannelId, number>;
+}
+
+function rgbFromColorValues(values: Record<ColorChannelId, number>) {
+  const r = clamp(Math.round(values.R + values.A * 0.7 + values.W * 0.3), 0, 100);
+  const g = clamp(Math.round(values.G + values.L * 0.55 + values.W * 0.3), 0, 100);
+  const b = clamp(Math.round(values.B + values.W * 0.35), 0, 100);
+  return { r, g, b };
+}
+
+function rgbToHsv(r: number, g: number, b: number) {
+  const rn = clamp(r, 0, 100) / 100;
+  const gn = clamp(g, 0, 100) / 100;
+  const bn = clamp(b, 0, 100) / 100;
+  const max = Math.max(rn, gn, bn);
+  const min = Math.min(rn, gn, bn);
+  const delta = max - min;
+  let hue = 0;
+  if (delta > 0) {
+    if (max === rn) hue = 60 * (((gn - bn) / delta) % 6);
+    else if (max === gn) hue = 60 * ((bn - rn) / delta + 2);
+    else hue = 60 * ((rn - gn) / delta + 4);
+  }
+  if (hue < 0) hue += 360;
+  const saturation = max === 0 ? 0 : (delta / max) * 100;
+  const brightness = max * 100;
+  return {
+    h: clamp(Math.round(hue), 0, 360),
+    s: clamp(Math.round(saturation), 0, 100),
+    v: clamp(Math.round(brightness), 0, 100),
+  };
+}
+
+function composeColorState(base: ColorPickerState, values: Record<ColorChannelId, number>): ColorPickerState {
+  const derived = deriveColorStateFromValues(values);
+  return {
+    ...base,
+    values,
+    hue: derived.hue,
+    saturation: derived.saturation,
+    brightness: derived.brightness,
+    warmth: derived.warmth,
+  };
+}
+
+function hsvToRgb(h: number, s: number, v: number) {
+  const hue = ((h % 360) + 360) % 360;
+  const saturation = clamp(s, 0, 100) / 100;
+  const value = clamp(v, 0, 100) / 100;
+  const c = value * saturation;
+  const x = c * (1 - Math.abs(((hue / 60) % 2) - 1));
+  const m = value - c;
+  let r = 0;
+  let g = 0;
+  let b = 0;
+  if (hue < 60) {
+    [r, g, b] = [c, x, 0];
+  } else if (hue < 120) {
+    [r, g, b] = [x, c, 0];
+  } else if (hue < 180) {
+    [r, g, b] = [0, c, x];
+  } else if (hue < 240) {
+    [r, g, b] = [0, x, c];
+  } else if (hue < 300) {
+    [r, g, b] = [x, 0, c];
+  } else {
+    [r, g, b] = [c, 0, x];
+  }
+  return {
+    r: clamp(Math.round((r + m) * 100), 0, 100),
+    g: clamp(Math.round((g + m) * 100), 0, 100),
+    b: clamp(Math.round((b + m) * 100), 0, 100),
+  };
+}
+
+function buildColorRequests(values: Record<ColorChannelId, number>, supported: Record<ColorChannelId, FixtureModeAttribute | null>) {
+  const requests: Array<{
+    attribute: string;
+    featureGroup: string;
+    layer: "absolute";
+    value: { numeric: number | null; text: null };
+    source: "manual";
+  }> = [];
+  for (const channel of COLOR_CHANNELS) {
+    const attribute = supported[channel];
+    if (!attribute) continue;
+    requests.push({
+      attribute: attribute.name,
+      featureGroup: attribute.featureGroup,
+      layer: "absolute",
+      value: { numeric: clamp(Math.round(values[channel]), 0, 100), text: null },
+      source: "manual",
+    });
+  }
+  return requests;
+}
+
+function isColorPickerMode(value: unknown): value is ColorPickerMode {
+  return value === "cie" || value === "fader" || value === "book";
+}
+
 function normalizeShaperValues(value: unknown): Record<ShaperControlId, number> {
   const record = asRecord(value);
   return {
@@ -736,6 +1167,20 @@ function normalizeShaperValues(value: unknown): Record<ShaperControlId, number> 
     iris: clampNumber(record.iris, 0, 100),
     rotate: clampNumber(record.rotate, 0, 100),
     soft: clampNumber(record.soft, 0, 100),
+  };
+}
+
+function channelRowStyle(disabled: boolean): React.CSSProperties {
+  return {
+    display: "grid",
+    gridTemplateColumns: "22px minmax(0, 1fr) 32px",
+    alignItems: "center",
+    gap: 6,
+    height: 24,
+    opacity: disabled ? 0.38 : 1,
+    color: "var(--lx-fg-secondary)",
+    fontSize: 10,
+    fontWeight: 800,
   };
 }
 
@@ -913,6 +1358,64 @@ function ToggleButton({
   );
 }
 
+function VerticalRail({
+  label,
+  value,
+  onPointerDown,
+  railRef,
+}: {
+  label: string;
+  value: number;
+  onPointerDown: (event: ReactPointerEvent<HTMLDivElement>) => void;
+  railRef: MutableRefObject<HTMLDivElement | null>;
+}) {
+  return (
+    <div style={verticalRailShellStyle}>
+      <span style={verticalRailLabelStyle}>{label}</span>
+      <div
+        ref={railRef}
+        onPointerDown={onPointerDown}
+        style={verticalRailTrackStyle}
+      >
+        <div style={{ ...verticalRailFillStyle, height: `${clamp(value, 0, 100)}%` }} />
+        <div style={{ ...verticalRailThumbStyle, bottom: `calc(${clamp(value, 0, 100)}% - 7px)` }} />
+      </div>
+      <span className="lx-code" style={verticalRailValueStyle}>{Math.round(value)}</span>
+    </div>
+  );
+}
+
+function NumberControl({
+  label,
+  value,
+  min,
+  max,
+  step,
+  onChange,
+}: {
+  label: string;
+  value: number;
+  min: number;
+  max: number;
+  step: number;
+  onChange: (value: number) => void;
+}) {
+  return (
+    <label style={miniNumberControlStyle}>
+      <span style={editorLabelStyle}>{label}</span>
+      <input
+        className="lx-input lx-input-sm"
+        type="number"
+        min={min}
+        max={max}
+        step={step}
+        value={Math.round(value)}
+        onChange={(event) => onChange(clamp(Number(event.currentTarget.value), min, max))}
+      />
+    </label>
+  );
+}
+
 function BladeHandle({
   side,
   value,
@@ -974,40 +1477,157 @@ const poolTileButtonStyle: React.CSSProperties = {
   cursor: "pointer",
 };
 
-const colorChannelPanelStyle: React.CSSProperties = {
+const colorPickerSidebarStyle: React.CSSProperties = {
   display: "grid",
-  alignContent: "start",
+  gridTemplateRows: "112px auto auto auto",
+  gap: 10,
+  minHeight: 0,
+  overflow: "auto",
+  paddingRight: 2,
+};
+
+const editorMetaGridStyle: React.CSSProperties = {
+  display: "grid",
+  gridTemplateColumns: "repeat(4, minmax(0, 1fr))",
   gap: 5,
+};
+
+const editorSectionTitleStyle: React.CSSProperties = {
+  color: "var(--lx-fg-primary)",
+  fontSize: 11,
+  fontWeight: 900,
+  letterSpacing: "0.10em",
+  textTransform: "uppercase",
+};
+
+const editorLabelStyle: React.CSSProperties = {
+  color: "var(--lx-fg-tertiary)",
+  fontSize: 10,
+  fontWeight: 850,
+  letterSpacing: "0.08em",
+  textTransform: "uppercase",
+};
+
+const miniNumberControlStyle: React.CSSProperties = {
+  display: "grid",
+  gap: 4,
+  minWidth: 0,
+};
+
+const colorSidebarRailStyle: React.CSSProperties = {
+  display: "grid",
+  gridTemplateColumns: "repeat(2, minmax(0, 1fr))",
+  gap: 8,
+  minHeight: 0,
+};
+
+const colorSidebarMetaStyle: React.CSSProperties = {
+  display: "grid",
+  gap: 4,
+  padding: 8,
+  border: "1px solid rgba(255,255,255,0.08)",
+  borderRadius: "var(--lx-radius-md)",
+  background: "rgba(255,255,255,0.025)",
+};
+
+const colorBoardPanelStyle: React.CSSProperties = {
+  display: "grid",
+  gridTemplateRows: "28px minmax(0, 1fr)",
+  gap: 8,
+  minHeight: 0,
+};
+
+const colorPickerModeBarStyle: React.CSSProperties = {
+  display: "flex",
+  gap: 6,
+  overflowX: "auto",
+};
+
+function colorBoardStyle(state: ColorPickerState): React.CSSProperties {
+  return {
+    position: "relative",
+    minHeight: 0,
+    overflow: "hidden",
+    border: "1px solid rgba(255,255,255,0.08)",
+    borderRadius: "var(--lx-radius-md)",
+    background:
+      "linear-gradient(180deg, rgba(255,255,255,0.18), rgba(255,255,255,0.03) 38%, rgba(0,0,0,0.70) 100%), linear-gradient(90deg, #ff0000 0%, #ffff00 16.6%, #00ff00 33.2%, #00ffff 49.8%, #0000ff 66.4%, #ff00ff 83.1%, #ff0000 100%)",
+    boxShadow: `inset 0 0 0 1px ${colorCss(state.values)}`,
+    cursor: "crosshair",
+  };
+}
+
+function colorBoardCrosshairStyle(state: ColorPickerState): React.CSSProperties {
+  return {
+    position: "absolute",
+    left: `calc(${clamp(state.hue / 360, 0, 1) * 100}% - 12px)`,
+    top: `calc(${100 - clamp(state.saturation, 0, 100)}% - 12px)`,
+    width: 24,
+    height: 24,
+    border: "1px solid rgba(255,255,255,0.78)",
+    boxShadow: "0 0 0 1px rgba(0,0,0,0.54), 0 0 12px rgba(255,255,255,0.35)",
+    pointerEvents: "none",
+  };
+}
+
+function colorBoardPointerStyle(state: ColorPickerState): React.CSSProperties {
+  return {
+    position: "absolute",
+    left: `calc(${clamp(state.hue / 360, 0, 1) * 100}% - 8px)`,
+    top: `calc(${100 - clamp(state.saturation, 0, 100)}% - 8px)`,
+    width: 16,
+    height: 16,
+    borderRadius: "50%",
+    background: colorCss(state.values),
+    border: "2px solid rgba(255,255,255,0.96)",
+    boxShadow: "0 0 0 1px rgba(0,0,0,0.45), 0 0 12px rgba(255,255,255,0.16)",
+    pointerEvents: "none",
+  };
+}
+
+const colorQuickStatsStyle: React.CSSProperties = {
+  display: "grid",
+  gridTemplateColumns: "repeat(4, minmax(0, 1fr))",
+  gap: 6,
+};
+
+const colorFaderGridStyle: React.CSSProperties = {
+  display: "grid",
+  gridTemplateColumns: "repeat(3, minmax(0, 1fr))",
+  gap: 6,
+  alignContent: "start",
   minHeight: 0,
   overflow: "auto",
 };
 
-function channelRowStyle(disabled: boolean): React.CSSProperties {
+function colorFaderRowStyle(disabled: boolean): React.CSSProperties {
   return {
     display: "grid",
-    gridTemplateColumns: "22px minmax(0, 1fr) 32px",
-    alignItems: "center",
+    gridTemplateColumns: "16px 46px minmax(0, 1fr)",
     gap: 6,
-    height: 24,
+    alignItems: "center",
+    minWidth: 0,
+    padding: 6,
+    border: "1px solid rgba(255,255,255,0.08)",
+    borderRadius: "var(--lx-radius-sm)",
+    background: disabled ? "rgba(255,255,255,0.02)" : "rgba(255,255,255,0.04)",
     opacity: disabled ? 0.38 : 1,
-    color: "var(--lx-fg-secondary)",
-    fontSize: 10,
-    fontWeight: 800,
   };
 }
 
-function colorPreviewStyle(values: Record<ColorChannelId, number>): React.CSSProperties {
-  return {
-    display: "grid",
-    alignContent: "center",
-    justifyItems: "center",
-    gap: 5,
-    border: "1px solid rgba(255,255,255,0.08)",
-    background: `linear-gradient(135deg, ${colorCss(values)}, rgba(0,0,0,0.78))`,
-    color: "#fff",
-    textShadow: "0 1px 6px rgba(0,0,0,0.95)",
-  };
-}
+const swatchModeStyle: React.CSSProperties = {
+  display: "grid",
+  gridTemplateRows: "auto minmax(0, 1fr)",
+  gap: 8,
+  minHeight: 0,
+};
+
+const swatchHeaderStyle: React.CSSProperties = {
+  display: "flex",
+  alignItems: "baseline",
+  justifyContent: "space-between",
+  gap: 10,
+};
 
 const swatchGridStyle: React.CSSProperties = {
   display: "grid",
@@ -1025,6 +1645,144 @@ const swatchButtonStyle: React.CSSProperties = {
   fontWeight: 900,
   textShadow: "0 1px 5px rgba(0,0,0,0.95)",
   cursor: "pointer",
+  display: "grid",
+  gap: 3,
+  alignContent: "center",
+  padding: "8px 10px",
+  textAlign: "left",
+};
+
+const colorDetailRailStyle: React.CSSProperties = {
+  display: "grid",
+  gridTemplateRows: "auto auto auto",
+  gap: 8,
+  minHeight: 0,
+  overflow: "auto",
+  paddingLeft: 2,
+};
+
+const colorDetailCardStyle: React.CSSProperties = {
+  display: "grid",
+  gap: 6,
+  padding: 8,
+  border: "1px solid rgba(255,255,255,0.08)",
+  borderRadius: "var(--lx-radius-md)",
+  background: "rgba(255,255,255,0.02)",
+};
+
+const colorSupportListStyle: React.CSSProperties = {
+  display: "grid",
+  gap: 4,
+};
+
+function colorSupportRowStyle(active: boolean): React.CSSProperties {
+  return {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 8,
+    padding: "5px 6px",
+    border: "1px solid rgba(255,255,255,0.06)",
+    borderRadius: "var(--lx-radius-xs)",
+    background: active ? "rgba(77,163,245,0.12)" : "rgba(0,0,0,0.18)",
+    color: active ? "var(--lx-primary-bright)" : "var(--lx-fg-tertiary)",
+    fontSize: 10,
+  };
+}
+
+function colorPreviewStyle(background: string): React.CSSProperties {
+  return {
+    display: "grid",
+    alignContent: "center",
+    justifyItems: "center",
+    gap: 5,
+    minHeight: 0,
+    border: "1px solid rgba(255,255,255,0.08)",
+    borderRadius: "var(--lx-radius-md)",
+    background: `linear-gradient(135deg, ${background}, rgba(0,0,0,0.78))`,
+    color: "#fff",
+    textShadow: "0 1px 6px rgba(0,0,0,0.95)",
+  };
+}
+
+function colorPreviewSmallStyle(background: string): React.CSSProperties {
+  return {
+    height: 42,
+    borderRadius: "var(--lx-radius-sm)",
+    border: "1px solid rgba(255,255,255,0.08)",
+    background: `linear-gradient(135deg, ${background}, rgba(0,0,0,0.82))`,
+  };
+}
+
+function colorChipStyle(active: boolean): React.CSSProperties {
+  return {
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 10,
+    height: 26,
+    border: `1px solid ${active ? "rgba(77,163,245,0.52)" : "rgba(255,255,255,0.08)"}`,
+    borderRadius: "var(--lx-radius-xs)",
+    padding: "0 8px",
+    background: active ? "rgba(77,163,245,0.12)" : "rgba(0,0,0,0.18)",
+    color: active ? "var(--lx-primary-bright)" : "var(--lx-fg-secondary)",
+    fontSize: 10,
+    cursor: "default",
+  };
+}
+
+const verticalRailShellStyle: React.CSSProperties = {
+  display: "grid",
+  gridTemplateRows: "auto minmax(0, 1fr) auto",
+  gap: 6,
+  alignItems: "center",
+  minHeight: 0,
+};
+
+const verticalRailLabelStyle: React.CSSProperties = {
+  color: "var(--lx-fg-tertiary)",
+  fontSize: 10,
+  fontWeight: 900,
+  letterSpacing: "0.12em",
+  textTransform: "uppercase",
+  textAlign: "center",
+};
+
+const verticalRailTrackStyle: React.CSSProperties = {
+  position: "relative",
+  minHeight: 180,
+  borderRadius: "var(--lx-radius-md)",
+  border: "1px solid rgba(255,255,255,0.08)",
+  background:
+    "linear-gradient(180deg, rgba(255,255,255,0.85), rgba(255,255,255,0.24) 46%, rgba(0,0,0,0.92) 100%)",
+  overflow: "hidden",
+  cursor: "ns-resize",
+};
+
+const verticalRailFillStyle: React.CSSProperties = {
+  position: "absolute",
+  left: 0,
+  right: 0,
+  bottom: 0,
+  background: "linear-gradient(180deg, rgba(168,78,237,0.84), rgba(77,163,245,0.58))",
+};
+
+const verticalRailThumbStyle: React.CSSProperties = {
+  position: "absolute",
+  left: 6,
+  right: 6,
+  height: 14,
+  borderRadius: 999,
+  background: "rgba(255,255,255,0.92)",
+  border: "1px solid rgba(0,0,0,0.36)",
+  boxShadow: "0 0 8px rgba(255,255,255,0.16)",
+};
+
+const verticalRailValueStyle: React.CSSProperties = {
+  color: "var(--lx-fg-tertiary)",
+  fontSize: 10,
+  fontWeight: 800,
+  textAlign: "center",
 };
 
 const shaperBeamStyle: React.CSSProperties = {
