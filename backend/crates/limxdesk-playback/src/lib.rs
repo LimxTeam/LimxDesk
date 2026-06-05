@@ -1,6 +1,5 @@
 use serde::{Deserialize, Serialize};
 use std::fmt;
-use uuid::Uuid;
 
 pub const DEFAULT_EXECUTOR_COLUMNS: u16 = 15;
 pub const DEFAULT_EXECUTOR_ROWS: u16 = 4;
@@ -114,7 +113,7 @@ pub enum PlaybackAction {
 impl PlaybackPage {
     pub fn new(number: u16) -> Self {
         Self {
-            id: Uuid::new_v4().to_string(),
+            id: page_id(number),
             number,
             name: format!("Page {number}"),
             executors: default_executors(),
@@ -277,6 +276,10 @@ fn executor_id(row: u16, column: u16) -> String {
     format!("exec-{row}-{column}")
 }
 
+fn page_id(number: u16) -> String {
+    format!("page-{number}")
+}
+
 fn executor_number(row: u16, column: u16) -> u16 {
     row * 100 + column
 }
@@ -289,7 +292,33 @@ mod tests {
     fn default_document_has_one_page_with_executor_grid() {
         let document = normalize_document(PlaybackDocument::default());
         assert_eq!(document.pages.len(), 1);
+        assert_eq!(document.pages[0].id, "page-1");
         assert_eq!(document.pages[0].executors.len(), 60);
+    }
+
+    #[test]
+    fn default_page_id_is_stable_between_loads() {
+        let first = normalize_document(PlaybackDocument::default());
+        let second = normalize_document(PlaybackDocument::default());
+        let page_id = first.pages[0].id.clone();
+        let executor_id = first.pages[0].executors[0].id.clone();
+        assert_eq!(page_id, second.pages[0].id);
+
+        let document = assign_executor(
+            second,
+            &page_id,
+            &executor_id,
+            ExecutorAssignment {
+                kind: ExecutorAssignmentKind::Sequence,
+                object_id: "seq-1".to_string(),
+                object_name: "Main".to_string(),
+            },
+        )
+        .unwrap();
+        assert_eq!(
+            document.pages[0].executors[0].assignment.as_ref().unwrap().object_id,
+            "seq-1"
+        );
     }
 
     #[test]
