@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
@@ -144,6 +144,10 @@ interface AttributeGroup {
 }
 
 const FEATURE_ORDER = ["Dimmer", "Position", "Gobo", "Color", "Beam", "Focus", "Control", "Shapers"];
+const ACTIVE_VALUE_REFRESH_MS = 120;
+const SHEET_ROW_HEIGHT = 28;
+const SHEET_OVERSCAN_ROWS = 10;
+const SHEET_COLUMN_COUNT = 9;
 
 export function FixtureSheetWindow() {
   const [view, setView] = useState<FixtureSheetView>("sheet");
@@ -158,6 +162,8 @@ export function FixtureSheetWindow() {
   const [anchorId, setAnchorId] = useState("");
   const [query, setQuery] = useState("");
   const [status, setStatus] = useState("Ready");
+  const [sheetScrollTop, setSheetScrollTop] = useState(0);
+  const [sheetViewportHeight, setSheetViewportHeight] = useState(320);
   const [expandedFixtureIds, setExpandedFixtureIds] = useState<Set<string>>(() => new Set());
   const [programmer, setProgrammer] = useState<Programmer>({
     live: { selectedPartId: 0, parts: [] },
@@ -169,9 +175,12 @@ export function FixtureSheetWindow() {
   const viewRef = useRef(view);
   const pendingProgrammerRef = useRef<Programmer | null>(null);
   const programmerFrameRef = useRef<number | null>(null);
+  const programmerTimerRef = useRef<number | null>(null);
+  const lastProgrammerCommitRef = useRef(0);
   const frameLoadScheduledRef = useRef<number | null>(null);
   const frameLoadInFlightRef = useRef(false);
   const frameLoadPendingRef = useRef(false);
+  const sheetScrollRef = useRef<HTMLDivElement | null>(null);
 
   const rows = useMemo(
     () => buildRows(fixtures, fixtureTypes, expandedFixtureIds),
@@ -194,6 +203,7 @@ export function FixtureSheetWindow() {
     () => buildActiveValuesByRow(rows, activeValuesByFixture),
     [activeValuesByFixture, rows],
   );
+  const selectedIdSet = useMemo(() => new Set(selectedIds), [selectedIds]);
   const visibleRows = useMemo(() => {
     const needle = query.trim().toLowerCase();
     if (!needle) return rows;
@@ -206,6 +216,21 @@ export function FixtureSheetWindow() {
         .includes(needle);
     });
   }, [activeValuesByRow, query, rows]);
+  const virtualSheetRows = useMemo(
+    () => virtualizeRows(visibleRows, sheetScrollTop, sheetViewportHeight, SHEET_ROW_HEIGHT, SHEET_OVERSCAN_ROWS),
+    [sheetScrollTop, sheetViewportHeight, visibleRows],
+  );
+
+  useEffect(() => {
+    const element = sheetScrollRef.current;
+    if (!element) return;
+
+    const updateViewport = () => setSheetViewportHeight(element.clientHeight || 320);
+    updateViewport();
+    const observer = new ResizeObserver(updateViewport);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, []);
 
   useEffect(() => {
     viewRef.current = view;
@@ -293,6 +318,10 @@ export function FixtureSheetWindow() {
         window.cancelAnimationFrame(programmerFrameRef.current);
         programmerFrameRef.current = null;
       }
+      if (programmerTimerRef.current !== null) {
+        window.clearTimeout(programmerTimerRef.current);
+        programmerTimerRef.current = null;
+      }
       if (frameLoadScheduledRef.current !== null) {
         window.cancelAnimationFrame(frameLoadScheduledRef.current);
         frameLoadScheduledRef.current = null;
@@ -356,10 +385,22 @@ export function FixtureSheetWindow() {
 
   function scheduleProgrammerUpdate(nextProgrammer: Programmer) {
     pendingProgrammerRef.current = nextProgrammer;
-    if (programmerFrameRef.current !== null) return;
+    const now = performance.now();
+    const elapsed = now - lastProgrammerCommitRef.current;
+    if (elapsed < ACTIVE_VALUE_REFRESH_MS) {
+      if (programmerTimerRef.current === null) {
+        programmerTimerRef.current = window.setTimeout(() => {
+          programmerTimerRef.current = null;
+          scheduleProgrammerUpdate(pendingProgrammerRef.current ?? nextProgrammer);
+        }, ACTIVE_VALUE_REFRESH_MS - elapsed);
+      }
+      return;
+    }
 
+    if (programmerFrameRef.current !== null) return;
     programmerFrameRef.current = window.requestAnimationFrame(() => {
       programmerFrameRef.current = null;
+      lastProgrammerCommitRef.current = performance.now();
       const pending = pendingProgrammerRef.current;
       pendingProgrammerRef.current = null;
       if (pending) setProgrammer(pending);
@@ -397,7 +438,7 @@ export function FixtureSheetWindow() {
     });
   }
 
-  function toggleExpanded(event: React.MouseEvent<HTMLButtonElement>, fixtureId: string) {
+  const toggleExpanded = useCallback((event: React.MouseEvent<HTMLButtonElement>, fixtureId: string) => {
     event.stopPropagation();
     setExpandedFixtureIds((current) => {
       const next = new Set(current);
@@ -408,9 +449,9 @@ export function FixtureSheetWindow() {
       }
       return next;
     });
-  }
+  }, []);
 
-  function selectFixture(event: React.MouseEvent<HTMLTableRowElement>, row: FixtureSheetRow) {
+  const selectFixture = useCallback((event: React.MouseEvent<HTMLTableRowElement>, row: FixtureSheetRow) => {
     const additive = event.ctrlKey || event.metaKey;
     const range = event.shiftKey && anchorId;
     const mode = range ? (additive ? "add" : "replace") : additive ? "toggle" : "replace";
@@ -433,7 +474,7 @@ export function FixtureSheetWindow() {
       primaryFixtureId: row.id,
       mode,
     });
-  }
+  }, [anchorId, visibleRows]);
 
   return (
     <div
@@ -501,7 +542,11 @@ export function FixtureSheetWindow() {
       </div>
 
       {view === "sheet" ? (
-      <div style={{ minHeight: 0, overflow: "auto" }}>
+      <div
+        ref={sheetScrollRef}
+        onScroll={(event) => setSheetScrollTop(event.currentTarget.scrollTop)}
+        style={{ minHeight: 0, overflow: "auto" }}
+      >
         <table
           style={{
             width: "100%",
@@ -536,73 +581,27 @@ export function FixtureSheetWindow() {
             </tr>
           </thead>
           <tbody>
-            {visibleRows.map((row) => {
-              const fixture = row.fixture;
-              const selected = selectedIds.includes(row.id);
-              const primary = row.id === primaryId;
-              const activeValues = activeValuesByRow.get(row.id) ?? [];
-              const active = activeValues.length > 0;
-              return (
-                <tr
-                  key={row.id}
-                  onClick={(event) => selectFixture(event, row)}
-                  style={{
-                    height: 28,
-                    background: primary
-                      ? "rgba(240, 157, 28, 0.18)"
-                      : selected
-                        ? "rgba(77, 163, 245, 0.18)"
-                        : active
-                          ? "rgba(120, 217, 120, 0.10)"
-                        : "transparent",
-                    color: selected ? "var(--lx-fg-primary)" : "var(--lx-fg-secondary)",
-                    cursor: "pointer",
-                    boxShadow: active ? "inset 3px 0 0 var(--lx-action-bright)" : undefined,
-                  }}
-                >
-                  <BodyCell mono>
-                    <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
-                      {!row.isSubFixture && row.hasSubFixtures ? (
-                        <button
-                          type="button"
-                          onClick={(event) => toggleExpanded(event, fixture.id)}
-                          title={row.expanded ? "Collapse sub-fixtures" : "Expand sub-fixtures"}
-                          style={{
-                            width: 14,
-                            height: 14,
-                            border: "1px solid var(--lx-stroke)",
-                            borderRadius: 2,
-                            background: row.expanded ? "rgba(77,163,245,0.18)" : "rgba(0,0,0,0.24)",
-                            color: "var(--lx-fg-secondary)",
-                            fontSize: 10,
-                            lineHeight: "12px",
-                            padding: 0,
-                            cursor: "pointer",
-                          }}
-                        >
-                          {row.expanded ? "-" : "+"}
-                        </button>
-                      ) : (
-                        <span style={{ width: 14 }} />
-                      )}
-                      {row.fidLabel}
-                    </span>
-                  </BodyCell>
-                  <BodyCell strong={!row.isSubFixture}>{row.name}</BodyCell>
-                  <BodyCell>{fixture.fixtureTypeName}</BodyCell>
-                  <BodyCell>{fixture.modeName}</BodyCell>
-                  <BodyCell mono>{row.patchLabel}</BodyCell>
-                  <BodyCell mono>{row.channels}</BodyCell>
-                  <BodyCell>{fixture.stage}</BodyCell>
-                  <BodyCell>
-                    <ActiveValueChips values={activeValues} />
-                  </BodyCell>
-                  <BodyCell>
-                    <StateBadge fixture={fixture} active={active} />
-                  </BodyCell>
-                </tr>
-              );
-            })}
+            {virtualSheetRows.topPadding > 0 ? (
+              <tr aria-hidden="true">
+                <td colSpan={SHEET_COLUMN_COUNT} style={{ height: virtualSheetRows.topPadding, padding: 0, border: 0 }} />
+              </tr>
+            ) : null}
+            {virtualSheetRows.rows.map((row) => (
+              <FixtureSheetTableRow
+                key={row.id}
+                row={row}
+                selected={selectedIdSet.has(row.id)}
+                primary={row.id === primaryId}
+                activeValues={activeValuesByRow.get(row.id) ?? []}
+                onSelect={selectFixture}
+                onToggleExpanded={toggleExpanded}
+              />
+            ))}
+            {virtualSheetRows.bottomPadding > 0 ? (
+              <tr aria-hidden="true">
+                <td colSpan={SHEET_COLUMN_COUNT} style={{ height: virtualSheetRows.bottomPadding, padding: 0, border: 0 }} />
+              </tr>
+            ) : null}
           </tbody>
         </table>
 
@@ -733,6 +732,134 @@ function mergeUnique(left: string[], right: string[]) {
     if (!merged.includes(item)) merged.push(item);
   }
   return merged;
+}
+
+function virtualizeRows<T>(
+  rows: T[],
+  scrollTop: number,
+  viewportHeight: number,
+  rowHeight: number,
+  overscan: number,
+) {
+  if (rows.length === 0) {
+    return { rows: [], topPadding: 0, bottomPadding: 0 };
+  }
+
+  const visibleCount = Math.ceil(viewportHeight / rowHeight);
+  const start = Math.max(0, Math.floor(scrollTop / rowHeight) - overscan);
+  const end = Math.min(rows.length, start + visibleCount + overscan * 2);
+  return {
+    rows: rows.slice(start, end),
+    topPadding: start * rowHeight,
+    bottomPadding: Math.max(0, (rows.length - end) * rowHeight),
+  };
+}
+
+const FixtureSheetTableRow = memo(function FixtureSheetTableRow({
+  row,
+  selected,
+  primary,
+  activeValues,
+  onSelect,
+  onToggleExpanded,
+}: {
+  row: FixtureSheetRow;
+  selected: boolean;
+  primary: boolean;
+  activeValues: ProgrammerValue[];
+  onSelect: (event: React.MouseEvent<HTMLTableRowElement>, row: FixtureSheetRow) => void;
+  onToggleExpanded: (event: React.MouseEvent<HTMLButtonElement>, fixtureId: string) => void;
+}) {
+  const fixture = row.fixture;
+  const active = activeValues.length > 0;
+
+  return (
+    <tr
+      onClick={(event) => onSelect(event, row)}
+      style={{
+        height: 28,
+        background: primary
+          ? "rgba(240, 157, 28, 0.18)"
+          : selected
+            ? "rgba(77, 163, 245, 0.18)"
+            : active
+              ? "rgba(120, 217, 120, 0.10)"
+              : "transparent",
+        color: selected ? "var(--lx-fg-primary)" : "var(--lx-fg-secondary)",
+        cursor: "pointer",
+        boxShadow: active ? "inset 3px 0 0 var(--lx-action-bright)" : undefined,
+      }}
+    >
+      <BodyCell mono>
+        <span style={{ display: "inline-flex", alignItems: "center", gap: 5 }}>
+          {!row.isSubFixture && row.hasSubFixtures ? (
+            <button
+              type="button"
+              onClick={(event) => onToggleExpanded(event, fixture.id)}
+              title={row.expanded ? "Collapse sub-fixtures" : "Expand sub-fixtures"}
+              style={{
+                width: 14,
+                height: 14,
+                border: "1px solid var(--lx-stroke)",
+                borderRadius: 2,
+                background: row.expanded ? "rgba(77,163,245,0.18)" : "rgba(0,0,0,0.24)",
+                color: "var(--lx-fg-secondary)",
+                fontSize: 10,
+                lineHeight: "12px",
+                padding: 0,
+                cursor: "pointer",
+              }}
+            >
+              {row.expanded ? "-" : "+"}
+            </button>
+          ) : (
+            <span style={{ width: 14 }} />
+          )}
+          {row.fidLabel}
+        </span>
+      </BodyCell>
+      <BodyCell strong={!row.isSubFixture}>{row.name}</BodyCell>
+      <BodyCell>{fixture.fixtureTypeName}</BodyCell>
+      <BodyCell>{fixture.modeName}</BodyCell>
+      <BodyCell mono>{row.patchLabel}</BodyCell>
+      <BodyCell mono>{row.channels}</BodyCell>
+      <BodyCell>{fixture.stage}</BodyCell>
+      <BodyCell>
+        <ActiveValueChips values={activeValues} />
+      </BodyCell>
+      <BodyCell>
+        <StateBadge fixture={fixture} active={active} />
+      </BodyCell>
+    </tr>
+  );
+}, fixtureSheetRowPropsEqual);
+
+function fixtureSheetRowPropsEqual(
+  previous: {
+    row: FixtureSheetRow;
+    selected: boolean;
+    primary: boolean;
+    activeValues: ProgrammerValue[];
+    onSelect: (event: React.MouseEvent<HTMLTableRowElement>, row: FixtureSheetRow) => void;
+    onToggleExpanded: (event: React.MouseEvent<HTMLButtonElement>, fixtureId: string) => void;
+  },
+  next: {
+    row: FixtureSheetRow;
+    selected: boolean;
+    primary: boolean;
+    activeValues: ProgrammerValue[];
+    onSelect: (event: React.MouseEvent<HTMLTableRowElement>, row: FixtureSheetRow) => void;
+    onToggleExpanded: (event: React.MouseEvent<HTMLButtonElement>, fixtureId: string) => void;
+  },
+) {
+  return (
+    previous.row === next.row &&
+    previous.selected === next.selected &&
+    previous.primary === next.primary &&
+    previous.onSelect === next.onSelect &&
+    previous.onToggleExpanded === next.onToggleExpanded &&
+    activeValuesSignature(previous.activeValues) === activeValuesSignature(next.activeValues)
+  );
 }
 
 function FixtureDmxView({
@@ -1241,6 +1368,15 @@ function ActiveValueChips({ values }: { values: ProgrammerValue[] }) {
       ) : null}
     </div>
   );
+}
+
+function activeValuesSignature(values: ProgrammerValue[]) {
+  return values
+    .map(
+      (value) =>
+        `${value.fixtureId}:${value.attribute}:${value.layer}:${value.active}:${value.value.numeric ?? ""}:${value.value.text ?? ""}`,
+    )
+    .join("|");
 }
 
 function compactAttributeName(attribute: string) {
