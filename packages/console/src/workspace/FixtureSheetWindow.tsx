@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import type { CSSProperties, ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 
@@ -36,7 +37,19 @@ interface FixtureTypeMode {
   name: string;
   channels: number;
   attributes: string[];
+  attributeDetails?: FixtureModeAttribute[];
   subFixtures?: FixtureModeSubFixture[];
+}
+
+interface FixtureModeAttribute {
+  name: string;
+  featureGroup: string;
+  dmxSlots: FixtureModeSlot[];
+}
+
+interface FixtureModeSlot {
+  moduleId?: string | null;
+  offsets: number[];
 }
 
 interface FixtureModeSubFixture {
@@ -89,25 +102,48 @@ interface ProgrammerScalar {
   text: string | null;
 }
 
+interface DmxUniverseFrame {
+  universe: number;
+  data: number[];
+  sources?: DmxChannelSource[];
+}
+
 type ProgrammerLayer = "absolute" | "relative" | "fade" | "delay";
 type ProgrammerValueSource = "manual" | "preset" | "output";
+type DmxChannelSource = "none" | "default" | "sequence" | "effect" | "programmer";
+type FixtureSheetView = "sheet" | "dmx";
+type ReadoutMode = "percent" | "decimal";
 
 interface FixtureSheetRow {
   id: string;
   fixture: PatchFixture;
+  mode: FixtureTypeMode | null;
   fidLabel: string;
   name: string;
   patchLabel: string;
   channels: number;
   isSubFixture: boolean;
   subFixtureName: string;
+  subFixture: FixtureModeSubFixture | null;
   hasSubFixtures: boolean;
   expanded: boolean;
 }
 
+interface AttributeGroup {
+  name: string;
+  attributes: FixtureModeAttribute[];
+}
+
+const FEATURE_ORDER = ["Dimmer", "Position", "Gobo", "Color", "Beam", "Focus", "Control", "Shapers"];
+
 export function FixtureSheetWindow() {
+  const [view, setView] = useState<FixtureSheetView>("sheet");
+  const [readout, setReadout] = useState<ReadoutMode>("percent");
+  const [showValues, setShowValues] = useState(true);
+  const [showAttributes, setShowAttributes] = useState(true);
   const [fixtures, setFixtures] = useState<PatchFixture[]>([]);
   const [fixtureTypes, setFixtureTypes] = useState<FixtureTypeEntry[]>([]);
+  const [frames, setFrames] = useState<DmxUniverseFrame[]>([]);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [primaryId, setPrimaryId] = useState("");
   const [anchorId, setAnchorId] = useState("");
@@ -126,6 +162,18 @@ export function FixtureSheetWindow() {
     () => buildRows(fixtures, fixtureTypes, expandedFixtureIds),
     [expandedFixtureIds, fixtures, fixtureTypes],
   );
+  const frameByUniverse = useMemo(() => {
+    const byUniverse = new Map<number, DmxUniverseFrame>();
+    for (const frame of frames) byUniverse.set(frame.universe, frame);
+    return byUniverse;
+  }, [frames]);
+  const referenceMode = useMemo(() => {
+    const primaryRow =
+      rows.find((row) => row.id === primaryId) ??
+      rows.find((row) => row.fixture.id === parentFixtureId(primaryId));
+    return primaryRow?.mode ?? rows.find((row) => row.mode)?.mode ?? null;
+  }, [primaryId, rows]);
+  const attributeGroups = useMemo(() => buildAttributeGroups(referenceMode), [referenceMode]);
   const activeValuesByFixture = useMemo(() => programmerActiveValuesByFixture(programmer), [programmer]);
   const visibleRows = useMemo(() => {
     const needle = query.trim().toLowerCase();
@@ -145,6 +193,7 @@ export function FixtureSheetWindow() {
     void loadPatch();
     void loadSelection();
     void loadProgrammer();
+    void loadFrames();
   }, []);
 
   useEffect(() => {
@@ -154,13 +203,16 @@ export function FixtureSheetWindow() {
     const register = async () => {
       const patchChanged = await listen("patch:changed", () => {
         void loadPatch();
+        void loadFrames();
       });
       const fixtureTypesChanged = await listen("fixture-types:changed", () => {
         void loadFixtureTypes();
+        void loadFrames();
       });
       const showLoaded = await listen("show:loaded", () => {
         void loadFixtureTypes();
         void loadPatch();
+        void loadFrames();
       });
       const showDeleted = await listen("show:deleted", () => {
         setFixtures([]);
@@ -169,6 +221,7 @@ export function FixtureSheetWindow() {
         setPrimaryId("");
         setAnchorId("");
         setExpandedFixtureIds(new Set());
+        setFrames([]);
         setStatus("No show loaded");
       });
       const selectionChanged = await listen<FixtureSelection>(
@@ -180,6 +233,10 @@ export function FixtureSheetWindow() {
       );
       const programmerChanged = await listen<Programmer>("programmer:changed", (event) => {
         setProgrammer(event.payload);
+        void loadFrames();
+      });
+      const outputSent = await listen("output:sent", () => {
+        void loadFrames();
       });
 
       if (!active) {
@@ -189,9 +246,10 @@ export function FixtureSheetWindow() {
         showDeleted();
         selectionChanged();
         programmerChanged();
+        outputSent();
         return;
       }
-      unlisteners.push(patchChanged, fixtureTypesChanged, showLoaded, showDeleted, selectionChanged, programmerChanged);
+      unlisteners.push(patchChanged, fixtureTypesChanged, showLoaded, showDeleted, selectionChanged, programmerChanged, outputSent);
     };
 
     void register();
@@ -255,6 +313,16 @@ export function FixtureSheetWindow() {
     }
   }
 
+  async function loadFrames() {
+    try {
+      const nextFrames = await invoke<DmxUniverseFrame[]>("output_render_dmx");
+      nextFrames.sort((left, right) => left.universe - right.universe);
+      setFrames(nextFrames);
+    } catch {
+      setFrames([]);
+    }
+  }
+
   function toggleExpanded(event: React.MouseEvent<HTMLButtonElement>, fixtureId: string) {
     event.stopPropagation();
     setExpandedFixtureIds((current) => {
@@ -313,6 +381,14 @@ export function FixtureSheetWindow() {
           background: "rgba(255,255,255,0.025)",
         }}
       >
+        <div style={{ display: "inline-flex", alignItems: "center", gap: 4, flex: "0 0 auto" }}>
+          <ToolbarButton active={view === "sheet"} onClick={() => setView("sheet")}>
+            Fixture
+          </ToolbarButton>
+          <ToolbarButton active={view === "dmx"} onClick={() => setView("dmx")}>
+            Fixture: DMX
+          </ToolbarButton>
+        </div>
         <input
           value={query}
           onChange={(event) => setQuery(event.currentTarget.value)}
@@ -332,8 +408,25 @@ export function FixtureSheetWindow() {
         <span className="lx-code" style={{ color: "var(--lx-fg-tertiary)", whiteSpace: "nowrap" }}>
           {visibleRows.length}/{rows.length}
         </span>
+        {view === "dmx" ? (
+          <>
+            <ToolbarButton active={showValues} onClick={() => setShowValues((value) => !value)}>
+              Value
+            </ToolbarButton>
+            <ToolbarButton active={showAttributes} onClick={() => setShowAttributes((value) => !value)}>
+              Attribute
+            </ToolbarButton>
+            <ToolbarButton
+              active={readout === "percent"}
+              onClick={() => setReadout((current) => (current === "percent" ? "decimal" : "percent"))}
+            >
+              {readout === "percent" ? "Percent" : "Decimal"}
+            </ToolbarButton>
+          </>
+        ) : null}
       </div>
 
+      {view === "sheet" ? (
       <div style={{ minHeight: 0, overflow: "auto" }}>
         <table
           style={{
@@ -453,6 +546,19 @@ export function FixtureSheetWindow() {
           </div>
         )}
       </div>
+      ) : (
+        <FixtureDmxView
+          rows={visibleRows}
+          groups={attributeGroups}
+          frameByUniverse={frameByUniverse}
+          selection={{ fixtureIds: selectedIds, primaryFixtureId: primaryId || null, version: 0 }}
+          readout={readout}
+          showValues={showValues}
+          showAttributes={showAttributes}
+          onSelectRow={selectFixture}
+          onToggleFixture={toggleExpanded}
+        />
+      )}
 
       <div
         className="lx-code"
@@ -486,12 +592,14 @@ function buildRows(
     rows.push({
       id: fixture.id,
       fixture,
+      mode,
       fidLabel: String(fixture.fid),
       name: fixture.name,
       patchLabel: formatPatch(fixture),
       channels: fixture.channels,
       isSubFixture: false,
       subFixtureName: "",
+      subFixture: null,
       hasSubFixtures: subFixtures.length > 0,
       expanded,
     });
@@ -504,12 +612,14 @@ function buildRows(
       rows.push({
         id: `${fixture.id}::sub:${subFixture.id}`,
         fixture,
+        mode,
         fidLabel: `${fixture.fid}.${subFixture.index}`,
         name: `  ${subFixture.name}`,
         patchLabel: formatSubPatch(fixture, subFixture),
         channels: subFixture.channelCount,
         isSubFixture: true,
         subFixtureName: subFixture.name,
+        subFixture,
         hasSubFixtures: false,
         expanded: false,
       });
@@ -529,7 +639,8 @@ function findModeForFixture(fixture: PatchFixture, fixtureTypes: FixtureTypeEntr
     fixtureType?.modes.find((mode) => mode.id === fixture.modeId) ??
     fixtureType?.modes.find((mode) => mode.name === fixture.modeName) ??
     fixtureType?.modes.find((mode) => mode.channels === fixture.channels) ??
-    fixtureType?.modes[0]
+    fixtureType?.modes[0] ??
+    null
   );
 }
 
@@ -550,14 +661,353 @@ function mergeUnique(left: string[], right: string[]) {
   return merged;
 }
 
-function HeaderCell({ children, width }: { children: React.ReactNode; width?: number }) {
+function FixtureDmxView({
+  rows,
+  groups,
+  frameByUniverse,
+  selection,
+  readout,
+  showValues,
+  showAttributes,
+  onSelectRow,
+  onToggleFixture,
+}: {
+  rows: FixtureSheetRow[];
+  groups: AttributeGroup[];
+  frameByUniverse: Map<number, DmxUniverseFrame>;
+  selection: FixtureSelection;
+  readout: ReadoutMode;
+  showValues: boolean;
+  showAttributes: boolean;
+  onSelectRow: (event: React.MouseEvent<HTMLTableRowElement>, row: FixtureSheetRow) => void;
+  onToggleFixture: (event: React.MouseEvent<HTMLButtonElement>, fixtureId: string) => void;
+}) {
+  if (groups.length === 0) {
+    return (
+      <div style={{ display: "grid", placeItems: "center", minHeight: 120, color: "var(--lx-fg-tertiary)" }}>
+        No fixture DMX attributes
+      </div>
+    );
+  }
+
+  return (
+    <div style={{ minHeight: 0, overflow: "auto", background: "var(--lx-bg-void)" }}>
+      <table
+        style={{
+          width: "max-content",
+          minWidth: "100%",
+          borderCollapse: "collapse",
+          tableLayout: "fixed",
+          fontSize: 11,
+          color: "var(--lx-fg-secondary)",
+        }}
+      >
+        <thead>
+          <tr style={dmxHeaderRowStyle}>
+            <HeaderCell width={44} rowSpan={2} center />
+            <HeaderCell width={190} rowSpan={2}>Name</HeaderCell>
+            <HeaderCell width={72} rowSpan={2}>FID</HeaderCell>
+            <HeaderCell width={92} rowSpan={2}>IDType</HeaderCell>
+            <HeaderCell width={82} rowSpan={2}>Patch</HeaderCell>
+            {groups.map((group) => (
+              <HeaderCell key={group.name} colSpan={group.attributes.length} center>
+                {group.name}
+              </HeaderCell>
+            ))}
+          </tr>
+          <tr style={dmxHeaderRowStyle}>
+            {groups.flatMap((group) =>
+              group.attributes.map((attribute) => (
+                <HeaderCell key={`${group.name}-${attribute.name}`} width={68} center>
+                  {compactAttributeName(attribute.name)}
+                </HeaderCell>
+              )),
+            )}
+          </tr>
+        </thead>
+        <tbody>
+          {rows.map((row) => {
+            const selected = rowSelected(row.id, selection);
+            return (
+              <tr
+                key={row.id}
+                onClick={(event) => onSelectRow(event, row)}
+                style={{
+                  height: 30,
+                  background: selected ? "rgba(77,163,245,0.18)" : "transparent",
+                  cursor: "pointer",
+                }}
+              >
+                <BodyCell center>
+                  {!row.isSubFixture && row.hasSubFixtures ? (
+                    <button
+                      type="button"
+                      onClick={(event) => onToggleFixture(event, row.fixture.id)}
+                      style={fixtureDmxExpandButtonStyle}
+                    >
+                      {row.expanded ? "v" : ">"}
+                    </button>
+                  ) : null}
+                </BodyCell>
+                <BodyCell strong={!row.isSubFixture}>{row.name}</BodyCell>
+                <BodyCell mono>{row.fidLabel}</BodyCell>
+                <BodyCell>{row.isSubFixture ? "Subfixture" : "Fixture"}</BodyCell>
+                <BodyCell mono>{row.patchLabel}</BodyCell>
+                {groups.flatMap((group) =>
+                  group.attributes.map((attribute) => {
+                    const cell = fixtureDmxCell(row, attribute, frameByUniverse, readout);
+                    return (
+                      <BodyCell key={`${row.id}-${group.name}-${attribute.name}`} center>
+                        <DmxValueCell
+                          value={showValues ? cell.value : ""}
+                          attribute={showAttributes ? compactAttributeName(attribute.name) : ""}
+                          source={cell.source}
+                          occupied={cell.occupied}
+                        />
+                      </BodyCell>
+                    );
+                  }),
+                )}
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
+function DmxValueCell({
+  value,
+  attribute,
+  source,
+  occupied,
+}: {
+  value: string;
+  attribute: string;
+  source: DmxChannelSource;
+  occupied: boolean;
+}) {
+  return (
+    <div
+      style={{
+        display: "grid",
+        gridTemplateRows: "8px 14px 8px",
+        alignItems: "center",
+        justifyItems: "center",
+        minWidth: 56,
+        height: 28,
+        borderRadius: 2,
+        color: "var(--lx-fg-primary)",
+        ...sourceCellStyle(source, occupied),
+      }}
+    >
+      <span style={{ color: sourceColor(source), fontSize: 8 }}>{sourceLabel(source)}</span>
+      <strong>{value}</strong>
+      <small>{attribute}</small>
+    </div>
+  );
+}
+
+function ToolbarButton({
+  active,
+  children,
+  onClick,
+}: {
+  active: boolean;
+  children: ReactNode;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      style={{
+        height: 24,
+        flex: "0 0 auto",
+        padding: "0 8px",
+        border: active ? "1px solid rgba(240,157,28,0.62)" : "1px solid rgba(255,255,255,0.08)",
+        borderRadius: "var(--lx-radius-xs)",
+        background: "rgba(0,0,0,0.24)",
+        color: active ? "var(--lx-accent-bright)" : "var(--lx-fg-secondary)",
+        fontSize: 10,
+        fontWeight: 800,
+      }}
+    >
+      {children}
+    </button>
+  );
+}
+
+function buildAttributeGroups(mode: FixtureTypeMode | null): AttributeGroup[] {
+  const attributes = mode?.attributeDetails ?? [];
+  const groups = new Map<string, FixtureModeAttribute[]>();
+  for (const attribute of attributes) {
+    const groupName = attribute.featureGroup || inferAttributeGroup(attribute.name);
+    groups.set(groupName, [...(groups.get(groupName) ?? []), attribute]);
+  }
+  return Array.from(groups.entries())
+    .sort(([left], [right]) => featureGroupIndex(left) - featureGroupIndex(right) || left.localeCompare(right))
+    .map(([name, groupAttributes]) => ({ name, attributes: groupAttributes }));
+}
+
+function fixtureDmxCell(
+  row: FixtureSheetRow,
+  attribute: FixtureModeAttribute,
+  frameByUniverse: Map<number, DmxUniverseFrame>,
+  readout: ReadoutMode,
+) {
+  const slot = slotForRow(row, attribute);
+  if (!slot || row.fixture.universe === null || row.fixture.address === null) {
+    return { value: "-", source: "none" as DmxChannelSource, occupied: false };
+  }
+  const frame = frameByUniverse.get(row.fixture.universe) ?? null;
+  const raw = readSlot(frame, row.fixture.address, slot);
+  const source = readSlotSource(frame, row.fixture.address, slot);
+  return {
+    value: raw === null ? "-" : formatRawDmx(raw, slot.offsets.length, readout),
+    source,
+    occupied: raw !== null || source !== "none",
+  };
+}
+
+function slotForRow(row: FixtureSheetRow, attribute: FixtureModeAttribute) {
+  if (row.subFixture) {
+    return (
+      attribute.dmxSlots.find((slot) => slot.moduleId === row.subFixture?.id) ??
+      attribute.dmxSlots.find((slot) =>
+        slot.offsets.some((offset) => {
+          if (row.subFixture?.firstAddress === null || row.subFixture?.firstAddress === undefined) return false;
+          const start = row.subFixture.firstAddress;
+          const end = start + row.subFixture.channelCount - 1;
+          return offset >= start && offset <= end;
+        }),
+      ) ??
+      null
+    );
+  }
+  return attribute.dmxSlots.find((slot) => !slot.moduleId) ?? attribute.dmxSlots[0] ?? null;
+}
+
+function readSlot(frame: DmxUniverseFrame | null, baseAddress: number, slot: FixtureModeSlot) {
+  if (!frame) return null;
+  const bytes = slot.offsets
+    .map((offset) => (offset > 0 ? frame.data[baseAddress + offset - 2] : null))
+    .filter((value): value is number => value !== null && value !== undefined);
+  if (bytes.length === 0) return null;
+  return bytes.slice(0, 2).reduce((value, byte) => (value << 8) | byte, 0);
+}
+
+function readSlotSource(frame: DmxUniverseFrame | null, baseAddress: number, slot: FixtureModeSlot) {
+  if (!frame) return "none" as DmxChannelSource;
+  return slot.offsets.reduce<DmxChannelSource>((current, offset) => {
+    if (offset <= 0) return current;
+    const source = frame.sources?.[baseAddress + offset - 2] ?? "none";
+    return sourceRank(source) > sourceRank(current) ? source : current;
+  }, "none");
+}
+
+function formatRawDmx(raw: number, byteCount: number, readout: ReadoutMode) {
+  if (readout === "decimal") return `${raw}`;
+  const max = Math.pow(2, Math.max(1, byteCount) * 8) - 1;
+  return `${Math.round((raw / max) * 100)}`;
+}
+
+function rowSelected(id: string, selection: FixtureSelection) {
+  return selection.fixtureIds.some((item) => item === id || parentFixtureId(item) === id);
+}
+
+function inferAttributeGroup(attribute: string) {
+  const lower = attribute.toLowerCase();
+  if (lower.includes("pan") || lower.includes("tilt")) return "Position";
+  if (lower.includes("gobo")) return "Gobo";
+  if (lower.includes("color") || lower.includes("rgb") || lower === "r" || lower === "g" || lower === "b") return "Color";
+  if (lower.includes("beam") || lower.includes("frost") || lower.includes("iris") || lower.includes("zoom")) return "Beam";
+  if (lower.includes("focus")) return "Focus";
+  if (lower.includes("dim") || lower.includes("shutter") || lower.includes("strobe")) return "Dimmer";
+  return "Control";
+}
+
+function featureGroupIndex(group: string) {
+  const index = FEATURE_ORDER.indexOf(group);
+  return index === -1 ? FEATURE_ORDER.length : index;
+}
+
+function sourceRank(source: DmxChannelSource) {
+  if (source === "programmer") return 4;
+  if (source === "effect") return 3;
+  if (source === "sequence") return 2;
+  if (source === "default") return 1;
+  return 0;
+}
+
+function sourceLabel(source: DmxChannelSource) {
+  if (source === "programmer") return "P";
+  if (source === "effect") return "E";
+  if (source === "sequence") return "S";
+  if (source === "default") return "D";
+  return "";
+}
+
+function sourceColor(source: DmxChannelSource) {
+  if (source === "programmer") return "var(--lx-accent-bright)";
+  if (source === "default") return "var(--lx-action-bright)";
+  if (source === "effect") return "var(--lx-status-warn)";
+  if (source === "sequence") return "var(--lx-primary-bright)";
+  return "var(--lx-fg-tertiary)";
+}
+
+function sourceCellStyle(source: DmxChannelSource, active: boolean): CSSProperties {
+  if (source === "programmer") return { background: "rgba(240,157,28,0.17)" };
+  if (source === "default") return { background: "rgba(120,217,120,0.14)" };
+  if (source === "effect") return { background: "rgba(240,157,28,0.10)" };
+  if (source === "sequence") return { background: "rgba(77,163,245,0.12)" };
+  return { background: active ? "rgba(255,255,255,0.055)" : "rgba(0,0,0,0.18)" };
+}
+
+const dmxHeaderRowStyle: CSSProperties = {
+  position: "sticky",
+  top: 0,
+  zIndex: 1,
+  height: 28,
+  background: "var(--lx-bg-deep)",
+  color: "var(--lx-fg-tertiary)",
+  textTransform: "uppercase",
+  letterSpacing: "0.05em",
+};
+
+const fixtureDmxExpandButtonStyle: CSSProperties = {
+  width: 18,
+  height: 18,
+  border: "1px solid rgba(255,255,255,0.08)",
+  borderRadius: 2,
+  background: "rgba(255,255,255,0.045)",
+  color: "var(--lx-fg-primary)",
+  lineHeight: 1,
+};
+
+function HeaderCell({
+  children,
+  width,
+  rowSpan,
+  colSpan,
+  center,
+}: {
+  children?: React.ReactNode;
+  width?: number;
+  rowSpan?: number;
+  colSpan?: number;
+  center?: boolean;
+}) {
   return (
     <th
+      rowSpan={rowSpan}
+      colSpan={colSpan}
       style={{
         width,
         borderBottom: "1px solid var(--lx-stroke)",
         padding: "0 8px",
-        textAlign: "left",
+        textAlign: center ? "center" : "left",
         fontWeight: 800,
       }}
     >
@@ -570,10 +1020,12 @@ function BodyCell({
   children,
   mono = false,
   strong = false,
+  center = false,
 }: {
   children: React.ReactNode;
   mono?: boolean;
   strong?: boolean;
+  center?: boolean;
 }) {
   return (
     <td
@@ -583,6 +1035,7 @@ function BodyCell({
         padding: "0 8px",
         fontWeight: strong ? 750 : undefined,
         color: strong ? "var(--lx-fg-primary)" : undefined,
+        textAlign: center ? "center" : "left",
         whiteSpace: "nowrap",
       }}
     >

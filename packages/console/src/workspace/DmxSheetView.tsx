@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import type { CSSProperties, MouseEvent, ReactNode } from "react";
+import type { CSSProperties, ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 
@@ -19,7 +19,6 @@ interface PatchFixture {
   channels: number;
   universe: number | null;
   address: number | null;
-  stage: string;
 }
 
 interface FixtureTypeEntry {
@@ -51,11 +50,9 @@ interface FixtureModeSlot {
 
 interface FixtureModeSubFixture {
   id: string;
-  name: string;
   index: number;
   firstAddress: number | null;
   channelCount: number;
-  attributes: string[];
 }
 
 interface FixtureSelection {
@@ -70,42 +67,20 @@ interface DmxUniverseFrame {
   sources?: DmxChannelSource[];
 }
 
-type DmxChannelSource = "none" | "default" | "sequence" | "effect" | "programmer";
-type SheetView = "fixture" | "address";
-type ReadoutMode = "percent" | "decimal";
-
-interface FixtureRow {
-  id: string;
-  fixture: PatchFixture;
-  mode: FixtureTypeMode | null;
-  fidLabel: string;
-  name: string;
-  idType: "Fixture" | "Subfixture";
-  subFixture: FixtureModeSubFixture | null;
-  hasChildren: boolean;
-  expanded: boolean;
-}
-
-interface AttributeGroup {
-  name: string;
-  attributes: FixtureModeAttribute[];
-}
-
 interface ChannelOwner {
   fixtureId: string;
   fixtureLabel: string;
   attribute: string;
   selected: boolean;
-  first: boolean;
-  last: boolean;
 }
 
-const ADDRESS_COLUMNS = 20;
-const ADDRESS_ROWS = 26;
-const FEATURE_ORDER = ["Dimmer", "Position", "Gobo", "Color", "Beam", "Focus", "Control", "Shapers"];
+type DmxChannelSource = "none" | "default" | "sequence" | "effect" | "programmer";
+type ReadoutMode = "decimal" | "percent";
+
+const ADDRESS_COLUMNS = 32;
+const ADDRESS_ROWS = 16;
 
 export function DmxSheetWindow() {
-  const [view, setView] = useState<SheetView>("address");
   const [readout, setReadout] = useState<ReadoutMode>("decimal");
   const [onlySelection, setOnlySelection] = useState(false);
   const [showValues, setShowValues] = useState(true);
@@ -120,7 +95,6 @@ export function DmxSheetWindow() {
     primaryFixtureId: null,
     version: 0,
   });
-  const [expanded, setExpanded] = useState<Set<string>>(() => new Set());
   const [status, setStatus] = useState("Ready");
 
   const frame = useMemo(() => {
@@ -128,29 +102,9 @@ export function DmxSheetWindow() {
     return frames.find((item) => item.universe === selectedUniverse) ?? frames[0];
   }, [frames, selectedUniverse]);
 
-  const rows = useMemo(
-    () => buildFixtureRows(fixtures, fixtureTypes, expanded),
-    [expanded, fixtureTypes, fixtures],
-  );
-
-  const referenceMode = useMemo(() => {
-    const primaryId = selection.primaryFixtureId ?? selection.fixtureIds[0] ?? "";
-    return (
-      rows.find((row) => row.id === primaryId)?.mode ??
-      rows.find((row) => row.fixture.id === parentFixtureId(primaryId))?.mode ??
-      rows.find((row) => row.mode)?.mode ??
-      null
-    );
-  }, [rows, selection.fixtureIds, selection.primaryFixtureId]);
-
-  const attributeGroups = useMemo(() => buildAttributeGroups(referenceMode), [referenceMode]);
   const owners = useMemo(
     () => buildChannelOwners(fixtures, fixtureTypes, selection, onlySelection, frame?.universe ?? null),
     [fixtureTypes, fixtures, frame?.universe, onlySelection, selection],
-  );
-  const visibleRows = useMemo(
-    () => (onlySelection ? rows.filter((row) => rowSelected(row.id, selection)) : rows),
-    [onlySelection, rows, selection],
   );
 
   useEffect(() => {
@@ -183,7 +137,6 @@ export function DmxSheetWindow() {
           setFrames([]);
           setSelectedUniverse(null);
           setSelection({ fixtureIds: [], primaryFixtureId: null, version: 0 });
-          setExpanded(new Set());
           setStatus("No show loaded");
         }),
       ]);
@@ -251,51 +204,6 @@ export function DmxSheetWindow() {
     }
   }
 
-  function toggleFixture(id: string) {
-    setExpanded((current) => {
-      const next = new Set(current);
-      if (next.has(id)) {
-        next.delete(id);
-      } else {
-        next.add(id);
-      }
-      return next;
-    });
-  }
-
-  function selectRow(event: MouseEvent<HTMLTableRowElement>, row: FixtureRow) {
-    const additive = event.ctrlKey || event.metaKey;
-    const range = event.shiftKey && selection.primaryFixtureId;
-    const fixtureIds = range ? fixtureRange(rows, selection.primaryFixtureId ?? "", row.id) : [row.id];
-    const mode = range ? (additive ? "add" : "replace") : additive ? "toggle" : "replace";
-
-    setSelection((current) => {
-      if (range) {
-        return {
-          ...current,
-          fixtureIds: mergeUnique(additive ? current.fixtureIds : [], fixtureIds),
-          primaryFixtureId: row.id,
-        };
-      }
-      if (additive) {
-        return {
-          ...current,
-          fixtureIds: current.fixtureIds.includes(row.id)
-            ? current.fixtureIds.filter((id) => id !== row.id)
-            : [...current.fixtureIds, row.id],
-          primaryFixtureId: row.id,
-        };
-      }
-      return { ...current, fixtureIds, primaryFixtureId: row.id };
-    });
-
-    void invoke("fixture_selection_select", {
-      fixtureIds,
-      primaryFixtureId: row.id,
-      mode,
-    });
-  }
-
   const activeChannels = frame?.data.filter((value) => value > 0).length ?? 0;
 
   return (
@@ -303,36 +211,16 @@ export function DmxSheetWindow() {
       <div style={styles.toolbar}>
         <div style={styles.titleBlock}>
           <span style={styles.badge}>MA</span>
-          <strong style={styles.title}>{view === "fixture" ? "Fixture: DMX" : "DMX"}</strong>
+          <strong style={styles.title}>DMX</strong>
         </div>
-
-        <div style={styles.segment}>
-          <ToolButton active={view === "fixture"} onClick={() => setView("fixture")}>
-            Fixture: DMX
-          </ToolButton>
-          <ToolButton active={view === "address"} onClick={() => setView("address")}>
-            DMX
-          </ToolButton>
-        </div>
-
         <div style={styles.toolbarSpacer} />
-
-        <ToolButton
-          active={onlySelection}
-          onClick={() => setOnlySelection((value) => !value)}
-        >
+        <ToolButton active={onlySelection} onClick={() => setOnlySelection((value) => !value)}>
           Only Selection
         </ToolButton>
-        <ToolButton
-          active={showValues}
-          onClick={() => setShowValues((value) => !value)}
-        >
+        <ToolButton active={showValues} onClick={() => setShowValues((value) => !value)}>
           Value
         </ToolButton>
-        <ToolButton
-          active={showAttributes}
-          onClick={() => setShowAttributes((value) => !value)}
-        >
+        <ToolButton active={showAttributes} onClick={() => setShowAttributes((value) => !value)}>
           Attribute
         </ToolButton>
         <ToolButton active={showIds} onClick={() => setShowIds((value) => !value)}>
@@ -354,141 +242,20 @@ export function DmxSheetWindow() {
       </div>
 
       <div style={styles.content}>
-        {view === "fixture" ? (
-          <FixtureDmxView
-            rows={visibleRows}
-            groups={attributeGroups}
-            frame={frame}
-            readout={readout}
-            selection={selection}
-            showValues={showValues}
-            showAttributes={showAttributes}
-            onSelectRow={selectRow}
-            onToggleFixture={toggleFixture}
-          />
-        ) : (
-          <AddressDmxView
-            frame={frame}
-            owners={owners}
-            readout={readout}
-            showValues={showValues}
-            showAttributes={showAttributes}
-            showIds={showIds}
-          />
-        )}
+        <AddressDmxView
+          frame={frame}
+          owners={owners}
+          readout={readout}
+          showValues={showValues}
+          showAttributes={showAttributes}
+          showIds={showIds}
+        />
       </div>
 
       <div style={styles.status}>
         <span>{status}</span>
-        <span>
-          {frame ? `Universe ${frame.universe}  ${activeChannels}/512 active` : "No rendered DMX"}
-        </span>
+        <span>{frame ? `Universe ${frame.universe}  ${activeChannels}/512 active` : "No rendered DMX"}</span>
       </div>
-    </div>
-  );
-}
-
-function FixtureDmxView({
-  rows,
-  groups,
-  frame,
-  readout,
-  selection,
-  showValues,
-  showAttributes,
-  onSelectRow,
-  onToggleFixture,
-}: {
-  rows: FixtureRow[];
-  groups: AttributeGroup[];
-  frame: DmxUniverseFrame | null;
-  readout: ReadoutMode;
-  selection: FixtureSelection;
-  showValues: boolean;
-  showAttributes: boolean;
-  onSelectRow: (event: MouseEvent<HTMLTableRowElement>, row: FixtureRow) => void;
-  onToggleFixture: (id: string) => void;
-}) {
-  if (groups.length === 0) {
-    return <EmptyState label="No fixture DMX attributes" />;
-  }
-
-  return (
-    <div style={styles.tableViewport}>
-      <table style={styles.fixtureTable}>
-        <thead>
-          <tr style={styles.tableHeaderRow}>
-            <HeaderCell width={42} rowSpan={2} />
-            <HeaderCell width={180} rowSpan={2}>Name</HeaderCell>
-            <HeaderCell width={72} rowSpan={2}>FID</HeaderCell>
-            <HeaderCell width={92} rowSpan={2}>IDType</HeaderCell>
-            <HeaderCell width={72} rowSpan={2}>Patch</HeaderCell>
-            {groups.map((group) => (
-              <HeaderCell key={group.name} colSpan={group.attributes.length} center>
-                {group.name}
-              </HeaderCell>
-            ))}
-          </tr>
-          <tr style={styles.tableHeaderRow}>
-            {groups.flatMap((group) =>
-              group.attributes.map((attribute) => (
-                <HeaderCell key={`${group.name}-${attribute.name}`} width={68} center>
-                  {compactAttribute(attribute.name)}
-                </HeaderCell>
-              )),
-            )}
-          </tr>
-        </thead>
-        <tbody>
-          {rows.map((row) => {
-            const selected = rowSelected(row.id, selection);
-            return (
-              <tr
-                key={row.id}
-                onClick={(event) => onSelectRow(event, row)}
-                style={{
-                  ...styles.bodyRow,
-                  background: selected ? "rgba(77,163,245,0.18)" : undefined,
-                }}
-              >
-                <BodyCell center>
-                  {row.hasChildren ? (
-                    <button
-                      type="button"
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        onToggleFixture(row.fixture.id);
-                      }}
-                      style={styles.expandButton}
-                    >
-                      {row.expanded ? "v" : ">"}
-                    </button>
-                  ) : null}
-                </BodyCell>
-                <BodyCell strong={!row.subFixture}>{row.name}</BodyCell>
-                <BodyCell mono>{row.fidLabel}</BodyCell>
-                <BodyCell>{row.idType}</BodyCell>
-                <BodyCell mono>{patchLabel(row.fixture, row.subFixture)}</BodyCell>
-                {groups.flatMap((group) =>
-                  group.attributes.map((attribute) => {
-                    const cell = fixtureCell(row, attribute, frame, readout);
-                    return (
-                      <BodyCell key={`${row.id}-${group.name}-${attribute.name}`} center>
-                        <DmxValueCell
-                          value={showValues ? cell.value : ""}
-                          attribute={showAttributes ? compactAttribute(attribute.name) : ""}
-                          source={cell.source}
-                          occupied={cell.occupied}
-                        />
-                      </BodyCell>
-                    );
-                  }),
-                )}
-              </tr>
-            );
-          })}
-        </tbody>
-      </table>
     </div>
   );
 }
@@ -523,12 +290,11 @@ function AddressDmxView({
         source: "none" as DmxChannelSource,
       };
     }
-    const owner = owners.get(index);
     const value = frame.data[index] ?? 0;
     return {
       index,
       valid: true,
-      owner,
+      owner: owners.get(index),
       value,
       displayValue: readout === "percent" ? `${Math.round((value / 255) * 100)}` : `${value}`,
       source: frame.sources?.[index] ?? "none",
@@ -591,58 +357,34 @@ function AddressRow({
         <span>Attrib.</span>
         <strong>{`${universe}.${String(start + 1).padStart(3, "0")}`}</strong>
       </div>
-      {cells.map((cell) => (
-        <div
-          key={cell.index}
-          title={
-            cell.valid
-              ? `${universe}.${String(cell.index + 1).padStart(3, "0")} ${cell.owner?.fixtureLabel ?? ""} ${cell.owner?.attribute ?? ""}`
-              : ""
-          }
-          style={{
-            ...styles.addressCell,
-            ...sourceCellStyle(cell.source, cell.value > 0),
-            borderColor: cell.owner?.selected ? "rgba(245,184,77,0.95)" : "rgba(255,255,255,0.045)",
-            opacity: cell.valid ? 1 : 0.18,
-          }}
-        >
-          <div style={styles.addressCellTop}>
-            <span>{cell.valid ? cell.index + 1 : ""}</span>
-            <span style={{ color: sourceColor(cell.source) }}>{sourceLabel(cell.source)}</span>
+      {cells.map((cell) => {
+        const detail = [showAttributes ? compactAttribute(cell.owner?.attribute ?? "") : "", showIds ? cell.owner?.fixtureLabel ?? "" : ""]
+          .filter(Boolean)
+          .join(" ");
+        return (
+          <div
+            key={cell.index}
+            title={
+              cell.valid
+                ? `${universe}.${String(cell.index + 1).padStart(3, "0")} ${cell.owner?.fixtureLabel ?? ""} ${cell.owner?.attribute ?? ""}`
+                : ""
+            }
+            style={{
+              ...styles.addressCell,
+              ...sourceCellStyle(cell.source, cell.value > 0),
+              borderColor: cell.owner?.selected ? "rgba(245,184,77,0.95)" : "rgba(255,255,255,0.045)",
+              opacity: cell.valid ? 1 : 0.18,
+            }}
+          >
+            <div style={styles.addressCellTop}>
+              <span>{cell.valid ? cell.index + 1 : ""}</span>
+              <span style={{ color: sourceColor(cell.source) }}>{sourceLabel(cell.source)}</span>
+            </div>
+            <div style={styles.addressCellValue}>{showValues ? cell.displayValue : detail}</div>
           </div>
-          <div style={styles.addressCellValue}>{showValues ? cell.displayValue : ""}</div>
-          <div style={styles.addressCellMeta}>
-            <span>{showAttributes ? compactAttribute(cell.owner?.attribute ?? "") : ""}</span>
-            <span>{showIds ? cell.owner?.fixtureLabel ?? "" : ""}</span>
-          </div>
-        </div>
-      ))}
+        );
+      })}
     </>
-  );
-}
-
-function DmxValueCell({
-  value,
-  attribute,
-  source,
-  occupied,
-}: {
-  value: string;
-  attribute: string;
-  source: DmxChannelSource;
-  occupied: boolean;
-}) {
-  return (
-    <div
-      style={{
-        ...styles.valueCell,
-        ...sourceCellStyle(source, occupied),
-      }}
-    >
-      <span style={{ color: sourceColor(source), fontSize: 8 }}>{sourceLabel(source)}</span>
-      <strong>{value}</strong>
-      <small>{attribute}</small>
-    </div>
   );
 }
 
@@ -678,116 +420,8 @@ function StepButton({ children, onClick }: { children: ReactNode; onClick: () =>
   );
 }
 
-function HeaderCell({
-  children,
-  width,
-  rowSpan,
-  colSpan,
-  center,
-}: {
-  children?: ReactNode;
-  width?: number;
-  rowSpan?: number;
-  colSpan?: number;
-  center?: boolean;
-}) {
-  return (
-    <th
-      rowSpan={rowSpan}
-      colSpan={colSpan}
-      style={{
-        ...styles.headerCell,
-        width,
-        textAlign: center ? "center" : "left",
-      }}
-    >
-      {children}
-    </th>
-  );
-}
-
-function BodyCell({
-  children,
-  mono,
-  strong,
-  center,
-}: {
-  children?: ReactNode;
-  mono?: boolean;
-  strong?: boolean;
-  center?: boolean;
-}) {
-  return (
-    <td
-      className={mono ? "lx-code" : undefined}
-      style={{
-        ...styles.bodyCell,
-        textAlign: center ? "center" : "left",
-        fontWeight: strong ? 800 : undefined,
-        color: strong ? "var(--lx-fg-primary)" : undefined,
-      }}
-    >
-      {children}
-    </td>
-  );
-}
-
 function EmptyState({ label }: { label: string }) {
   return <div style={styles.empty}>{label}</div>;
-}
-
-function buildFixtureRows(
-  fixtures: PatchFixture[],
-  fixtureTypes: FixtureTypeEntry[],
-  expanded: Set<string>,
-) {
-  const rows: FixtureRow[] = [];
-  for (const fixture of fixtures) {
-    const mode = findMode(fixture, fixtureTypes);
-    const subFixtures = mode?.subFixtures ?? [];
-    const isExpanded = expanded.has(fixture.id);
-    rows.push({
-      id: fixture.id,
-      fixture,
-      mode,
-      fidLabel: `${fixture.fid}`,
-      name: fixture.name,
-      idType: "Fixture",
-      subFixture: null,
-      hasChildren: subFixtures.length > 0,
-      expanded: isExpanded,
-    });
-
-    if (!isExpanded) continue;
-
-    for (const subFixture of subFixtures) {
-      rows.push({
-        id: `${fixture.id}::sub:${subFixture.id}`,
-        fixture,
-        mode,
-        fidLabel: `${fixture.fid}.${subFixture.index}`,
-        name: `  ${subFixture.name}`,
-        idType: "Subfixture",
-        subFixture,
-        hasChildren: false,
-        expanded: false,
-      });
-    }
-  }
-  return rows;
-}
-
-function buildAttributeGroups(mode: FixtureTypeMode | null) {
-  const attributes = mode?.attributeDetails ?? [];
-  const groups = new Map<string, FixtureModeAttribute[]>();
-  for (const attribute of attributes) {
-    const groupName = attribute.featureGroup || inferGroup(attribute.name);
-    groups.set(groupName, [...(groups.get(groupName) ?? []), attribute]);
-  }
-
-  return Array.from(groups.entries())
-    .sort(([left], [right]) => featureIndex(left) - featureIndex(right) || left.localeCompare(right))
-    .map(([name, groupAttributes]) => ({ name, attributes: groupAttributes }));
 }
 
 function buildChannelOwners(
@@ -807,10 +441,12 @@ function buildChannelOwners(
       for (const slot of attribute.dmxSlots) {
         const subFixture = subFixtureForSlot(mode, slot);
         const ownerId = subFixture ? `${fixture.id}::sub:${subFixture.id}` : fixture.id;
-        const selected = rowSelected(ownerId, selection) || rowSelected(fixture.id, selection);
+        const selected = selection.fixtureIds.some(
+          (id) => id === ownerId || id === fixture.id || parentFixtureId(id) === fixture.id,
+        );
         if (onlySelection && !selected) continue;
         const offsets = slot.offsets.filter((offset) => offset > 0);
-        offsets.forEach((offset, offsetIndex) => {
+        offsets.forEach((offset) => {
           const index = fixture.address! + offset - 2;
           if (index < 0 || index >= 512) return;
           owners.set(index, {
@@ -818,8 +454,6 @@ function buildChannelOwners(
             fixtureLabel: subFixture ? `${fixture.fid}.${subFixture.index}` : `${fixture.fid}`,
             attribute: attribute.name,
             selected,
-            first: offsetIndex === 0,
-            last: offsetIndex === offsets.length - 1,
           });
         });
       }
@@ -845,75 +479,6 @@ function subFixtureForSlot(mode: FixtureTypeMode | null, slot: FixtureModeSlot) 
   );
 }
 
-function fixtureCell(
-  row: FixtureRow,
-  attribute: FixtureModeAttribute,
-  frame: DmxUniverseFrame | null,
-  readout: ReadoutMode,
-) {
-  const slot = slotForRow(row, attribute);
-  if (!slot || row.fixture.universe === null || row.fixture.address === null) {
-    return { value: "-", source: "none" as DmxChannelSource, occupied: false };
-  }
-  const raw = readSlot(frame, row.fixture.universe, row.fixture.address, slot);
-  const source = readSlotSource(frame, row.fixture.universe, row.fixture.address, slot);
-  return {
-    value: raw === null ? "-" : formatRaw(raw, slot.offsets.length, readout),
-    source,
-    occupied: raw !== null || source !== "none",
-  };
-}
-
-function slotForRow(row: FixtureRow, attribute: FixtureModeAttribute) {
-  if (row.subFixture) {
-    return (
-      attribute.dmxSlots.find((slot) => slot.moduleId === row.subFixture?.id) ??
-      attribute.dmxSlots.find((slot) => slot.offsets.some((offset) => {
-        if (row.subFixture?.firstAddress === null || row.subFixture?.firstAddress === undefined) return false;
-        const start = row.subFixture.firstAddress;
-        const end = start + row.subFixture.channelCount - 1;
-        return offset >= start && offset <= end;
-      })) ??
-      null
-    );
-  }
-  return attribute.dmxSlots.find((slot) => !slot.moduleId) ?? attribute.dmxSlots[0] ?? null;
-}
-
-function readSlot(
-  frame: DmxUniverseFrame | null,
-  universe: number,
-  baseAddress: number,
-  slot: FixtureModeSlot,
-) {
-  if (!frame || frame.universe !== universe) return null;
-  const bytes = slot.offsets
-    .map((offset) => (offset > 0 ? frame.data[baseAddress + offset - 2] : null))
-    .filter((value): value is number => value !== null && value !== undefined);
-  if (bytes.length === 0) return null;
-  return bytes.slice(0, 2).reduce((value, byte) => (value << 8) | byte, 0);
-}
-
-function readSlotSource(
-  frame: DmxUniverseFrame | null,
-  universe: number,
-  baseAddress: number,
-  slot: FixtureModeSlot,
-) {
-  if (!frame || frame.universe !== universe) return "none" as DmxChannelSource;
-  return slot.offsets.reduce<DmxChannelSource>((current, offset) => {
-    if (offset <= 0) return current;
-    const source = frame.sources?.[baseAddress + offset - 2] ?? "none";
-    return sourceRank(source) > sourceRank(current) ? source : current;
-  }, "none");
-}
-
-function formatRaw(raw: number, byteCount: number, readout: ReadoutMode) {
-  if (readout === "decimal") return `${raw}`;
-  const max = Math.pow(2, Math.max(1, byteCount) * 8) - 1;
-  return `${Math.round((raw / max) * 100)}`;
-}
-
 function findMode(fixture: PatchFixture, fixtureTypes: FixtureTypeEntry[]) {
   const fixtureType = fixtureTypes.find(
     (item) =>
@@ -930,35 +495,6 @@ function findMode(fixture: PatchFixture, fixtureTypes: FixtureTypeEntry[]) {
   );
 }
 
-function patchLabel(fixture: PatchFixture, subFixture: FixtureModeSubFixture | null) {
-  if (fixture.universe === null || fixture.address === null) return "-";
-  const address = subFixture?.firstAddress
-    ? fixture.address + subFixture.firstAddress - 1
-    : fixture.address;
-  return `${fixture.universe}.${String(address).padStart(3, "0")}`;
-}
-
-function rowSelected(id: string, selection: FixtureSelection) {
-  return selection.fixtureIds.some((item) => item === id || parentFixtureId(item) === id);
-}
-
-function fixtureRange(rows: FixtureRow[], anchorId: string, targetId: string) {
-  const anchorIndex = rows.findIndex((row) => row.id === anchorId);
-  const targetIndex = rows.findIndex((row) => row.id === targetId);
-  if (anchorIndex < 0 || targetIndex < 0) return [targetId];
-  const start = Math.min(anchorIndex, targetIndex);
-  const end = Math.max(anchorIndex, targetIndex);
-  return rows.slice(start, end + 1).map((row) => row.id);
-}
-
-function mergeUnique(left: string[], right: string[]) {
-  const merged = [...left];
-  for (const item of right) {
-    if (!merged.includes(item)) merged.push(item);
-  }
-  return merged;
-}
-
 function parentFixtureId(id: string) {
   return id.split("::sub:")[0] ?? id;
 }
@@ -969,30 +505,6 @@ function compactAttribute(attribute: string) {
     .replace(/^Color/i, "Col")
     .replace(/^Shutter/i, "Sh")
     .replace(/^Dimmer/i, "Dim");
-}
-
-function inferGroup(attribute: string) {
-  const lower = attribute.toLowerCase();
-  if (lower.includes("pan") || lower.includes("tilt")) return "Position";
-  if (lower.includes("gobo")) return "Gobo";
-  if (lower.includes("color") || lower.includes("rgb") || lower === "r" || lower === "g" || lower === "b") return "Color";
-  if (lower.includes("beam") || lower.includes("frost") || lower.includes("iris") || lower.includes("zoom")) return "Beam";
-  if (lower.includes("focus")) return "Focus";
-  if (lower.includes("dim") || lower.includes("shutter") || lower.includes("strobe")) return "Dimmer";
-  return "Control";
-}
-
-function featureIndex(group: string) {
-  const index = FEATURE_ORDER.indexOf(group);
-  return index === -1 ? FEATURE_ORDER.length : index;
-}
-
-function sourceRank(source: DmxChannelSource) {
-  if (source === "programmer") return 4;
-  if (source === "effect") return 3;
-  if (source === "sequence") return 2;
-  if (source === "default") return 1;
-  return 0;
 }
 
 function sourceLabel(source: DmxChannelSource) {
@@ -1065,11 +577,6 @@ const styles = {
     fontSize: 15,
     whiteSpace: "nowrap",
   },
-  segment: {
-    display: "inline-flex",
-    gap: 4,
-    flex: "0 0 auto",
-  },
   toolbarSpacer: {
     flex: "1 1 auto",
   },
@@ -1107,67 +614,6 @@ const styles = {
     minHeight: 0,
     overflow: "hidden",
   },
-  tableViewport: {
-    minHeight: 0,
-    height: "100%",
-    overflow: "auto",
-    background: "var(--lx-bg-void)",
-  },
-  fixtureTable: {
-    width: "max-content",
-    minWidth: "100%",
-    borderCollapse: "collapse",
-    tableLayout: "fixed",
-    fontSize: 11,
-  },
-  tableHeaderRow: {
-    height: 28,
-    background: "var(--lx-bg-deep)",
-  },
-  headerCell: {
-    position: "sticky",
-    top: 0,
-    zIndex: 2,
-    height: 28,
-    padding: "0 8px",
-    border: "1px solid rgba(255,255,255,0.06)",
-    background: "var(--lx-bg-deep)",
-    color: "var(--lx-fg-secondary)",
-    fontWeight: 800,
-    whiteSpace: "nowrap",
-  },
-  bodyRow: {
-    height: 30,
-    color: "var(--lx-fg-secondary)",
-    cursor: "pointer",
-  },
-  bodyCell: {
-    height: 30,
-    padding: "0 8px",
-    border: "1px solid rgba(255,255,255,0.045)",
-    whiteSpace: "nowrap",
-    overflow: "hidden",
-    textOverflow: "ellipsis",
-  },
-  expandButton: {
-    width: 18,
-    height: 18,
-    border: "1px solid rgba(255,255,255,0.08)",
-    borderRadius: 2,
-    background: "rgba(255,255,255,0.045)",
-    color: "var(--lx-fg-primary)",
-    lineHeight: 1,
-  },
-  valueCell: {
-    display: "grid",
-    gridTemplateRows: "8px 14px 8px",
-    alignItems: "center",
-    justifyItems: "center",
-    minWidth: 56,
-    height: 28,
-    borderRadius: 2,
-    color: "var(--lx-fg-primary)",
-  },
   addressViewport: {
     height: "100%",
     minHeight: 0,
@@ -1177,10 +623,10 @@ const styles = {
   },
   addressGrid: {
     display: "grid",
-    gridTemplateColumns: `112px repeat(${ADDRESS_COLUMNS}, 74px)`,
-    gridAutoRows: "44px",
-    gap: 2,
-    minWidth: 112 + ADDRESS_COLUMNS * 76,
+    gridTemplateColumns: `86px repeat(${ADDRESS_COLUMNS}, 48px)`,
+    gridAutoRows: "26px",
+    gap: 1,
+    minWidth: 86 + ADDRESS_COLUMNS * 49,
     alignContent: "start",
   },
   addressCorner: {
@@ -1201,20 +647,20 @@ const styles = {
   },
   addressRowLabel: {
     display: "grid",
-    gridTemplateRows: "1fr 1fr",
+    gridTemplateColumns: "1fr auto",
     alignItems: "center",
-    padding: "0 8px",
+    padding: "0 5px",
     background: "var(--lx-bg-deep)",
     color: "var(--lx-status-error)",
     border: "1px solid rgba(255,255,255,0.06)",
-    fontSize: 11,
+    fontSize: 10,
   },
   addressCell: {
     display: "grid",
-    gridTemplateRows: "11px 1fr 12px",
-    minWidth: 72,
-    height: 44,
-    padding: "2px 4px",
+    gridTemplateRows: "9px 1fr",
+    minWidth: 46,
+    height: 26,
+    padding: "1px 3px",
     border: "1px solid rgba(255,255,255,0.045)",
     color: "var(--lx-fg-primary)",
     overflow: "hidden",
@@ -1224,21 +670,21 @@ const styles = {
     display: "flex",
     justifyContent: "space-between",
     color: "var(--lx-fg-tertiary)",
-    fontSize: 8,
+    fontSize: 7,
   },
   addressCellValue: {
     display: "grid",
     placeItems: "center",
-    fontSize: 15,
+    fontSize: 12,
     fontWeight: 900,
     lineHeight: 1,
   },
   addressCellMeta: {
-    display: "flex",
+    display: "none",
     justifyContent: "space-between",
-    gap: 4,
+    gap: 2,
     color: "var(--lx-fg-tertiary)",
-    fontSize: 8,
+    fontSize: 7,
     overflow: "hidden",
     whiteSpace: "nowrap",
   },
