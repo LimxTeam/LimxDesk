@@ -330,6 +330,8 @@ export function ColorPickerWindow({ config, onConfigChange }: WindowToolProps) {
   const supported = useMemo(() => mapColorAttributes(attributes), [attributes]);
   const boardRef = useRef<HTMLDivElement | null>(null);
   const brightnessRailRef = useRef<HTMLDivElement | null>(null);
+  const activeBoardPointerIdRef = useRef<number | null>(null);
+  const activeBrightnessPointerIdRef = useRef<number | null>(null);
   const pendingApplyRef = useRef<ColorPickerState | null>(null);
   const applyInFlightRef = useRef(false);
 
@@ -406,18 +408,23 @@ export function ColorPickerWindow({ config, onConfigChange }: WindowToolProps) {
   }
 
   function activateBoardDrag(event: ReactPointerEvent<HTMLDivElement>) {
+    activeBoardPointerIdRef.current = event.pointerId;
     event.currentTarget.setPointerCapture(event.pointerId);
     updateFromBoard(event.clientX, event.clientY);
-    const move = (moveEvent: PointerEvent) => updateFromBoard(moveEvent.clientX, moveEvent.clientY);
-    const up = () => {
-      window.removeEventListener("pointermove", move);
-      window.removeEventListener("pointerup", up);
-    };
-    window.addEventListener("pointermove", move);
-    window.addEventListener("pointerup", up);
+  }
+
+  function handleBoardPointerMove(event: ReactPointerEvent<HTMLDivElement>) {
+    if (activeBoardPointerIdRef.current !== event.pointerId || (event.buttons & 1) === 0) return;
+    updateFromBoard(event.clientX, event.clientY);
+  }
+
+  function endBoardDrag(event: ReactPointerEvent<HTMLDivElement>) {
+    if (activeBoardPointerIdRef.current !== event.pointerId) return;
+    activeBoardPointerIdRef.current = null;
   }
 
   function activateBrightnessDrag(event: ReactPointerEvent<HTMLDivElement>) {
+    activeBrightnessPointerIdRef.current = event.pointerId;
     event.currentTarget.setPointerCapture(event.pointerId);
     const nextBrightness = (clientY: number) => {
       updateVerticalRail(brightnessRailRef, (value) => {
@@ -427,13 +434,20 @@ export function ColorPickerWindow({ config, onConfigChange }: WindowToolProps) {
       }, clientY);
     };
     nextBrightness(event.clientY);
-    const move = (moveEvent: PointerEvent) => nextBrightness(moveEvent.clientY);
-    const up = () => {
-      window.removeEventListener("pointermove", move);
-      window.removeEventListener("pointerup", up);
-    };
-    window.addEventListener("pointermove", move);
-    window.addEventListener("pointerup", up);
+  }
+
+  function handleBrightnessPointerMove(event: ReactPointerEvent<HTMLDivElement>) {
+    if (activeBrightnessPointerIdRef.current !== event.pointerId || (event.buttons & 1) === 0) return;
+    updateVerticalRail(brightnessRailRef, (value) => {
+      const current = draftRef.current;
+      const nextValues = deriveColorValuesFromBoard({ ...current, brightness: value });
+      commitDraft(composeColorState(current, nextValues));
+    }, event.clientY);
+  }
+
+  function endBrightnessDrag(event: ReactPointerEvent<HTMLDivElement>) {
+    if (activeBrightnessPointerIdRef.current !== event.pointerId) return;
+    activeBrightnessPointerIdRef.current = null;
   }
 
   return (
@@ -529,6 +543,9 @@ export function ColorPickerWindow({ config, onConfigChange }: WindowToolProps) {
                 <div
                   ref={boardRef}
                   onPointerDown={activateBoardDrag}
+                  onPointerMove={handleBoardPointerMove}
+                  onPointerUp={endBoardDrag}
+                  onPointerCancel={endBoardDrag}
                   style={colorBoardStyle(draft)}
                 >
                   <div style={colorBoardCrosshairStyle(draft)} />
@@ -619,6 +636,9 @@ export function ColorPickerWindow({ config, onConfigChange }: WindowToolProps) {
             label="B"
             value={draft.brightness}
             onPointerDown={activateBrightnessDrag}
+            onPointerMove={handleBrightnessPointerMove}
+            onPointerUp={endBrightnessDrag}
+            onPointerCancel={endBrightnessDrag}
             railRef={brightnessRailRef}
           />
           <div style={colorDetailCardStyle}>
@@ -1447,11 +1467,17 @@ function VerticalRail({
   label,
   value,
   onPointerDown,
+  onPointerMove,
+  onPointerUp,
+  onPointerCancel,
   railRef,
 }: {
   label: string;
   value: number;
   onPointerDown: (event: ReactPointerEvent<HTMLDivElement>) => void;
+  onPointerMove: (event: ReactPointerEvent<HTMLDivElement>) => void;
+  onPointerUp: (event: ReactPointerEvent<HTMLDivElement>) => void;
+  onPointerCancel: (event: ReactPointerEvent<HTMLDivElement>) => void;
   railRef: MutableRefObject<HTMLDivElement | null>;
 }) {
   return (
@@ -1460,6 +1486,9 @@ function VerticalRail({
       <div
         ref={railRef}
         onPointerDown={onPointerDown}
+        onPointerMove={onPointerMove}
+        onPointerUp={onPointerUp}
+        onPointerCancel={onPointerCancel}
         style={verticalRailTrackStyle}
       >
         <div style={{ ...verticalRailFillStyle, height: `${clamp(value, 0, 100)}%` }} />
