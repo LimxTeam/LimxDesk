@@ -93,6 +93,14 @@ pub struct SequenceStoreRequest {
     pub store_mode: CueStoreMode,
 }
 
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SingleStepStoreRequest {
+    pub sequence_id: Option<String>,
+    pub name: Option<String>,
+    pub store_mode: CueStoreMode,
+}
+
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct CuePatch {
@@ -258,6 +266,71 @@ pub fn store_programmer_values(
         }
     };
 
+    sequence.updated_at_ms = now_ms;
+    document.selected_sequence_id = Some(sequence.id.clone());
+    document.version = document.version.saturating_add(1);
+    let sequence = sequence.clone();
+    Ok(SequenceCommandResult {
+        document: normalize_document(document),
+        sequence,
+        cue: Some(cue),
+    })
+}
+
+pub fn store_single_step_program(
+    mut document: SequenceDocument,
+    request: SingleStepStoreRequest,
+    programmer_values: Vec<ProgrammerValue>,
+    now_ms: u64,
+) -> SequenceResult<SequenceCommandResult> {
+    document = normalize_document(document);
+    let cue_values = programmer_values_to_cue_values(programmer_values);
+    if cue_values.is_empty() {
+        return Err(SequenceError::EmptyProgrammer);
+    }
+
+    let target_sequence_id = request.sequence_id.clone();
+    if target_sequence_id.is_none() {
+        let number = next_sequence_number(&document);
+        let name = request
+            .name
+            .clone()
+            .filter(|name| !name.trim().is_empty())
+            .unwrap_or_else(|| format!("Single Step {number}"));
+        let sequence = Sequence::new(number, name, now_ms)?;
+        document.selected_sequence_id = Some(sequence.id.clone());
+        document.sequences.push(sequence);
+    }
+
+    let sequence_id = target_sequence_id
+        .or(document.selected_sequence_id.clone())
+        .or_else(|| document.sequences.first().map(|sequence| sequence.id.clone()))
+        .ok_or_else(|| SequenceError::MissingSequence(String::new()))?;
+    let sequence = document
+        .sequences
+        .iter_mut()
+        .find(|sequence| sequence.id == sequence_id)
+        .ok_or_else(|| SequenceError::MissingSequence(sequence_id.clone()))?;
+
+    if let Some(name) = request.name.filter(|name| !name.trim().is_empty()) {
+        sequence.name = sanitize_sequence_name(name, sequence.number)?;
+    }
+
+    let mut cue = sequence
+        .cues
+        .iter()
+        .find(|cue| (cue.number - 1.0).abs() < f64::EPSILON)
+        .cloned()
+        .unwrap_or_else(|| {
+            Cue::new(1.0, "Step 1", cue_values.clone(), now_ms)
+                .expect("single step cue values were already validated")
+        });
+    cue.number = 1.0;
+    cue.name = "Step 1".to_string();
+    cue.merge_values(cue_values, request.store_mode, now_ms)?;
+
+    sequence.cues = vec![cue.clone()];
+    sequence.tracking = false;
     sequence.updated_at_ms = now_ms;
     document.selected_sequence_id = Some(sequence.id.clone());
     document.version = document.version.saturating_add(1);
@@ -614,6 +687,55 @@ mod tests {
         assert_eq!(result.document.sequences.len(), 1);
         assert_eq!(result.sequence.cues.len(), 1);
         assert_eq!(result.sequence.cues[0].parts[0].values.len(), 1);
+    }
+
+    #[test]
+    fn single_step_store_forces_one_cue_only() {
+        let result = store_programmer_values(
+            SequenceDocument::default(),
+            SequenceStoreRequest {
+                sequence_id: None,
+                cue_id: None,
+                cue_number: None,
+                cue_name: None,
+                store_mode: CueStoreMode::Merge,
+            },
+            vec![programmer_value("1", "Dimmer", 10.0)],
+            10,
+        )
+        .unwrap();
+        let sequence_id = result.sequence.id.clone();
+        let result = store_programmer_values(
+            result.document,
+            SequenceStoreRequest {
+                sequence_id: Some(sequence_id.clone()),
+                cue_id: None,
+                cue_number: None,
+                cue_name: None,
+                store_mode: CueStoreMode::Merge,
+            },
+            vec![programmer_value("1", "Pan", 20.0)],
+            11,
+        )
+        .unwrap();
+
+        let result = store_single_step_program(
+            result.document,
+            SingleStepStoreRequest {
+                sequence_id: Some(sequence_id),
+                name: Some("Look A".to_string()),
+                store_mode: CueStoreMode::Overwrite,
+            },
+            vec![programmer_value("1", "ColorRGB_R", 100.0)],
+            12,
+        )
+        .unwrap();
+
+        assert_eq!(result.sequence.name, "Look A");
+        assert_eq!(result.sequence.cues.len(), 1);
+        assert_eq!(result.sequence.cues[0].number, 1.0);
+        assert_eq!(result.sequence.cues[0].parts[0].values.len(), 1);
+        assert_eq!(result.sequence.cues[0].parts[0].values[0].attribute, "ColorRGB_R");
     }
 
     #[test]

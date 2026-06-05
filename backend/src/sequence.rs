@@ -8,9 +8,10 @@ use limxdesk_platform::current_timestamp_millis;
 use limxdesk_programmer::StoreUseSelection;
 use limxdesk_sequence::{
     advance_state, cue_output_values, delete_cue, delete_sequence, goto_state, normalize_document,
-    off_state, select_sequence, set_master_state, store_programmer_values, update_cue,
+    off_state, select_sequence, set_master_state, store_programmer_values,
+    store_single_step_program, update_cue,
     CuePatch, PlaybackDirection, SequenceCommandResult, SequenceDocument, SequenceRuntimeState,
-    SequenceStoreRequest,
+    SequenceStoreRequest, SingleStepStoreRequest,
 };
 use limxdesk_showfile::LoadedShow;
 use serde::{Deserialize, Serialize};
@@ -167,6 +168,32 @@ pub fn sequence_store_programmer(
         .current()?
         .store_values(StoreUseSelection::Active, &selection);
     let result = store_programmer_values(
+        load_sequence_document(&show_state)?,
+        request,
+        values,
+        now_ms()?,
+    )
+    .map_err(|error| error.to_string())?;
+    save_and_emit(&result.document, &show_state, &app)?;
+    Ok(result)
+}
+
+#[tauri::command]
+pub fn sequence_store_single_step_program(
+    request: SingleStepStoreRequest,
+    show_state: State<'_, ShowRuntimeState>,
+    selection_state: State<'_, FixtureSelectionState>,
+    programmer_state: State<'_, ProgrammerState>,
+    app: AppHandle,
+) -> Result<SequenceCommandResult, String> {
+    let Some(_show) = show_state.current()? else {
+        return Err("No show file loaded. Create or load a show before storing programs.".to_string());
+    };
+    let selection = selection_state.current()?;
+    let values = programmer_state
+        .current()?
+        .store_values(StoreUseSelection::Active, &selection);
+    let result = store_single_step_program(
         load_sequence_document(&show_state)?,
         request,
         values,

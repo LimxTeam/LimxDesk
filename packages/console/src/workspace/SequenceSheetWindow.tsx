@@ -11,6 +11,12 @@ interface SequenceLoadResult {
   runtime: SequenceRuntimeSnapshot;
 }
 
+interface SequenceCommandResult {
+  document: SequenceDocument;
+  sequence: SequenceModel;
+  cue: CueModel | null;
+}
+
 interface SequenceDocument {
   sequences: SequenceModel[];
   selectedSequenceId: string | null;
@@ -114,6 +120,7 @@ export function SequenceSheetWindow() {
   const [selectedSequenceId, setSelectedSequenceId] = useState("");
   const [selectedCueId, setSelectedCueId] = useState("");
   const [query, setQuery] = useState("");
+  const [singleStepName, setSingleStepName] = useState("");
   const [status, setStatus] = useState("No show loaded");
   const [busy, setBusy] = useState(false);
 
@@ -253,6 +260,26 @@ export function SequenceSheetWindow() {
     });
   }
 
+  async function storeSingleStep(updateSelected: boolean) {
+    await runCommand<SequenceCommandResult>(
+      "sequence_store_single_step_program",
+      {
+        request: {
+          sequenceId: updateSelected ? selectedSequence?.id ?? null : null,
+          name: singleStepName.trim() || (updateSelected ? selectedSequence?.name ?? null : null),
+          storeMode: "overwrite",
+        },
+      },
+      (result) => {
+        applyLoadResult({ document: result.document, runtime });
+        setSelectedSequenceId(result.sequence.id);
+        setSelectedCueId(result.cue?.id ?? "");
+        setSingleStepName("");
+        setStatus(`Single step stored: ${result.sequence.name}`);
+      },
+    );
+  }
+
   async function updateCue(cue: CueModel, patch: Record<string, unknown>) {
     if (!selectedSequence) return;
     await runCommand("sequence_update_cue", {
@@ -310,6 +337,29 @@ export function SequenceSheetWindow() {
         <button className="lx-btn lx-btn-primary" type="button" disabled={busy} onClick={storeCue}>
           Store Cue
         </button>
+        <input
+          className="lx-input lx-input-sm"
+          value={singleStepName}
+          onChange={(event) => setSingleStepName(event.currentTarget.value)}
+          placeholder="Single step name"
+          style={{ width: 132 }}
+        />
+        <button
+          className="lx-btn lx-btn-primary"
+          type="button"
+          disabled={busy}
+          onClick={() => storeSingleStep(false)}
+        >
+          Store Single
+        </button>
+        <button
+          className="lx-btn lx-btn-ghost"
+          type="button"
+          disabled={!selectedSequence || busy}
+          onClick={() => storeSingleStep(true)}
+        >
+          Update Single
+        </button>
         <button
           className="lx-btn lx-btn-ghost"
           type="button"
@@ -348,6 +398,7 @@ export function SequenceSheetWindow() {
         <Metric label="Current" value={currentCueLabel(selectedSequence, sequenceState?.currentCueId)} />
         <Metric label="Next" value={currentCueLabel(selectedSequence, sequenceState?.nextCueId)} />
         <Metric label="Master" value={`${Math.round((sequenceState?.master ?? 1) * 100)}%`} />
+        <Metric label="Program" value={selectedSequence?.cues.length === 1 ? "Single Step" : "Multi Cue"} active={selectedSequence?.cues.length === 1} />
         <Metric label="Tracking" value={selectedSequence?.tracking ? "On" : "Off"} active={selectedSequence?.tracking} />
       </div>
 
@@ -549,7 +600,7 @@ const toolbarStyle: CSSProperties = {
 
 const summaryStyle: CSSProperties = {
   display: "grid",
-  gridTemplateColumns: "repeat(5, minmax(0, 1fr))",
+  gridTemplateColumns: "repeat(6, minmax(0, 1fr))",
   gap: 6,
   padding: 8,
   borderBottom: "1px solid var(--lx-stroke)",

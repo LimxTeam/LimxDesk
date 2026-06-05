@@ -106,6 +106,7 @@ pub fn run() {
             sequence::sequence_select,
             sequence::sequence_delete,
             sequence::sequence_store_programmer,
+            sequence::sequence_store_single_step_program,
             sequence::sequence_update_cue,
             sequence::sequence_delete_cue,
             sequence::sequence_go,
