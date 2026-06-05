@@ -98,6 +98,8 @@ pub struct GdtfModeAttributeSummary {
 pub struct GdtfAttributeDmxSlotSummary {
     pub module_id: Option<String>,
     pub offsets: Vec<u16>,
+    pub physical_from: Option<f64>,
+    pub physical_to: Option<f64>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -149,6 +151,7 @@ struct ChannelAttributeOccurrence {
     offsets: Vec<u16>,
     physical_from: Option<f64>,
     physical_to: Option<f64>,
+    default_raw: Option<f64>,
     default_value: Option<f64>,
 }
 
@@ -298,6 +301,16 @@ fn parse_modes(
 
                 if let Some(channel) = channel_attribute_occurrence(dmx_channel) {
                     let attribute = channel.name;
+                    let default_value = channel.default_value.or_else(|| {
+                        channel.default_raw.and_then(|raw| {
+                            raw_dmx_to_physical(
+                                raw,
+                                offsets.len(),
+                                channel.physical_from,
+                                channel.physical_to,
+                            )
+                        })
+                    });
                     let feature_group = features_by_attribute
                         .get(&attribute)
                         .cloned()
@@ -312,7 +325,8 @@ fn parse_modes(
                         offsets,
                         physical_from: channel.physical_from,
                         physical_to: channel.physical_to,
-                        default_value: channel.default_value,
+                        default_raw: channel.default_raw,
+                        default_value,
                     });
                 }
             }
@@ -364,8 +378,10 @@ fn channel_attribute_occurrence(dmx_channel: Node<'_, '_>) -> Option<ChannelAttr
                 offsets: Vec::new(),
                 physical_from: function.and_then(|node| parse_f64(node.attribute("PhysicalFrom"))),
                 physical_to: function.and_then(|node| parse_f64(node.attribute("PhysicalTo"))),
-                default_value: function
-                    .and_then(|node| parse_gdtf_number(node.attribute("Default"))),
+                default_raw: function
+                    .and_then(|node| parse_gdtf_raw_number(node.attribute("Default")))
+                    .or_else(|| parse_gdtf_raw_number(dmx_channel.attribute("Default"))),
+                default_value: None,
             });
         }
 
@@ -381,7 +397,9 @@ fn channel_attribute_occurrence(dmx_channel: Node<'_, '_>) -> Option<ChannelAttr
                     offsets: Vec::new(),
                     physical_from: parse_f64(function.attribute("PhysicalFrom")),
                     physical_to: parse_f64(function.attribute("PhysicalTo")),
-                    default_value: parse_gdtf_number(function.attribute("Default")),
+                    default_raw: parse_gdtf_raw_number(function.attribute("Default"))
+                        .or_else(|| parse_gdtf_raw_number(dmx_channel.attribute("Default"))),
+                    default_value: None,
                 });
             }
             if let Some(attribute) =
@@ -394,7 +412,9 @@ fn channel_attribute_occurrence(dmx_channel: Node<'_, '_>) -> Option<ChannelAttr
                     offsets: Vec::new(),
                     physical_from: parse_f64(function.attribute("PhysicalFrom")),
                     physical_to: parse_f64(function.attribute("PhysicalTo")),
-                    default_value: parse_gdtf_number(function.attribute("Default")),
+                    default_raw: parse_gdtf_raw_number(function.attribute("Default"))
+                        .or_else(|| parse_gdtf_raw_number(dmx_channel.attribute("Default"))),
+                    default_value: None,
                 });
             }
         }
@@ -408,6 +428,7 @@ fn channel_attribute_occurrence(dmx_channel: Node<'_, '_>) -> Option<ChannelAttr
             offsets: Vec::new(),
             physical_from: None,
             physical_to: None,
+            default_raw: parse_gdtf_raw_number(dmx_channel.attribute("Default")),
             default_value: None,
         }
     })
@@ -444,6 +465,8 @@ fn summarize_mode_attributes(
             .map(|item| GdtfAttributeDmxSlotSummary {
                 module_id: module_for_occurrence(item, sub_fixtures),
                 offsets: item.offsets.clone(),
+                physical_from: item.physical_from,
+                physical_to: item.physical_to,
             })
             .collect::<Vec<_>>();
         let occurrence_count = matching.len().min(u16::MAX as usize) as u16;
@@ -839,7 +862,7 @@ fn parse_f64(value: Option<&str>) -> Option<f64> {
     value?.trim().parse::<f64>().ok()
 }
 
-fn parse_gdtf_number(value: Option<&str>) -> Option<f64> {
+fn parse_gdtf_raw_number(value: Option<&str>) -> Option<f64> {
     let value = value?.trim();
     if value.is_empty() {
         return None;
@@ -847,14 +870,35 @@ fn parse_gdtf_number(value: Option<&str>) -> Option<f64> {
 
     if let Some((left, right)) = value.split_once('/') {
         let numerator = left.trim().parse::<f64>().ok()?;
-        let denominator = right.trim().parse::<f64>().ok()?;
-        if denominator == 0.0 {
-            return None;
-        }
-        return Some(numerator / denominator);
+        let _resolution = right.trim().parse::<u8>().ok()?;
+        return Some(numerator);
     }
 
     value.parse::<f64>().ok()
+}
+
+fn raw_dmx_to_physical(
+    raw: f64,
+    resolution_bytes: usize,
+    physical_from: Option<f64>,
+    physical_to: Option<f64>,
+) -> Option<f64> {
+    let (Some(from), Some(to)) = (physical_from, physical_to) else {
+        return Some(raw);
+    };
+    let max = dmx_raw_max(resolution_bytes)?;
+    if max <= 0.0 {
+        return Some(from);
+    }
+    let normalized = (raw / max).clamp(0.0, 1.0);
+    Some(from + (to - from) * normalized)
+}
+
+fn dmx_raw_max(resolution_bytes: usize) -> Option<f64> {
+    let bytes = resolution_bytes.clamp(1, 4);
+    let bits = bytes.checked_mul(8)?;
+    let value = (1_u64.checked_shl(bits as u32)?).saturating_sub(1);
+    Some(value as f64)
 }
 
 fn normalize_attribute_link(value: Option<&str>) -> Option<String> {
@@ -1119,6 +1163,39 @@ mod tests {
         assert_eq!(mode.sub_fixtures[0].first_address, Some(1));
         assert_eq!(mode.sub_fixtures[1].index, 2);
         assert_eq!(mode.sub_fixtures[1].first_address, Some(4));
+    }
+
+    #[test]
+    fn preserves_directional_sixteen_bit_slot_and_raw_default() {
+        let xml = r#"<?xml version="1.0" encoding="UTF-8"?>
+<GDTF DataVersion="1.2">
+  <FixtureType FixtureTypeID="333" Manufacturer="Test" Name="Mover">
+    <AttributeDefinitions>
+      <Attributes>
+        <Attribute Feature="Position.PanTilt" Name="Pan"/>
+      </Attributes>
+    </AttributeDefinitions>
+    <DMXModes>
+      <DMXMode Name="Default">
+        <DMXChannels>
+          <DMXChannel Name="Pan" Geometry="Body" Offset="1,2" DMXBreak="1" Default="32768/2">
+            <LogicalChannel Attribute="Pan">
+              <ChannelFunction Name="Pan" Attribute="Pan" DMXFrom="0/2" PhysicalFrom="32.5" PhysicalTo="-32.5" />
+            </LogicalChannel>
+          </DMXChannel>
+        </DMXChannels>
+      </DMXMode>
+    </DMXModes>
+  </FixtureType>
+</GDTF>"#;
+
+        let summary = parse_description_xml(xml).unwrap();
+        let attribute = &summary.modes[0].attribute_details[0];
+        assert_eq!(attribute.value_kind, "angle");
+        assert!(attribute.default_value.unwrap().abs() < 0.01);
+        assert_eq!(attribute.dmx_slots[0].offsets, vec![1, 2]);
+        assert_eq!(attribute.dmx_slots[0].physical_from, Some(32.5));
+        assert_eq!(attribute.dmx_slots[0].physical_to, Some(-32.5));
     }
 
     #[test]

@@ -113,6 +113,8 @@ pub struct FixtureModeAttributeEntry {
 pub struct FixtureAttributeDmxSlotEntry {
     pub module_id: Option<String>,
     pub offsets: Vec<u16>,
+    pub physical_from: Option<f64>,
+    pub physical_to: Option<f64>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -392,6 +394,8 @@ impl From<GdtfAttributeDmxSlotSummary> for FixtureAttributeDmxSlotEntry {
         Self {
             module_id: value.module_id,
             offsets: value.offsets,
+            physical_from: value.physical_from,
+            physical_to: value.physical_to,
         }
     }
 }

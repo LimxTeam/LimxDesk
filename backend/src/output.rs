@@ -444,6 +444,8 @@ fn dmx_profiles_from_fixture_types(
                                 .map(|slot| DmxAttributeSlot {
                                     module_id: slot.module_id.clone(),
                                     offsets: slot.offsets.clone(),
+                                    physical_from: slot.physical_from,
+                                    physical_to: slot.physical_to,
                                 })
                                 .collect(),
                         })

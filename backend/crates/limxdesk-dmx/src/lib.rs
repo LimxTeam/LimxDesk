@@ -73,6 +73,8 @@ pub struct DmxAttributeProfile {
 pub struct DmxAttributeSlot {
     pub module_id: Option<String>,
     pub offsets: Vec<u16>,
+    pub physical_from: Option<f64>,
+    pub physical_to: Option<f64>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
@@ -133,8 +135,12 @@ pub fn render_programmer_to_dmx(input: &DmxRenderInput) -> DmxResult<Vec<DmxUniv
                 continue;
             }
 
-            let dmx_bytes =
-                encode_attribute_bytes(attribute, value.numeric.unwrap_or(0.0), slot.offsets.len());
+            let dmx_bytes = encode_attribute_bytes(
+                attribute,
+                slot,
+                value.numeric.unwrap_or(0.0),
+                slot.offsets.len(),
+            );
             for (byte_index, offset) in slot.offsets.iter().enumerate() {
                 if *offset == 0 {
                     continue;
@@ -178,15 +184,16 @@ fn resolve_mode<'a>(
 
 fn encode_attribute_bytes(
     attribute: &DmxAttributeProfile,
+    slot: &DmxAttributeSlot,
     value: f64,
     resolution: usize,
 ) -> Vec<u8> {
     let normalized = match attribute.value_kind.as_str() {
         "percent" => normalize(value, 0.0, 100.0),
         _ => {
-            let min = attribute.min_value.unwrap_or(0.0);
-            let max = attribute.max_value.unwrap_or(255.0);
-            normalize(value, min.min(max), min.max(max))
+            let from = slot.physical_from.or(attribute.min_value).unwrap_or(0.0);
+            let to = slot.physical_to.or(attribute.max_value).unwrap_or(255.0);
+            normalize_directional(value, from, to)
         }
     };
 
@@ -203,6 +210,13 @@ fn normalize(value: f64, min: f64, max: f64) -> f64 {
         return 0.0;
     }
     ((value - min) / (max - min)).clamp(0.0, 1.0)
+}
+
+fn normalize_directional(value: f64, from: f64, to: f64) -> f64 {
+    if !value.is_finite() || !from.is_finite() || !to.is_finite() || from == to {
+        return 0.0;
+    }
+    ((value - from) / (to - from)).clamp(0.0, 1.0)
 }
 
 fn parent_fixture_id(id: &str) -> &str {
@@ -246,6 +260,43 @@ mod tests {
         assert_eq!(frames[0].data[1], 0);
     }
 
+    #[test]
+    fn renders_zero_percent_as_zero_dmx() {
+        let mut input = input("fix-1");
+        input.programmer_values[0].numeric = Some(0.0);
+
+        let frames = render_programmer_to_dmx(&input).unwrap();
+        assert_eq!(frames[0].data[0], 0);
+        assert_eq!(frames[0].data[3], 0);
+    }
+
+    #[test]
+    fn renders_directional_sixteen_bit_physical_range() {
+        let mut input = input("fix-1");
+        input.fixture_types[0].modes[0].attributes[0].name = "Pan".to_string();
+        input.fixture_types[0].modes[0].attributes[0].feature_group = "Position".to_string();
+        input.fixture_types[0].modes[0].attributes[0].value_kind = "angle".to_string();
+        input.fixture_types[0].modes[0].attributes[0].dmx_slots = vec![DmxAttributeSlot {
+            module_id: None,
+            offsets: vec![1, 2],
+            physical_from: Some(32.5),
+            physical_to: Some(-32.5),
+        }];
+        input.programmer_values[0].attribute = "Pan".to_string();
+
+        input.programmer_values[0].numeric = Some(32.5);
+        let frames = render_programmer_to_dmx(&input).unwrap();
+        assert_eq!(&frames[0].data[0..2], &[0, 0]);
+
+        input.programmer_values[0].numeric = Some(0.0);
+        let frames = render_programmer_to_dmx(&input).unwrap();
+        assert_eq!(&frames[0].data[0..2], &[128, 0]);
+
+        input.programmer_values[0].numeric = Some(-32.5);
+        let frames = render_programmer_to_dmx(&input).unwrap();
+        assert_eq!(&frames[0].data[0..2], &[255, 255]);
+    }
+
     fn input(fixture_id: &str) -> DmxRenderInput {
         DmxRenderInput {
             fixtures: vec![DmxFixturePatch {
@@ -274,10 +325,14 @@ mod tests {
                             DmxAttributeSlot {
                                 module_id: Some("module-1".to_string()),
                                 offsets: vec![1],
+                                physical_from: Some(0.0),
+                                physical_to: Some(100.0),
                             },
                             DmxAttributeSlot {
                                 module_id: Some("module-2".to_string()),
                                 offsets: vec![4],
+                                physical_from: Some(0.0),
+                                physical_to: Some(100.0),
                             },
                         ],
                     }],
