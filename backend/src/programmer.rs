@@ -110,8 +110,8 @@ pub fn programmer_set_attribute_for_selection(
     request: ProgrammerSetAttributeRequest,
     programmer_state: State<'_, ProgrammerState>,
     selection_state: State<'_, FixtureSelectionState>,
-    show_state: State<'_, ShowRuntimeState>,
-    output_state: State<'_, output::OutputState>,
+    _show_state: State<'_, ShowRuntimeState>,
+    _output_state: State<'_, output::OutputState>,
     app: AppHandle,
 ) -> Result<Programmer, String> {
     let selection = selection_state.current()?;
@@ -121,9 +121,8 @@ pub fn programmer_set_attribute_for_selection(
         .map_err(|error| error.to_string())?;
     let programmer = programmer_state.set_current(programmer)?;
     events::emit_programmer_changed(&app, &programmer);
-    match output::send_current_output(&show_state, &programmer_state, &output_state) {
-        Ok(report) => events::emit_output_sent(&app, &report),
-        Err(error) => tracing::warn!("failed to send programmer output: {error}"),
+    if let Err(error) = output::request_output_send(&app) {
+        tracing::warn!("failed to request programmer output: {error}");
     }
     Ok(programmer)
 }

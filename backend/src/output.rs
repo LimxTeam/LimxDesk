@@ -16,7 +16,7 @@ use limxdesk_programmer::{Programmer, ProgrammerMode};
 use limxdesk_showfile::ShowRepository;
 use serde::{Deserialize, Serialize};
 use std::sync::Mutex;
-use tauri::{AppHandle, State};
+use tauri::{AppHandle, Manager, State};
 
 const OUTPUT_SECTION_KEY: &str = "output.v1";
 const OUTPUT_SECTION_VERSION: u16 = 1;
@@ -25,6 +25,8 @@ const OUTPUT_SECTION_VERSION: u16 = 1;
 pub struct OutputState {
     targets: Mutex<Vec<NetworkOutputTarget>>,
     sequence: Mutex<u8>,
+    cache: Mutex<Option<OutputRuntimeCache>>,
+    worker: Mutex<OutputWorkerState>,
 }
 
 impl Default for OutputState {
@@ -32,6 +34,8 @@ impl Default for OutputState {
         Self {
             targets: Mutex::new(default_targets()),
             sequence: Mutex::new(1),
+            cache: Mutex::new(None),
+            worker: Mutex::new(OutputWorkerState::default()),
         }
     }
 }
@@ -49,6 +53,21 @@ pub struct OutputSendReport {
 #[serde(rename_all = "camelCase")]
 struct OutputDocument {
     targets: Vec<NetworkOutputTarget>,
+}
+
+#[derive(Clone, Debug)]
+struct OutputRuntimeCache {
+    show_path: String,
+    show_modified_at_ms: u64,
+    fixtures: Vec<DmxFixturePatch>,
+    fixture_types: Vec<DmxFixtureTypeProfile>,
+    targets: Vec<NetworkOutputTarget>,
+}
+
+#[derive(Clone, Debug, Default)]
+struct OutputWorkerState {
+    running: bool,
+    dirty: bool,
 }
 
 #[tauri::command]
@@ -95,8 +114,9 @@ pub fn output_set_targets(
 pub fn output_render_dmx(
     show_state: State<'_, ShowRuntimeState>,
     programmer_state: State<'_, ProgrammerState>,
+    output_state: State<'_, OutputState>,
 ) -> Result<Vec<DmxUniverseFrame>, String> {
-    render_current_dmx(&show_state, &programmer_state)
+    render_current_dmx(&show_state, &programmer_state, &output_state)
 }
 
 #[tauri::command]
@@ -116,16 +136,9 @@ pub(crate) fn send_current_output(
     programmer_state: &State<'_, ProgrammerState>,
     output_state: &State<'_, OutputState>,
 ) -> Result<OutputSendReport, String> {
-    let frames = render_current_dmx(show_state, programmer_state)?;
+    let frames = render_current_dmx(show_state, programmer_state, output_state)?;
     let sequence = next_sequence(output_state)?;
-    let targets = load_targets_from_show(show_state)?.unwrap_or_else(|| {
-        output_state
-            .targets
-            .lock()
-            .map(|targets| targets.clone())
-            .unwrap_or_else(|_| default_targets())
-    });
-    set_runtime_targets(output_state, targets.clone())?;
+    let targets = runtime_targets(show_state, output_state)?;
     let packets = build_network_packets(&frames, &targets, sequence)?;
     let report = send_packets(&packets, &UdpPacketTransport).map_err(|error| error.to_string())?;
     Ok(OutputSendReport {
@@ -136,73 +149,77 @@ pub(crate) fn send_current_output(
     })
 }
 
+pub(crate) fn request_output_send(app: &AppHandle) -> Result<(), String> {
+    let output_state = app.state::<OutputState>();
+    {
+        let mut worker = output_state
+            .worker
+            .lock()
+            .map_err(|_| "output worker state lock poisoned".to_string())?;
+        worker.dirty = true;
+        if worker.running {
+            return Ok(());
+        }
+        worker.running = true;
+    }
+
+    let app = app.clone();
+    std::thread::spawn(move || loop {
+        {
+            let output_state = app.state::<OutputState>();
+            let mut worker = match output_state.worker.lock() {
+                Ok(worker) => worker,
+                Err(_) => {
+                    tracing::warn!("output worker state lock poisoned");
+                    return;
+                }
+            };
+            worker.dirty = false;
+        }
+
+        let show_state = app.state::<ShowRuntimeState>();
+        let programmer_state = app.state::<ProgrammerState>();
+        let output_state = app.state::<OutputState>();
+        match send_current_output(&show_state, &programmer_state, &output_state) {
+            Ok(report) => events::emit_output_sent(&app, &report),
+            Err(error) => tracing::warn!("failed to send programmer output: {error}"),
+        }
+
+        let output_state = app.state::<OutputState>();
+        let mut worker = match output_state.worker.lock() {
+            Ok(worker) => worker,
+            Err(_) => {
+                tracing::warn!("output worker state lock poisoned");
+                return;
+            }
+        };
+        if worker.dirty {
+            continue;
+        }
+        worker.running = false;
+        return;
+    });
+
+    Ok(())
+}
+
 fn render_current_dmx(
     show_state: &State<'_, ShowRuntimeState>,
     programmer_state: &State<'_, ProgrammerState>,
+    output_state: &State<'_, OutputState>,
 ) -> Result<Vec<DmxUniverseFrame>, String> {
-    let Some(document) = patch::patch_load_current_show(show_state.clone())? else {
+    let Some(cache) = runtime_cache(show_state, output_state)? else {
         return Ok(Vec::new());
     };
-    let fixture_types = fixture_types::fixture_type_scan_current_show(show_state.clone())?;
     let programmer = programmer_state.current()?;
-    let input = render_input_from_runtime(&document, &fixture_types, &programmer);
+    let input = render_input_from_cache(&cache, &programmer);
     render_programmer_to_dmx(&input).map_err(|error| error.to_string())
 }
 
-fn render_input_from_runtime(
-    document: &PatchDocument,
-    fixture_types: &[FixtureTypeEntry],
-    programmer: &Programmer,
-) -> DmxRenderInput {
+fn render_input_from_cache(cache: &OutputRuntimeCache, programmer: &Programmer) -> DmxRenderInput {
     DmxRenderInput {
-        fixtures: document
-            .fixtures
-            .iter()
-            .map(|fixture| DmxFixturePatch {
-                id: fixture.id.clone(),
-                fixture_type_id: fixture.fixture_type_id.clone(),
-                fixture_type_path: fixture.fixture_type_path.clone(),
-                mode_id: fixture.mode_id.clone(),
-                mode_name: fixture.mode_name.clone(),
-                universe: fixture.universe,
-                address: fixture.address,
-            })
-            .collect(),
-        fixture_types: fixture_types
-            .iter()
-            .map(|fixture_type| DmxFixtureTypeProfile {
-                id: fixture_type.id.clone(),
-                path: fixture_type.path.clone(),
-                modes: fixture_type
-                    .modes
-                    .iter()
-                    .map(|mode| DmxModeProfile {
-                        id: mode.id.clone(),
-                        name: mode.name.clone(),
-                        channels: mode.channels,
-                        attributes: mode
-                            .attribute_details
-                            .iter()
-                            .map(|attribute| DmxAttributeProfile {
-                                name: attribute.name.clone(),
-                                feature_group: attribute.feature_group.clone(),
-                                value_kind: attribute.value_kind.clone(),
-                                min_value: attribute.min_value,
-                                max_value: attribute.max_value,
-                                dmx_slots: attribute
-                                    .dmx_slots
-                                    .iter()
-                                    .map(|slot| DmxAttributeSlot {
-                                        module_id: slot.module_id.clone(),
-                                        offsets: slot.offsets.clone(),
-                                    })
-                                    .collect(),
-                            })
-                            .collect(),
-                    })
-                    .collect(),
-            })
-            .collect(),
+        fixtures: cache.fixtures.clone(),
+        fixture_types: cache.fixture_types.clone(),
         programmer_values: active_programmer_values(programmer),
     }
 }
@@ -314,6 +331,127 @@ fn default_targets() -> Vec<NetworkOutputTarget> {
             enabled: true,
         },
     ]
+}
+
+fn runtime_targets(
+    show_state: &State<'_, ShowRuntimeState>,
+    output_state: &State<'_, OutputState>,
+) -> Result<Vec<NetworkOutputTarget>, String> {
+    if let Some(cache) = runtime_cache(show_state, output_state)? {
+        return Ok(cache.targets);
+    }
+
+    Ok(output_state
+        .targets
+        .lock()
+        .map(|targets| targets.clone())
+        .unwrap_or_else(|_| default_targets()))
+}
+
+fn runtime_cache(
+    show_state: &State<'_, ShowRuntimeState>,
+    output_state: &State<'_, OutputState>,
+) -> Result<Option<OutputRuntimeCache>, String> {
+    let Some(show) = show_state.current()? else {
+        clear_runtime_cache(output_state)?;
+        return Ok(None);
+    };
+
+    if let Some(cache) = output_state
+        .cache
+        .lock()
+        .map_err(|_| "output runtime cache lock poisoned".to_string())?
+        .clone()
+    {
+        if cache.show_path == show.path && cache.show_modified_at_ms == show.manifest.modified_at_ms
+        {
+            return Ok(Some(cache));
+        }
+    }
+
+    let document = patch::patch_load_current_show(show_state.clone())?.unwrap_or_default();
+    let fixture_types = fixture_types::fixture_type_scan_current_show(show_state.clone())?;
+    let targets = load_targets_from_show(show_state)?.unwrap_or_else(default_targets);
+    let cache = OutputRuntimeCache {
+        show_path: show.path,
+        show_modified_at_ms: show.manifest.modified_at_ms,
+        fixtures: dmx_fixtures_from_patch(&document),
+        fixture_types: dmx_profiles_from_fixture_types(&fixture_types),
+        targets: targets.clone(),
+    };
+    set_runtime_targets(output_state, targets)?;
+
+    let mut current = output_state
+        .cache
+        .lock()
+        .map_err(|_| "output runtime cache lock poisoned".to_string())?;
+    *current = Some(cache.clone());
+    Ok(Some(cache))
+}
+
+fn clear_runtime_cache(output_state: &State<'_, OutputState>) -> Result<(), String> {
+    let mut current = output_state
+        .cache
+        .lock()
+        .map_err(|_| "output runtime cache lock poisoned".to_string())?;
+    *current = None;
+    Ok(())
+}
+
+fn dmx_fixtures_from_patch(document: &PatchDocument) -> Vec<DmxFixturePatch> {
+    document
+        .fixtures
+        .iter()
+        .map(|fixture| DmxFixturePatch {
+            id: fixture.id.clone(),
+            fixture_type_id: fixture.fixture_type_id.clone(),
+            fixture_type_path: fixture.fixture_type_path.clone(),
+            mode_id: fixture.mode_id.clone(),
+            mode_name: fixture.mode_name.clone(),
+            universe: fixture.universe,
+            address: fixture.address,
+        })
+        .collect()
+}
+
+fn dmx_profiles_from_fixture_types(
+    fixture_types: &[FixtureTypeEntry],
+) -> Vec<DmxFixtureTypeProfile> {
+    fixture_types
+        .iter()
+        .map(|fixture_type| DmxFixtureTypeProfile {
+            id: fixture_type.id.clone(),
+            path: fixture_type.path.clone(),
+            modes: fixture_type
+                .modes
+                .iter()
+                .map(|mode| DmxModeProfile {
+                    id: mode.id.clone(),
+                    name: mode.name.clone(),
+                    channels: mode.channels,
+                    attributes: mode
+                        .attribute_details
+                        .iter()
+                        .map(|attribute| DmxAttributeProfile {
+                            name: attribute.name.clone(),
+                            feature_group: attribute.feature_group.clone(),
+                            value_kind: attribute.value_kind.clone(),
+                            min_value: attribute.min_value,
+                            max_value: attribute.max_value,
+                            dmx_slots: attribute
+                                .dmx_slots
+                                .iter()
+                                .map(|slot| DmxAttributeSlot {
+                                    module_id: slot.module_id.clone(),
+                                    offsets: slot.offsets.clone(),
+                                })
+                                .collect(),
+                        })
+                        .collect(),
+                })
+                .collect(),
+        })
+        .collect()
 }
 
 fn load_targets_from_show(
