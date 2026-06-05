@@ -8,7 +8,7 @@ interface DmxUniverseFrame {
   sources?: DmxChannelSource[];
 }
 
-type DmxChannelSource = "none" | "default" | "programmer";
+type DmxChannelSource = "none" | "default" | "sequence" | "effect" | "programmer";
 
 const CHANNELS_PER_ROW = 16;
 
@@ -235,6 +235,8 @@ export function DmxSheetWindow() {
 
 function sourceLabel(source: DmxChannelSource) {
   if (source === "programmer") return "P";
+  if (source === "effect") return "E";
+  if (source === "sequence") return "S";
   if (source === "default") return "D";
   return "";
 }

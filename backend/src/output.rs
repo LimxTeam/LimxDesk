@@ -4,8 +4,8 @@ use limxdesk_artnet::{
     ARTNET_PORT, SACN_PORT,
 };
 use limxdesk_dmx::{
-    render_programmer_to_dmx, DmxAttributeProfile, DmxAttributeSlot, DmxFixturePatch,
-    DmxFixtureTypeProfile, DmxModeProfile, DmxProgrammerValue, DmxRenderInput, DmxUniverseFrame,
+    render_dmx, DmxAttributeProfile, DmxAttributeSlot, DmxChannelSource, DmxFixturePatch,
+    DmxFixtureTypeProfile, DmxModeProfile, DmxOutputValue, DmxRenderInput, DmxUniverseFrame,
 };
 use limxdesk_fixture_types::FixtureTypeEntry;
 use limxdesk_network::{
@@ -221,18 +221,18 @@ fn render_current_dmx(
     };
     let programmer = programmer_state.current()?;
     let input = render_input_from_cache(&cache, &programmer);
-    render_programmer_to_dmx(&input).map_err(|error| error.to_string())
+    render_dmx(&input).map_err(|error| error.to_string())
 }
 
 fn render_input_from_cache(cache: &OutputRuntimeCache, programmer: &Programmer) -> DmxRenderInput {
     DmxRenderInput {
         fixtures: cache.fixtures.clone(),
         fixture_types: cache.fixture_types.clone(),
-        programmer_values: active_programmer_values(programmer),
+        output_values: active_output_values(programmer),
     }
 }
 
-fn active_programmer_values(programmer: &Programmer) -> Vec<DmxProgrammerValue> {
+fn active_output_values(programmer: &Programmer) -> Vec<DmxOutputValue> {
     let buffer = match programmer.mode {
         ProgrammerMode::Live => &programmer.live,
         ProgrammerMode::Preview => &programmer.preview,
@@ -241,11 +241,12 @@ fn active_programmer_values(programmer: &Programmer) -> Vec<DmxProgrammerValue> 
         .parts
         .iter()
         .flat_map(|part| part.values.iter())
-        .map(|value| DmxProgrammerValue {
+        .map(|value| DmxOutputValue {
             fixture_id: value.fixture_id.clone(),
             attribute: value.attribute.clone(),
             numeric: value.value.numeric,
             active: value.active,
+            source: DmxChannelSource::Programmer,
         })
         .collect()
 }

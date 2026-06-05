@@ -10,7 +10,7 @@ interface DmxUniverseFrame {
   sources?: DmxChannelSource[];
 }
 
-type DmxChannelSource = "none" | "default" | "programmer";
+type DmxChannelSource = "none" | "default" | "sequence" | "effect" | "programmer";
 
 interface OutputSendReport {
   frames: number;
@@ -283,6 +283,8 @@ export function OutputSettingsPage() {
 
 function sourceLabel(source: DmxChannelSource) {
   if (source === "programmer") return "P";
+  if (source === "effect") return "E";
+  if (source === "sequence") return "S";
   if (source === "default") return "D";
   return "";
 }

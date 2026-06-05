@@ -25,7 +25,7 @@ pub type DmxResult<T> = Result<T, DmxError>;
 pub struct DmxRenderInput {
     pub fixtures: Vec<DmxFixturePatch>,
     pub fixture_types: Vec<DmxFixtureTypeProfile>,
-    pub programmer_values: Vec<DmxProgrammerValue>,
+    pub output_values: Vec<DmxOutputValue>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
@@ -80,11 +80,12 @@ pub struct DmxAttributeSlot {
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
-pub struct DmxProgrammerValue {
+pub struct DmxOutputValue {
     pub fixture_id: String,
     pub attribute: String,
     pub numeric: Option<f64>,
     pub active: bool,
+    pub source: DmxChannelSource,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -101,10 +102,12 @@ pub enum DmxChannelSource {
     #[default]
     None,
     Default,
+    Sequence,
+    Effect,
     Programmer,
 }
 
-pub fn render_programmer_to_dmx(input: &DmxRenderInput) -> DmxResult<Vec<DmxUniverseFrame>> {
+pub fn render_dmx(input: &DmxRenderInput) -> DmxResult<Vec<DmxUniverseFrame>> {
     let mut universes = BTreeMap::<u16, [u8; DMX_UNIVERSE_SIZE]>::new();
     let mut sources = BTreeMap::<u16, [DmxChannelSource; DMX_UNIVERSE_SIZE]>::new();
 
@@ -112,65 +115,14 @@ pub fn render_programmer_to_dmx(input: &DmxRenderInput) -> DmxResult<Vec<DmxUniv
         render_fixture_defaults(input, fixture, &mut universes, &mut sources)?;
     }
 
-    for value in input.programmer_values.iter().filter(|value| value.active) {
-        let parent_id = parent_fixture_id(&value.fixture_id);
-        let Some(fixture) = input
-            .fixtures
-            .iter()
-            .find(|fixture| fixture.id == parent_id)
-        else {
-            continue;
-        };
-        let (Some(universe), Some(address)) = (fixture.universe, fixture.address) else {
-            continue;
-        };
-        if address == 0 || address > DMX_UNIVERSE_SIZE as u16 {
-            return Err(DmxError::InvalidAddress(format!(
-                "invalid DMX address {}.{}",
-                universe, address
-            )));
-        }
-
-        let Some(mode) = resolve_mode(input, fixture) else {
-            continue;
-        };
-        let Some(attribute) = mode
-            .attributes
-            .iter()
-            .find(|item| item.name == value.attribute)
-        else {
-            continue;
-        };
-        let module_id = selected_module_id(&value.fixture_id);
-        let universe_data = universes
-            .entry(universe)
-            .or_insert([0_u8; DMX_UNIVERSE_SIZE]);
-        let universe_sources = sources
-            .entry(universe)
-            .or_insert([DmxChannelSource::None; DMX_UNIVERSE_SIZE]);
-
-        for slot in &attribute.dmx_slots {
-            if module_id.is_some() && slot.module_id.as_deref() != module_id {
-                continue;
-            }
-
-            let dmx_bytes = encode_attribute_bytes(
-                attribute,
-                slot,
-                value.numeric.unwrap_or(0.0),
-                slot.offsets.len(),
-            );
-            for (byte_index, offset) in slot.offsets.iter().enumerate() {
-                if *offset == 0 {
-                    continue;
-                }
-                let index = usize::from(address - 1) + usize::from(*offset - 1);
-                if index < DMX_UNIVERSE_SIZE {
-                    universe_data[index] = dmx_bytes.get(byte_index).copied().unwrap_or(0);
-                    universe_sources[index] = DmxChannelSource::Programmer;
-                }
-            }
-        }
+    let mut output_values = input
+        .output_values
+        .iter()
+        .filter(|value| value.active)
+        .collect::<Vec<_>>();
+    output_values.sort_by_key(|value| source_priority(value.source));
+    for value in output_values {
+        render_output_value(input, value, &mut universes, &mut sources)?;
     }
 
     Ok(universes
@@ -186,6 +138,70 @@ pub fn render_programmer_to_dmx(input: &DmxRenderInput) -> DmxResult<Vec<DmxUniv
             }
         })
         .collect())
+}
+
+fn render_output_value(
+    input: &DmxRenderInput,
+    value: &DmxOutputValue,
+    universes: &mut BTreeMap<u16, [u8; DMX_UNIVERSE_SIZE]>,
+    sources: &mut BTreeMap<u16, [DmxChannelSource; DMX_UNIVERSE_SIZE]>,
+) -> DmxResult<()> {
+    let parent_id = parent_fixture_id(&value.fixture_id);
+    let Some(fixture) = input
+        .fixtures
+        .iter()
+        .find(|fixture| fixture.id == parent_id)
+    else {
+        return Ok(());
+    };
+    let (Some(universe), Some(address)) = (fixture.universe, fixture.address) else {
+        return Ok(());
+    };
+    if address == 0 || address > DMX_UNIVERSE_SIZE as u16 {
+        return Err(DmxError::InvalidAddress(format!(
+            "invalid DMX address {}.{}",
+            universe, address
+        )));
+    }
+
+    let Some(mode) = resolve_mode(input, fixture) else {
+        return Ok(());
+    };
+    let Some(attribute) = mode.attributes.iter().find(|item| item.name == value.attribute) else {
+        return Ok(());
+    };
+    let module_id = selected_module_id(&value.fixture_id);
+    let universe_data = universes
+        .entry(universe)
+        .or_insert([0_u8; DMX_UNIVERSE_SIZE]);
+    let universe_sources = sources
+        .entry(universe)
+        .or_insert([DmxChannelSource::None; DMX_UNIVERSE_SIZE]);
+
+    for slot in &attribute.dmx_slots {
+        if module_id.is_some() && slot.module_id.as_deref() != module_id {
+            continue;
+        }
+
+        let dmx_bytes = encode_attribute_bytes(
+            attribute,
+            slot,
+            value.numeric.unwrap_or(0.0),
+            slot.offsets.len(),
+        );
+        for (byte_index, offset) in slot.offsets.iter().enumerate() {
+            if *offset == 0 {
+                continue;
+            }
+            let index = usize::from(address - 1) + usize::from(*offset - 1);
+            if index < DMX_UNIVERSE_SIZE {
+                universe_data[index] = dmx_bytes.get(byte_index).copied().unwrap_or(0);
+                universe_sources[index] = value.source;
+            }
+        }
+    }
+
+    Ok(())
 }
 
 fn render_fixture_defaults(
@@ -313,13 +329,22 @@ fn selected_module_id(id: &str) -> Option<&str> {
     id.split_once("::sub:").map(|(_, module_id)| module_id)
 }
 
+fn source_priority(source: DmxChannelSource) -> u8 {
+    match source {
+        DmxChannelSource::None | DmxChannelSource::Default => 0,
+        DmxChannelSource::Sequence => 10,
+        DmxChannelSource::Effect => 20,
+        DmxChannelSource::Programmer => 30,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn renders_parent_fixture_attribute_to_all_matching_slots() {
-        let frames = render_programmer_to_dmx(&input("fix-1")).unwrap();
+        let frames = render_dmx(&input("fix-1")).unwrap();
         assert_eq!(frames.len(), 1);
         assert_eq!(frames[0].data[0], 255);
         assert_eq!(frames[0].data[3], 255);
@@ -327,7 +352,7 @@ mod tests {
 
     #[test]
     fn renders_sub_fixture_attribute_to_selected_module_only() {
-        let frames = render_programmer_to_dmx(&input("fix-1::sub:module-2")).unwrap();
+        let frames = render_dmx(&input("fix-1::sub:module-2")).unwrap();
         assert_eq!(frames[0].data[0], 0);
         assert_eq!(frames[0].data[3], 255);
     }
@@ -339,9 +364,9 @@ mod tests {
         input.fixture_types[0].modes[0].attributes[0]
             .dmx_slots
             .truncate(1);
-        input.programmer_values[0].numeric = Some(50.0);
+        input.output_values[0].numeric = Some(50.0);
 
-        let frames = render_programmer_to_dmx(&input).unwrap();
+        let frames = render_dmx(&input).unwrap();
         assert_eq!(frames[0].data[0], 128);
         assert_eq!(frames[0].data[1], 0);
     }
@@ -349,9 +374,9 @@ mod tests {
     #[test]
     fn renders_zero_percent_as_zero_dmx() {
         let mut input = input("fix-1");
-        input.programmer_values[0].numeric = Some(0.0);
+        input.output_values[0].numeric = Some(0.0);
 
-        let frames = render_programmer_to_dmx(&input).unwrap();
+        let frames = render_dmx(&input).unwrap();
         assert_eq!(frames[0].data[0], 0);
         assert_eq!(frames[0].data[3], 0);
     }
@@ -369,29 +394,29 @@ mod tests {
             physical_to: Some(-32.5),
             default_raw: None,
         }];
-        input.programmer_values[0].attribute = "Pan".to_string();
+        input.output_values[0].attribute = "Pan".to_string();
 
-        input.programmer_values[0].numeric = Some(32.5);
-        let frames = render_programmer_to_dmx(&input).unwrap();
+        input.output_values[0].numeric = Some(32.5);
+        let frames = render_dmx(&input).unwrap();
         assert_eq!(&frames[0].data[0..2], &[0, 0]);
 
-        input.programmer_values[0].numeric = Some(0.0);
-        let frames = render_programmer_to_dmx(&input).unwrap();
+        input.output_values[0].numeric = Some(0.0);
+        let frames = render_dmx(&input).unwrap();
         assert_eq!(&frames[0].data[0..2], &[128, 0]);
 
-        input.programmer_values[0].numeric = Some(-32.5);
-        let frames = render_programmer_to_dmx(&input).unwrap();
+        input.output_values[0].numeric = Some(-32.5);
+        let frames = render_dmx(&input).unwrap();
         assert_eq!(&frames[0].data[0..2], &[255, 255]);
     }
 
     #[test]
-    fn renders_fixture_defaults_without_active_programmer_values() {
+    fn renders_fixture_defaults_without_active_output_values() {
         let mut input = input("fix-1");
-        input.programmer_values.clear();
+        input.output_values.clear();
         input.fixture_types[0].modes[0].attributes[0].dmx_slots[0].default_raw = Some(7.0);
         input.fixture_types[0].modes[0].attributes[0].dmx_slots[1].default_raw = Some(9.0);
 
-        let frames = render_programmer_to_dmx(&input).unwrap();
+        let frames = render_dmx(&input).unwrap();
 
         assert_eq!(frames.len(), 1);
         assert_eq!(frames[0].data[0], 7);
@@ -401,18 +426,51 @@ mod tests {
     }
 
     #[test]
-    fn active_programmer_values_override_fixture_defaults() {
+    fn active_output_values_override_fixture_defaults() {
         let mut input = input("fix-1");
         input.fixture_types[0].modes[0].attributes[0].dmx_slots[0].default_raw = Some(7.0);
         input.fixture_types[0].modes[0].attributes[0].dmx_slots[1].default_raw = Some(9.0);
-        input.programmer_values[0].numeric = Some(100.0);
+        input.output_values[0].numeric = Some(100.0);
 
-        let frames = render_programmer_to_dmx(&input).unwrap();
+        let frames = render_dmx(&input).unwrap();
 
         assert_eq!(frames[0].data[0], 255);
         assert_eq!(frames[0].data[3], 255);
         assert_eq!(frames[0].sources[0], DmxChannelSource::Programmer);
         assert_eq!(frames[0].sources[3], DmxChannelSource::Programmer);
+    }
+
+    #[test]
+    fn higher_priority_output_sources_override_lower_priority_sources() {
+        let mut input = input("fix-1");
+        input.output_values = vec![
+            DmxOutputValue {
+                fixture_id: "fix-1".to_string(),
+                attribute: "Dimmer".to_string(),
+                numeric: Some(30.0),
+                active: true,
+                source: DmxChannelSource::Sequence,
+            },
+            DmxOutputValue {
+                fixture_id: "fix-1".to_string(),
+                attribute: "Dimmer".to_string(),
+                numeric: Some(60.0),
+                active: true,
+                source: DmxChannelSource::Effect,
+            },
+            DmxOutputValue {
+                fixture_id: "fix-1".to_string(),
+                attribute: "Dimmer".to_string(),
+                numeric: Some(90.0),
+                active: true,
+                source: DmxChannelSource::Programmer,
+            },
+        ];
+
+        let frames = render_dmx(&input).unwrap();
+
+        assert_eq!(frames[0].data[0], 230);
+        assert_eq!(frames[0].sources[0], DmxChannelSource::Programmer);
     }
 
     fn input(fixture_id: &str) -> DmxRenderInput {
@@ -458,11 +516,12 @@ mod tests {
                     }],
                 }],
             }],
-            programmer_values: vec![DmxProgrammerValue {
+            output_values: vec![DmxOutputValue {
                 fixture_id: fixture_id.to_string(),
                 attribute: "Dimmer".to_string(),
                 numeric: Some(100.0),
                 active: true,
+                source: DmxChannelSource::Programmer,
             }],
         }
     }
