@@ -252,7 +252,7 @@ fn build_network_packets(
         for frame in frames {
             let protocol_frame = ProtocolUniverseFrame {
                 universe: frame.universe,
-                data: trim_dmx_data(&frame.data),
+                data: frame.data.clone(),
             };
             let (payload, destination, port) = match target.protocol {
                 NetworkProtocol::ArtNet => (
@@ -284,15 +284,6 @@ fn build_network_packets(
         }
     }
     Ok(packets)
-}
-
-fn trim_dmx_data(data: &[u8]) -> Vec<u8> {
-    let len = data
-        .iter()
-        .rposition(|value| *value != 0)
-        .map(|index| index + 1)
-        .unwrap_or(1);
-    data[..len].to_vec()
 }
 
 fn resolve_sacn_destination(target: &NetworkOutputTarget, universe: u16) -> String {
@@ -523,5 +514,29 @@ mod tests {
 
         assert_eq!(resolve_sacn_destination(&target, 1), "239.255.0.1");
         assert_eq!(resolve_sacn_destination(&target, 257), "239.255.1.1");
+    }
+
+    #[test]
+    fn network_packets_keep_zero_tail_channels() {
+        let target = NetworkOutputTarget {
+            id: "artnet".to_string(),
+            label: "Art-Net".to_string(),
+            protocol: NetworkProtocol::ArtNet,
+            destination: "127.0.0.1".to_string(),
+            port: 0,
+            enabled: true,
+        };
+        let mut data = vec![0_u8; 512];
+        data[25] = 3;
+
+        let packets =
+            build_network_packets(&[DmxUniverseFrame { universe: 1, data }], &[target], 1).unwrap();
+
+        assert_eq!(packets.len(), 1);
+        assert_eq!(&packets[0].payload[16..18], &512_u16.to_be_bytes());
+        assert_eq!(packets[0].payload.len(), 18 + 512);
+        assert_eq!(packets[0].payload[18 + 25], 3);
+        assert_eq!(packets[0].payload[18 + 26], 0);
+        assert_eq!(packets[0].payload[18 + 27], 0);
     }
 }
