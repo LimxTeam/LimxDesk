@@ -455,35 +455,6 @@ export function ColorPickerWindow({ config, onConfigChange }: WindowToolProps) {
       right={<span className="lx-code">{Object.values(supported).filter(Boolean).length}/9 attrs</span>}
     >
       <div style={colorPickerFrameStyle}>
-        <div style={colorPickerLeftRailStyle}>
-          <div style={colorPickerPreviewStackStyle}>
-            <div style={colorPreviewStyle(colorCss(draft.values))}>
-              <strong>{fixtureLabel}</strong>
-              <span className="lx-code">{selection.fixtureIds.length} selected</span>
-            </div>
-            <div style={colorPickerRailNavStyle}>
-              <button type="button" style={colorPickerRailNavButtonActiveStyle}>Color</button>
-              <button type="button" disabled style={colorPickerRailNavButtonStyle}>Shapers</button>
-            </div>
-          </div>
-          <div style={colorPickerStatusCardStyle}>
-            <span style={editorSectionTitleStyle}>View</span>
-            <div style={colorPickerStatusGridStyle}>
-              {[
-                ["Hue", `${Math.round(draft.hue)}°`],
-                ["Sat", `${Math.round(draft.saturation)}%`],
-                ["Bright", `${Math.round(draft.brightness)}%`],
-                ["Warm", `${Math.round(draft.warmth)}%`],
-              ].map(([label, value]) => (
-                <div key={label} style={colorPickerStatusRowStyle()}>
-                  <span>{label}</span>
-                  <strong>{value}</strong>
-                </div>
-              ))}
-            </div>
-          </div>
-        </div>
-
         <div style={colorPickerCenterColumnStyle}>
           <div style={colorPickerTopBarStyle}>
             <div style={colorPickerModeBarStyle}>
@@ -645,8 +616,7 @@ export function ColorPickerWindow({ config, onConfigChange }: WindowToolProps) {
             onPointerCancel={endBrightnessDrag}
             railRef={brightnessRailRef}
           />
-          <div style={colorDetailCardStyle}>
-            <span style={editorSectionTitleStyle}>Supported</span>
+          <div style={colorSupportCardStyle}>
             <div style={colorSupportListStyle}>
               {COLOR_CHANNELS.map((channel) => (
                 <div key={channel} style={colorSupportRowStyle(Boolean(supported[channel]))}>
@@ -654,15 +624,6 @@ export function ColorPickerWindow({ config, onConfigChange }: WindowToolProps) {
                   <strong>{supported[channel] ? "On" : "Off"}</strong>
                 </div>
               ))}
-            </div>
-          </div>
-          <div style={colorDetailCardStyle}>
-            <span style={editorSectionTitleStyle}>Preview</span>
-            <div style={{ display: "grid", gap: 6 }}>
-              <div style={colorPreviewSmallStyle(colorCss(draft.values))} />
-              <span className="lx-code" style={{ color: "var(--lx-fg-tertiary)", fontSize: 10 }}>
-                {draft.values.R.toFixed(0)} / {draft.values.G.toFixed(0)} / {draft.values.B.toFixed(0)}
-              </span>
             </div>
           </div>
         </div>
@@ -1670,91 +1631,24 @@ const miniNumberControlStyle: React.CSSProperties = {
 
 const colorPickerFrameStyle: React.CSSProperties = {
   display: "grid",
-  gridTemplateColumns: "92px minmax(0, 1fr) 124px",
-  gap: 10,
+  gridTemplateColumns: "minmax(0, 1fr) 96px",
+  gap: 8,
   minHeight: 0,
   height: "100%",
 };
 
-const colorPickerLeftRailStyle: React.CSSProperties = {
-  display: "grid",
-  gridTemplateRows: "auto minmax(0, 1fr)",
-  gap: 8,
-  minHeight: 0,
-  overflow: "auto",
-  paddingRight: 2,
-};
-
-const colorPickerPreviewStackStyle: React.CSSProperties = {
-  display: "grid",
-  gridTemplateRows: "112px auto",
-  gap: 8,
-};
-
-const colorPickerRailNavStyle: React.CSSProperties = {
-  display: "grid",
-  gap: 4,
-};
-
-const colorPickerRailNavButtonStyle: React.CSSProperties = {
-  height: 42,
-  border: "1px solid rgba(255,255,255,0.08)",
-  borderRadius: "var(--lx-radius-md)",
-  background: "rgba(255,255,255,0.02)",
-  color: "var(--lx-fg-secondary)",
-  fontSize: 11,
-  fontWeight: 850,
-  textAlign: "center",
-  cursor: "default",
-};
-
-const colorPickerRailNavButtonActiveStyle: React.CSSProperties = {
-  ...colorPickerRailNavButtonStyle,
-  border: "1px solid rgba(77,163,245,0.56)",
-  background: "rgba(77,163,245,0.12)",
-  color: "var(--lx-primary-bright)",
-};
-
-const colorPickerStatusCardStyle: React.CSSProperties = {
-  display: "grid",
-  gap: 6,
-  padding: 8,
-  border: "1px solid rgba(255,255,255,0.08)",
-  borderRadius: "var(--lx-radius-md)",
-  background: "rgba(255,255,255,0.025)",
-};
-
-const colorPickerStatusGridStyle: React.CSSProperties = {
-  display: "grid",
-  gap: 4,
-};
-
-function colorPickerStatusRowStyle(): React.CSSProperties {
-  return {
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "space-between",
-    gap: 8,
-    padding: "5px 6px",
-    border: "1px solid rgba(255,255,255,0.06)",
-    borderRadius: "var(--lx-radius-xs)",
-    background: "rgba(0,0,0,0.18)",
-    color: "var(--lx-fg-tertiary)",
-    fontSize: 10,
-  };
-}
-
 const colorPickerCenterColumnStyle: React.CSSProperties = {
   display: "grid",
   gridTemplateRows: "auto minmax(0, 1fr)",
-  gap: 8,
+  gap: 6,
   minHeight: 0,
 };
 
 const colorPickerTopBarStyle: React.CSSProperties = {
   display: "grid",
-  gridTemplateRows: "auto auto",
+  gridTemplateColumns: "auto minmax(220px, 1fr)",
   gap: 8,
+  alignItems: "end",
 };
 
 const colorPickerModeBarStyle: React.CSSProperties = {
@@ -1784,7 +1678,7 @@ const colorPickerWorkspaceStyle: React.CSSProperties = {
 const colorPickerBoardStackStyle: React.CSSProperties = {
   display: "grid",
   gridTemplateRows: "minmax(0, 1fr) auto",
-  gap: 10,
+  gap: 6,
   minHeight: 0,
   height: "100%",
 };
@@ -1888,19 +1782,19 @@ const swatchButtonStyle: React.CSSProperties = {
 
 const colorPickerRightRailStyle: React.CSSProperties = {
   display: "grid",
-  gridTemplateRows: "auto auto auto",
-  gap: 8,
+  gridTemplateRows: "minmax(150px, 1fr) auto",
+  gap: 6,
   minHeight: 0,
   overflow: "auto",
-  paddingLeft: 2,
+  paddingLeft: 0,
 };
 
-const colorDetailCardStyle: React.CSSProperties = {
+const colorSupportCardStyle: React.CSSProperties = {
   display: "grid",
-  gap: 6,
-  padding: 8,
+  gap: 4,
+  padding: 6,
   border: "1px solid rgba(255,255,255,0.08)",
-  borderRadius: "var(--lx-radius-md)",
+  borderRadius: "var(--lx-radius-sm)",
   background: "rgba(255,255,255,0.02)",
 };
 
@@ -1921,30 +1815,6 @@ function colorSupportRowStyle(active: boolean): React.CSSProperties {
     background: active ? "rgba(77,163,245,0.12)" : "rgba(0,0,0,0.18)",
     color: active ? "var(--lx-primary-bright)" : "var(--lx-fg-tertiary)",
     fontSize: 10,
-  };
-}
-
-function colorPreviewStyle(background: string): React.CSSProperties {
-  return {
-    display: "grid",
-    alignContent: "center",
-    justifyItems: "center",
-    gap: 5,
-    minHeight: 0,
-    border: "1px solid rgba(255,255,255,0.08)",
-    borderRadius: "var(--lx-radius-md)",
-    background: `linear-gradient(135deg, ${background}, rgba(0,0,0,0.78))`,
-    color: "#fff",
-    textShadow: "0 1px 6px rgba(0,0,0,0.95)",
-  };
-}
-
-function colorPreviewSmallStyle(background: string): React.CSSProperties {
-  return {
-    height: 42,
-    borderRadius: "var(--lx-radius-sm)",
-    border: "1px solid rgba(255,255,255,0.08)",
-    background: `linear-gradient(135deg, ${background}, rgba(0,0,0,0.82))`,
   };
 }
 
