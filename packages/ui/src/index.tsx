@@ -408,7 +408,7 @@ export function NamedAppearanceEditor({
     <div
       style={{
         display: "grid",
-        gridTemplateColumns: "300px minmax(0, 1fr)",
+        gridTemplateColumns: "330px minmax(0, 1fr)",
         gap: 14,
         height: "100%",
         minHeight: 0,
@@ -438,9 +438,6 @@ export function NamedAppearanceEditor({
           <MetricBadge label="Scribble" value={appearance.scribble ? `${appearance.scribble.paths.length}` : "OFF"} />
           <MetricBadge label="Name" value={`${appearance.name.length}/48`} />
         </div>
-      </div>
-
-      <div style={editorInspectorStyle}>
         <EditorSection title="Basic" subtitle="Identity and tile palette">
           <label style={editorFieldStyle}>
             <span style={editorLabelStyle}>Name</span>
@@ -503,7 +500,9 @@ export function NamedAppearanceEditor({
             </label>
           </div>
         </EditorSection>
+      </div>
 
+      <div style={editorInspectorStyle}>
         <EditorSection title="Image Layer" subtitle={appearance.image?.name || "No image assigned"}>
           <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
             <label className="lx-btn lx-btn-ghost" style={{ cursor: "pointer" }}>
@@ -542,8 +541,8 @@ export function NamedAppearanceEditor({
           </div>
 
           {appearance.image ? (
-            <div style={{ display: "grid", gap: 9 }}>
-              <div style={{ display: "grid", gridTemplateColumns: "120px 1fr", gap: 10 }}>
+            <div style={{ display: "grid", gap: 10 }}>
+              <div style={{ display: "grid", gridTemplateColumns: "130px repeat(3, minmax(0, 1fr))", gap: 8 }}>
                 <label style={editorFieldStyle}>
                   <span style={editorLabelStyle}>Fit</span>
                   <select
@@ -557,54 +556,49 @@ export function NamedAppearanceEditor({
                     <option value="contain">Contain</option>
                   </select>
                 </label>
-                <RangeControl
+                <NumberControl
                   label="Opacity"
                   value={appearance.image.opacity}
                   min={0.05}
                   max={1}
                   step={0.05}
-                  display={`${Math.round(appearance.image.opacity * 100)}%`}
                   onChange={(next) => updateImagePatch({ opacity: next })}
                 />
+                <NumberControl
+                  label="Scale"
+                  value={appearance.image.scale}
+                  min={0.2}
+                  max={3}
+                  step={0.05}
+                  onChange={(next) => updateImagePatch({ scale: next })}
+                />
+                <NumberControl
+                  label="Rotation"
+                  value={appearance.image.rotation}
+                  min={-180}
+                  max={180}
+                  step={1}
+                  onChange={(next) => updateImagePatch({ rotation: next })}
+                />
               </div>
-              <RangeControl
-                label="Scale"
-                value={appearance.image.scale}
-                min={0.2}
-                max={3}
-                step={0.05}
-                display={`${Math.round(appearance.image.scale * 100)}%`}
-                onChange={(next) => updateImagePatch({ scale: next })}
-              />
-              <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10 }}>
-                <RangeControl
+              <div style={{ display: "grid", gridTemplateColumns: "repeat(2, minmax(0, 1fr))", gap: 8 }}>
+                <NumberControl
                   label="Offset X"
                   value={appearance.image.offsetX}
                   min={-100}
                   max={100}
                   step={1}
-                  display={`${appearance.image.offsetX}%`}
                   onChange={(next) => updateImagePatch({ offsetX: next })}
                 />
-                <RangeControl
+                <NumberControl
                   label="Offset Y"
                   value={appearance.image.offsetY}
                   min={-100}
                   max={100}
                   step={1}
-                  display={`${appearance.image.offsetY}%`}
                   onChange={(next) => updateImagePatch({ offsetY: next })}
                 />
               </div>
-              <RangeControl
-                label="Rotation"
-                value={appearance.image.rotation}
-                min={-180}
-                max={180}
-                step={1}
-                display={`${appearance.image.rotation}°`}
-                onChange={(next) => updateImagePatch({ rotation: next })}
-              />
             </div>
           ) : (
             <div style={emptyEditorHintStyle}>Use an image as the visual identity layer for this named object.</div>
@@ -675,13 +669,12 @@ export function NamedAppearanceEditor({
                 style={wideColorInputStyle}
               />
             </label>
-            <RangeControl
+            <NumberControl
               label="Opacity"
               value={appearance.scribble?.opacity ?? 0.9}
               min={0.05}
               max={1}
               step={0.05}
-              display={`${Math.round((appearance.scribble?.opacity ?? 0.9) * 100)}%`}
               onChange={(next) =>
                 update({
                   scribble: {
@@ -740,13 +733,12 @@ function EditorSection({
   );
 }
 
-function RangeControl({
+function NumberControl({
   label,
   value,
   min,
   max,
   step,
-  display,
   onChange,
 }: {
   label: string;
@@ -754,28 +746,28 @@ function RangeControl({
   min: number;
   max: number;
   step: number;
-  display: string;
   onChange: (value: number) => void;
 }) {
   return (
     <label style={editorFieldStyle}>
-      <span style={{ ...editorLabelStyle, display: "flex", justifyContent: "space-between", gap: 8 }}>
-        <span>{label}</span>
-        <span className="lx-code" style={{ color: "var(--lx-fg-secondary)" }}>
-          {display}
-        </span>
-      </span>
+      <span style={editorLabelStyle}>{label}</span>
       <input
-        type="range"
+        className="lx-input lx-input-sm"
+        type="number"
         min={min}
         max={max}
         step={step}
         value={value}
-        onChange={(event) => onChange(Number(event.currentTarget.value))}
+        onChange={(event) => onChange(clampEditorNumber(Number(event.currentTarget.value), min, max))}
         style={{ width: "100%" }}
       />
     </label>
   );
+}
+
+function clampEditorNumber(value: number, min: number, max: number): number {
+  if (!Number.isFinite(value)) return min;
+  return Math.min(max, Math.max(min, value));
 }
 
 function MetricBadge({ label, value }: { label: string; value: string }) {
@@ -791,7 +783,7 @@ function MetricBadge({ label, value }: { label: string; value: string }) {
 
 const editorPreviewPanelStyle: CSSProperties = {
   display: "grid",
-  gridTemplateRows: "auto auto auto",
+  gridTemplateRows: "auto auto auto auto",
   alignContent: "start",
   gap: 12,
   minHeight: 0,
