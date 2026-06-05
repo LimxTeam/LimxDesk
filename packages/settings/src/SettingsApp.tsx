@@ -1,18 +1,24 @@
 import { WindowChrome } from "@limxdesk/shell";
 import { useState } from "react";
-import { LibraryBig, PlugZap } from "lucide-react";
+import { Activity, LibraryBig, PlugZap, RadioTower } from "lucide-react";
 import { ConnectivitySettingsPage } from "./pages/ConnectivitySettingsPage";
 import { FixtureTypesSettingsPage } from "./pages/FixtureTypesSettingsPage";
+import { NetworkSettingsPage } from "./pages/NetworkSettingsPage";
+import { OutputSettingsPage } from "./pages/OutputSettingsPage";
 import type { SettingsSection, SettingsSectionId } from "./types";
 
 const SECTIONS: SettingsSection[] = [
   { id: "patch", label: "配接", caption: "灯具、地址、舞台" },
   { id: "fixture-types", label: "灯具类型", caption: "资料库、模式、通道" },
+  { id: "network", label: "网络输出", caption: "Art-Net、sACN、目标" },
+  { id: "output", label: "输出监视", caption: "DMX 帧、发送、诊断" },
 ];
 
 const SECTION_ICONS = {
   patch: PlugZap,
   "fixture-types": LibraryBig,
+  network: RadioTower,
+  output: Activity,
 } satisfies Record<SettingsSectionId, typeof PlugZap>;
 
 export function SettingsApp() {
@@ -74,7 +80,7 @@ export function SettingsApp() {
                 fontSize: 12,
               }}
             >
-              管理 show 文件里的配接、灯具资料和基础配置。
+              管理 show 文件里的配接、灯具资料、网络输出和基础配置。
             </p>
           </div>
 
@@ -167,11 +173,10 @@ export function SettingsApp() {
             <span className="lx-badge lx-badge-success">Local UI</span>
           </div>
 
-          {activeSection === "patch" ? (
-            <ConnectivitySettingsPage />
-          ) : (
-            <FixtureTypesSettingsPage />
-          )}
+          {activeSection === "patch" ? <ConnectivitySettingsPage /> : null}
+          {activeSection === "fixture-types" ? <FixtureTypesSettingsPage /> : null}
+          {activeSection === "network" ? <NetworkSettingsPage /> : null}
+          {activeSection === "output" ? <OutputSettingsPage /> : null}
         </main>
       </div>
     </WindowChrome>

@@ -121,8 +121,9 @@ pub fn programmer_set_attribute_for_selection(
         .map_err(|error| error.to_string())?;
     let programmer = programmer_state.set_current(programmer)?;
     events::emit_programmer_changed(&app, &programmer);
-    if let Err(error) = output::send_current_output(&show_state, &programmer_state, &output_state) {
-        tracing::warn!("failed to send programmer output: {error}");
+    match output::send_current_output(&show_state, &programmer_state, &output_state) {
+        Ok(report) => events::emit_output_sent(&app, &report),
+        Err(error) => tracing::warn!("failed to send programmer output: {error}"),
     }
     Ok(programmer)
 }

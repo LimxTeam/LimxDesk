@@ -11,6 +11,8 @@ pub const PATCH_CHANGED: &str = "patch:changed";
 pub const LAYOUT_CHANGED: &str = "layout:changed";
 pub const FIXTURE_SELECTION_CHANGED: &str = "fixture-selection:changed";
 pub const PROGRAMMER_CHANGED: &str = "programmer:changed";
+pub const OUTPUT_CHANGED: &str = "output:changed";
+pub const OUTPUT_SENT: &str = "output:sent";
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -54,6 +56,22 @@ pub fn emit_patch_changed(app: &AppHandle, show: &LoadedShow) {
 pub fn emit_layout_changed(app: &AppHandle, show: &LoadedShow) {
     emit_show(app, LAYOUT_CHANGED, show);
     emit_show(app, SHOW_CHANGED, show);
+}
+
+pub fn emit_output_changed(app: &AppHandle, show: Option<&LoadedShow>) {
+    if let Some(show) = show {
+        emit_show(app, OUTPUT_CHANGED, show);
+        emit_show(app, SHOW_CHANGED, show);
+    } else {
+        let _ = app.emit(OUTPUT_CHANGED, ());
+    }
+}
+
+pub fn emit_output_sent<T>(app: &AppHandle, report: &T)
+where
+    T: Serialize + Clone,
+{
+    let _ = app.emit(OUTPUT_SENT, report.clone());
 }
 
 pub fn emit_fixture_selection_changed<T>(app: &AppHandle, selection: &T)

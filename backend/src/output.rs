@@ -1,4 +1,4 @@
-use crate::{fixture_types, patch, programmer::ProgrammerState, show::ShowRuntimeState};
+use crate::{events, fixture_types, patch, programmer::ProgrammerState, show::ShowRuntimeState};
 use limxdesk_artnet::{
     encode_artdmx, encode_sacn_dmp, DmxUniverseFrame as ProtocolUniverseFrame, ARTNET_PORT,
     SACN_PORT,
@@ -13,9 +13,13 @@ use limxdesk_network::{
 };
 use limxdesk_patch::PatchDocument;
 use limxdesk_programmer::{Programmer, ProgrammerMode};
+use limxdesk_showfile::ShowRepository;
 use serde::{Deserialize, Serialize};
 use std::sync::Mutex;
-use tauri::State;
+use tauri::{AppHandle, State};
+
+const OUTPUT_SECTION_KEY: &str = "output.v1";
+const OUTPUT_SECTION_VERSION: u16 = 1;
 
 #[derive(Debug)]
 pub struct OutputState {
@@ -41,28 +45,50 @@ pub struct OutputSendReport {
     pub sent_at_ms: u64,
 }
 
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct OutputDocument {
+    targets: Vec<NetworkOutputTarget>,
+}
+
 #[tauri::command]
 pub fn output_get_targets(
+    show_state: State<'_, ShowRuntimeState>,
     state: State<'_, OutputState>,
 ) -> Result<Vec<NetworkOutputTarget>, String> {
-    Ok(state
-        .targets
-        .lock()
-        .map_err(|_| "output target state lock poisoned".to_string())?
-        .clone())
+    let targets = load_targets_from_show(&show_state)?.unwrap_or_else(default_targets);
+    set_runtime_targets(&state, targets.clone())?;
+    Ok(targets)
 }
 
 #[tauri::command]
 pub fn output_set_targets(
     targets: Vec<NetworkOutputTarget>,
+    show_state: State<'_, ShowRuntimeState>,
     state: State<'_, OutputState>,
+    app: AppHandle,
 ) -> Result<Vec<NetworkOutputTarget>, String> {
-    let mut current = state
-        .targets
-        .lock()
-        .map_err(|_| "output target state lock poisoned".to_string())?;
-    *current = targets;
-    Ok(current.clone())
+    let targets = normalize_targets(targets);
+    let Some(show) = show_state.current()? else {
+        return Err(
+            "No show file loaded. Create or load a show before saving output settings.".to_string(),
+        );
+    };
+    let loaded = ShowRepository::default_for_current_os()
+        .write_section(
+            &show.path,
+            OUTPUT_SECTION_KEY,
+            OUTPUT_SECTION_VERSION,
+            &OutputDocument {
+                targets: targets.clone(),
+            },
+        )
+        .map_err(|error| error.to_string())?;
+    show_state.set_current(loaded)?;
+    let changed_show = show_state.current()?;
+    set_runtime_targets(&state, targets.clone())?;
+    events::emit_output_changed(&app, changed_show.as_ref());
+    Ok(targets)
 }
 
 #[tauri::command]
@@ -78,8 +104,11 @@ pub fn output_send_current(
     show_state: State<'_, ShowRuntimeState>,
     programmer_state: State<'_, ProgrammerState>,
     output_state: State<'_, OutputState>,
+    app: AppHandle,
 ) -> Result<OutputSendReport, String> {
-    send_current_output(&show_state, &programmer_state, &output_state)
+    let report = send_current_output(&show_state, &programmer_state, &output_state)?;
+    events::emit_output_sent(&app, &report);
+    Ok(report)
 }
 
 pub(crate) fn send_current_output(
@@ -89,11 +118,14 @@ pub(crate) fn send_current_output(
 ) -> Result<OutputSendReport, String> {
     let frames = render_current_dmx(show_state, programmer_state)?;
     let sequence = next_sequence(output_state)?;
-    let targets = output_state
-        .targets
-        .lock()
-        .map_err(|_| "output target state lock poisoned".to_string())?
-        .clone();
+    let targets = load_targets_from_show(show_state)?.unwrap_or_else(|| {
+        output_state
+            .targets
+            .lock()
+            .map(|targets| targets.clone())
+            .unwrap_or_else(|_| default_targets())
+    });
+    set_runtime_targets(output_state, targets.clone())?;
     let packets = build_network_packets(&frames, &targets, sequence)?;
     let report = send_packets(&packets, &UdpPacketTransport).map_err(|error| error.to_string())?;
     Ok(OutputSendReport {
@@ -282,6 +314,55 @@ fn default_targets() -> Vec<NetworkOutputTarget> {
             enabled: true,
         },
     ]
+}
+
+fn load_targets_from_show(
+    show_state: &State<'_, ShowRuntimeState>,
+) -> Result<Option<Vec<NetworkOutputTarget>>, String> {
+    let Some(show) = show_state.current()? else {
+        return Ok(None);
+    };
+    let document = ShowRepository::default_for_current_os()
+        .read_section::<OutputDocument>(&show.path, OUTPUT_SECTION_KEY)
+        .map_err(|error| error.to_string())?;
+    Ok(document.map(|document| normalize_targets(document.targets)))
+}
+
+fn set_runtime_targets(
+    state: &State<'_, OutputState>,
+    targets: Vec<NetworkOutputTarget>,
+) -> Result<(), String> {
+    let mut current = state
+        .targets
+        .lock()
+        .map_err(|_| "output target state lock poisoned".to_string())?;
+    *current = targets;
+    Ok(())
+}
+
+fn normalize_targets(targets: Vec<NetworkOutputTarget>) -> Vec<NetworkOutputTarget> {
+    if targets.is_empty() {
+        return default_targets();
+    }
+
+    targets
+        .into_iter()
+        .map(|mut target| {
+            if target.id.trim().is_empty() {
+                target.id = format!("{:?}-{}", target.protocol, target.destination);
+            }
+            if target.label.trim().is_empty() {
+                target.label = target.id.clone();
+            }
+            if target.port == 0 {
+                target.port = match target.protocol {
+                    NetworkProtocol::ArtNet => ARTNET_PORT,
+                    NetworkProtocol::Sacn => SACN_PORT,
+                };
+            }
+            target
+        })
+        .collect()
 }
 
 #[cfg(test)]
