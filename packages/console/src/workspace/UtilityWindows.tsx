@@ -11,6 +11,13 @@ import { listen } from "@tauri-apps/api/event";
 import { createDefaultNamedAppearance, normalizeNamedAppearance, type NamedAppearance } from "@limxdesk/naming";
 import { FloatingDialog, NamedAppearanceEditor, NamedAppearanceTile } from "@limxdesk/ui";
 import {
+  activateCommandMode,
+  clearCommandEntry,
+  pushCommandHistory,
+  setCommandSource,
+  useCommandRuntimeSnapshot,
+} from "../command/commandRuntime";
+import {
   clearWorkspaceRuntimeCache,
   loadCachedFixtureTypes,
   loadCachedPatch,
@@ -209,9 +216,10 @@ const SHAPER_ALIASES: Record<ShaperControlId, string[]> = {
 export function GroupsWindow({ config, onConfigChange }: WindowToolProps) {
   const [selection, setSelection] = useState<FixtureSelection>({ fixtureIds: [], primaryFixtureId: null, version: 0 });
   const [activeSlotId, setActiveSlotId] = useState<number | null>(null);
-  const [storeMode, setStoreMode] = useState(false);
   const [editor, setEditor] = useState<GroupSlot | null>(null);
+  const commandState = useCommandRuntimeSnapshot();
   const slots = useMemo(() => normalizeGroupSlots(config.groups), [config.groups]);
+  const storeMode = commandState.mode === "store";
 
   useEffect(() => {
     void loadSelection();
@@ -242,8 +250,17 @@ export function GroupsWindow({ config, onConfigChange }: WindowToolProps) {
     onConfigChange({ ...config, groups: nextSlots });
   }
 
+  function commitSlots(label: string, previous: GroupSlot[], next: GroupSlot[]) {
+    updateSlots(next);
+    pushCommandHistory({
+      label,
+      undo: () => onConfigChange({ ...config, groups: previous }),
+      redo: () => onConfigChange({ ...config, groups: next }),
+    });
+  }
+
   function storeSlot(id: number) {
-    if (selection.fixtureIds.length === 0) return;
+    if (selection.fixtureIds.length === 0) return false;
     const existing = slots.find((slot) => slot.id === id);
     const nextSlot: GroupSlot = {
       id,
@@ -251,14 +268,40 @@ export function GroupsWindow({ config, onConfigChange }: WindowToolProps) {
       fixtureIds: selection.fixtureIds,
       primaryFixtureId: selection.primaryFixtureId,
     };
-    updateSlots(upsertSlot(slots, nextSlot));
+    commitSlots(`${existing ? "Update" : "Store"} Group ${id}`, slots, upsertSlot(slots, nextSlot));
     setActiveSlotId(id);
-    setStoreMode(false);
+    return true;
   }
 
   function clearSlot(id: number) {
-    updateSlots(slots.filter((slot) => slot.id !== id));
+    const existing = slots.find((slot) => slot.id === id);
+    if (!existing) return false;
+    commitSlots(`Delete Group ${id}`, slots, slots.filter((slot) => slot.id !== id));
     if (activeSlotId === id) setActiveSlotId(null);
+    return true;
+  }
+
+  function copyOrMoveSlot(id: number, slot: GroupSlot | undefined) {
+    const source = commandState.source;
+    if (!source) {
+      if (!slot) return;
+      setCommandSource({ pool: "group", id, label: `Group ${id}` });
+      return;
+    }
+    if (source.pool !== "group") return;
+    const sourceSlot = slots.find((item) => item.id === Number(source.id));
+    if (!sourceSlot) {
+      setCommandSource(null);
+      return;
+    }
+    const nextSlot = { ...sourceSlot, id, appearance: normalizeNamedAppearance(sourceSlot.appearance, `Group ${id}`) };
+    const withoutDestination = slots.filter((item) => item.id !== id);
+    const base = commandState.mode === "move"
+      ? withoutDestination.filter((item) => item.id !== sourceSlot.id)
+      : withoutDestination;
+    commitSlots(`${commandState.mode === "move" ? "Move" : "Copy"} Group ${sourceSlot.id} to ${id}`, slots, upsertSlot(base, nextSlot));
+    setActiveSlotId(id);
+    clearCommandEntry();
   }
 
   async function recallSlot(slot: GroupSlot) {
@@ -272,8 +315,21 @@ export function GroupsWindow({ config, onConfigChange }: WindowToolProps) {
   }
 
   function handleSlotClick(id: number, slot: GroupSlot | undefined) {
-    if (storeMode) {
-      storeSlot(id);
+    if (commandState.mode === "store" || commandState.mode === "update") {
+      if (storeSlot(id)) clearCommandEntry();
+      return;
+    }
+    if (commandState.mode === "delete") {
+      if (clearSlot(id)) clearCommandEntry();
+      return;
+    }
+    if (commandState.mode === "edit") {
+      setEditor(slot ?? createEmptyGroupSlot(id));
+      clearCommandEntry();
+      return;
+    }
+    if (commandState.mode === "copy" || commandState.mode === "move") {
+      copyOrMoveSlot(id, slot);
       return;
     }
     if (slot) {
@@ -290,8 +346,7 @@ export function GroupsWindow({ config, onConfigChange }: WindowToolProps) {
           <button
             type="button"
             className={storeMode ? "lx-btn lx-btn-primary" : "lx-btn lx-btn-ghost"}
-            disabled={selection.fixtureIds.length === 0}
-            onClick={() => setStoreMode((value) => !value)}
+            onClick={() => (storeMode ? clearCommandEntry() : activateCommandMode("store"))}
           >
             Store
           </button>
@@ -316,13 +371,11 @@ export function GroupsWindow({ config, onConfigChange }: WindowToolProps) {
         }}
       >
         <span>
-          {storeMode
-            ? "Store mode: click a slot to save current fixture selection"
-            : "Recall mode: click stored groups to select fixtures"}
+          {groupPoolStatus(commandState.mode)}
         </span>
-        {storeMode ? (
-          <button type="button" className="lx-btn lx-btn-ghost" onClick={() => setStoreMode(false)}>
-            Cancel Store
+        {commandState.mode !== "idle" ? (
+          <button type="button" className="lx-btn lx-btn-ghost" onClick={() => clearCommandEntry()}>
+            Cancel Command
           </button>
         ) : null}
       </div>
@@ -344,7 +397,7 @@ export function GroupsWindow({ config, onConfigChange }: WindowToolProps) {
                 appearance={slot?.appearance ?? createDefaultNamedAppearance(`Group ${id}`)}
                 fallbackLabel={String(id)}
                 empty={!slot}
-                active={activeSlotId === id || storeMode}
+                active={activeSlotId === id || (commandState.source?.pool === "group" && Number(commandState.source.id) === id)}
                 height={46}
                 compact
               />
@@ -691,19 +744,29 @@ export function ColorPickerWindow({ config, onConfigChange }: WindowToolProps) {
 
 export function PresetsWindow({ config, onConfigChange }: WindowToolProps) {
   const [category, setCategory] = useState<PresetCategoryId>("all");
-  const [storeMode, setStoreMode] = useState(false);
   const [editor, setEditor] = useState<PresetSlot | null>(null);
+  const commandState = useCommandRuntimeSnapshot();
   const slots = useMemo(() => normalizePresetSlots(config.presets), [config.presets]);
   const categorySlots = slots.filter((slot) => slot.category === category);
+  const storeMode = commandState.mode === "store";
 
   function updateSlots(nextSlots: PresetSlot[]) {
     onConfigChange({ ...config, presets: nextSlots });
   }
 
+  function commitSlots(label: string, previous: PresetSlot[], next: PresetSlot[]) {
+    updateSlots(next);
+    pushCommandHistory({
+      label,
+      undo: () => onConfigChange({ ...config, presets: previous }),
+      redo: () => onConfigChange({ ...config, presets: next }),
+    });
+  }
+
   async function storeSlot(id: number) {
     const programmer = await loadCachedProgrammer<Programmer>();
     const values = activeProgrammerValues(programmer).filter((value) => presetValueMatchesCategory(value, category));
-    if (values.length === 0) return;
+    if (values.length === 0) return false;
     const existing = slots.find((slot) => slot.id === id && slot.category === category);
     const slot: PresetSlot = {
       id,
@@ -711,8 +774,8 @@ export function PresetsWindow({ config, onConfigChange }: WindowToolProps) {
       values,
       appearance: normalizeNamedAppearance(existing?.appearance, `${presetCategoryLabel(category)} ${id}`),
     };
-    updateSlots(upsertPresetSlot(slots, slot));
-    setStoreMode(false);
+    commitSlots(`${existing ? "Update" : "Store"} ${presetCategoryLabel(category)} Preset ${id}`, slots, upsertPresetSlot(slots, slot));
+    return true;
   }
 
   async function recallSlot(slot: PresetSlot) {
@@ -724,14 +787,74 @@ export function PresetsWindow({ config, onConfigChange }: WindowToolProps) {
   }
 
   function clearSlot(slot: PresetSlot) {
-    updateSlots(slots.filter((item) => !(item.category === slot.category && item.id === slot.id)));
+    commitSlots(
+      `Delete ${presetCategoryLabel(slot.category)} Preset ${slot.id}`,
+      slots,
+      slots.filter((item) => !(item.category === slot.category && item.id === slot.id)),
+    );
+  }
+
+  async function copyOrMoveSlot(id: number, slot: PresetSlot | undefined) {
+    const source = commandState.source;
+    if (!source) {
+      if (!slot) return;
+      setCommandSource({ pool: "preset", id, category, label: `${presetCategoryLabel(category)} ${id}` });
+      return;
+    }
+    if (source.pool !== "preset" || source.category !== category) return;
+    const sourceSlot = slots.find((item) => item.id === Number(source.id) && item.category === category);
+    if (!sourceSlot) {
+      setCommandSource(null);
+      return;
+    }
+    const nextSlot: PresetSlot = {
+      ...sourceSlot,
+      id,
+      appearance: normalizeNamedAppearance(sourceSlot.appearance, `${presetCategoryLabel(category)} ${id}`),
+    };
+    const withoutDestination = slots.filter((item) => !(item.category === category && item.id === id));
+    const base = commandState.mode === "move"
+      ? withoutDestination.filter((item) => !(item.category === category && item.id === sourceSlot.id))
+      : withoutDestination;
+    commitSlots(
+      `${commandState.mode === "move" ? "Move" : "Copy"} ${presetCategoryLabel(category)} Preset ${sourceSlot.id} to ${id}`,
+      slots,
+      upsertPresetSlot(base, nextSlot),
+    );
+    clearCommandEntry();
+  }
+
+  async function handleSlotClick(id: number, slot: PresetSlot | undefined) {
+    if (commandState.mode === "store" || commandState.mode === "update") {
+      if (await storeSlot(id)) clearCommandEntry();
+      return;
+    }
+    if (commandState.mode === "delete") {
+      if (slot) {
+        clearSlot(slot);
+        clearCommandEntry();
+      }
+      return;
+    }
+    if (commandState.mode === "edit") {
+      setEditor(slot ?? createEmptyPresetSlot(id, category));
+      clearCommandEntry();
+      return;
+    }
+    if (commandState.mode === "copy" || commandState.mode === "move") {
+      await copyOrMoveSlot(id, slot);
+      return;
+    }
+    if (slot) {
+      await recallSlot(slot);
+    }
   }
 
   return (
     <ToolWindowShell
       title="Preset Pool"
       subtitle={`${categorySlots.length} stored in ${presetCategoryLabel(category)}`}
-      right={<ToggleButton active={storeMode} onClick={() => setStoreMode((value) => !value)}>Store</ToggleButton>}
+      right={<ToggleButton active={storeMode} onClick={() => (storeMode ? clearCommandEntry() : activateCommandMode("store"))}>Store</ToggleButton>}
     >
       <div style={{ display: "grid", gridTemplateRows: "28px minmax(0, 1fr)", gap: 8, minHeight: 0 }}>
         <div style={{ display: "flex", gap: 4, overflowX: "auto" }}>
@@ -748,8 +871,8 @@ export function PresetsWindow({ config, onConfigChange }: WindowToolProps) {
             return (
               <PoolTileButton
                 key={`${category}-${id}`}
-                title={slot ? `Recall Preset ${id}` : `Store Preset ${id}`}
-                onClick={() => (storeMode || !slot ? void storeSlot(id) : void recallSlot(slot))}
+                title={commandState.mode === "idle" ? (slot ? `Recall Preset ${id}` : `Empty Preset ${id}`) : `${commandState.mode} Preset ${id}`}
+                onClick={() => void handleSlotClick(id, slot)}
                 onContextMenu={(event) => {
                   event.preventDefault();
                   setEditor(slot ?? createEmptyPresetSlot(id, category));
@@ -759,6 +882,7 @@ export function PresetsWindow({ config, onConfigChange }: WindowToolProps) {
                   appearance={slot?.appearance ?? createDefaultNamedAppearance(`${presetCategoryLabel(category)} ${id}`)}
                   fallbackLabel={String(id)}
                   empty={!slot}
+                  active={commandState.source?.pool === "preset" && commandState.source.category === category && Number(commandState.source.id) === id}
                   height={48}
                   compact
                 />
@@ -1043,6 +1167,16 @@ function presetValueMatchesCategory(value: ProgrammerValue, category: PresetCate
   const attr = value.attribute.toLowerCase();
   if (category === "shapers") return group.includes("shaper") || attr.includes("blade") || attr.includes("shaper");
   return group.includes(category) || attr.includes(category);
+}
+
+function groupPoolStatus(mode: string) {
+  if (mode === "store") return "Store: click any slot to save current fixture selection";
+  if (mode === "update") return "Update: click a slot to overwrite it with current fixture selection";
+  if (mode === "edit") return "Edit: click a slot to edit naming and appearance";
+  if (mode === "delete") return "Delete: click a slot to clear it";
+  if (mode === "copy") return "Copy: click source group, then destination slot";
+  if (mode === "move") return "Move: click source group, then destination slot";
+  return "Recall: click stored groups to select fixtures";
 }
 
 function normalizeGroupSlots(value: unknown): GroupSlot[] {

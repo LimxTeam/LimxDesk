@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import type { CSSProperties } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { clearCommandEntry, useCommandRuntimeSnapshot } from "../command/commandRuntime";
 import {
   clearWorkspaceRuntimeCache,
 } from "./workspaceRuntime";
@@ -123,6 +124,7 @@ export function SequenceSheetWindow() {
   const [singleStepName, setSingleStepName] = useState("");
   const [status, setStatus] = useState("No show loaded");
   const [busy, setBusy] = useState(false);
+  const commandState = useCommandRuntimeSnapshot();
 
   const selectedSequence = useMemo(
     () =>
@@ -248,14 +250,14 @@ export function SequenceSheetWindow() {
     await runCommand("sequence_create", { name: null });
   }
 
-  async function storeCue() {
+  async function storeCue(cueId = selectedCueId || null, storeMode: "merge" | "overwrite" = "merge") {
     await runCommand("sequence_store_programmer", {
       request: {
         sequenceId: selectedSequence?.id ?? null,
-        cueId: selectedCueId || null,
-        cueNumber: selectedCueId ? null : nextCueNumber(selectedSequence),
+        cueId,
+        cueNumber: cueId ? null : nextCueNumber(selectedSequence),
         cueName: null,
-        storeMode: "merge",
+        storeMode,
       },
     });
   }
@@ -315,6 +317,27 @@ export function SequenceSheetWindow() {
     void runCommand("sequence_select", { sequenceId });
   }
 
+  function handleCueRowClick(cue: CueModel) {
+    if (commandState.mode === "delete") {
+      void deleteCue(cue);
+      clearCommandEntry();
+      return;
+    }
+    if (commandState.mode === "store") {
+      setSelectedCueId(cue.id);
+      void storeCue(cue.id, "merge");
+      clearCommandEntry();
+      return;
+    }
+    if (commandState.mode === "update") {
+      setSelectedCueId(cue.id);
+      void storeCue(cue.id, "overwrite");
+      clearCommandEntry();
+      return;
+    }
+    setSelectedCueId(cue.id);
+  }
+
   return (
     <div style={rootStyle}>
       <div style={toolbarStyle}>
@@ -334,7 +357,7 @@ export function SequenceSheetWindow() {
         <button className="lx-btn lx-btn-ghost" type="button" disabled={busy} onClick={createSequence}>
           New Sequence
         </button>
-        <button className="lx-btn lx-btn-primary" type="button" disabled={busy} onClick={storeCue}>
+        <button className="lx-btn lx-btn-primary" type="button" disabled={busy} onClick={() => void storeCue()}>
           Store Cue
         </button>
         <input
@@ -423,7 +446,7 @@ export function SequenceSheetWindow() {
               return (
                 <tr
                   key={cue.id}
-                  onClick={() => setSelectedCueId(cue.id)}
+                  onClick={() => handleCueRowClick(cue)}
                   style={{
                     height: 36,
                     background: current

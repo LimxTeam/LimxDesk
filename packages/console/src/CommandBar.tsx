@@ -1,14 +1,21 @@
 import { useState, useRef, type KeyboardEvent } from "react";
 import { Keyboard, Globe, Mail, Network, Play } from "lucide-react";
+import { appendCommandToken, clearCommandEntry, useCommandRuntimeSnapshot } from "./command/commandRuntime";
 
 export function CommandBar() {
   const [value, setValue] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
+  const commandState = useCommandRuntimeSnapshot();
 
   function handleKeyDown(e: KeyboardEvent<HTMLInputElement>) {
     if (e.key === "Enter" && value.trim()) {
-      // TODO: 后续接入命令解析器
-      console.log("[CMD]", value.trim());
+      appendCommandToken(value.trim());
+      setValue("");
+      return;
+    }
+
+    if (e.key === "Escape") {
+      clearCommandEntry();
       setValue("");
     }
   }
@@ -34,7 +41,7 @@ export function CommandBar() {
           flexShrink: 0,
         }}
       >
-        DESK
+        {commandState.mode === "idle" ? "DESK" : commandState.mode.toUpperCase()}
       </span>
 
       {/* 命令输入区 */}
@@ -53,10 +60,10 @@ export function CommandBar() {
       >
         <input
           ref={inputRef}
-          value={value}
+          value={value || commandLinePreview(commandState.tokens)}
           onChange={(e) => setValue(e.target.value)}
           onKeyDown={handleKeyDown}
-          placeholder="输入命令…"
+          placeholder={commandState.status || "输入命令…"}
           spellCheck={false}
           style={{
             width: "100%",
@@ -96,4 +103,8 @@ export function CommandBar() {
       </div>
     </div>
   );
+}
+
+function commandLinePreview(tokens: string[]) {
+  return tokens.length > 0 ? tokens.join(" ") : "";
 }

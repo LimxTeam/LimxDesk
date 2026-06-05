@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import type { CSSProperties } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { clearCommandEntry, pushCommandHistory, useCommandRuntimeSnapshot } from "../command/commandRuntime";
 import { clearWorkspaceRuntimeCache } from "./workspaceRuntime";
 
 interface PlaybackDocument {
@@ -97,6 +98,7 @@ export function PlaybackWindow() {
   const [selectedSequenceId, setSelectedSequenceId] = useState("");
   const [selectedExecutorId, setSelectedExecutorId] = useState("");
   const [status, setStatus] = useState("Ready");
+  const commandState = useCommandRuntimeSnapshot();
 
   const page = useMemo(
     () =>
@@ -210,34 +212,89 @@ export function PlaybackWindow() {
     }
   }
 
-  async function assignExecutor(executor: Executor) {
+  async function assignExecutor(executor: Executor, recordHistory = true) {
     if (!page || !selectedSequence) {
       setStatus("Create or select a sequence before assigning playback.");
       return;
     }
+    const previousAssignment = executor.assignment;
+    const pageId = page.id;
+    const executorId = executor.id;
+    const sequenceId = selectedSequence.id;
     try {
       const document = await invoke<PlaybackDocument>("playback_assign_executor", {
-        pageId: page.id,
-        executorId: executor.id,
-        sequenceId: selectedSequence.id,
+        pageId,
+        executorId,
+        sequenceId,
       });
       setPlayback(document);
-      setSelectedExecutorId(executor.id);
+      setSelectedExecutorId(executorId);
+      if (recordHistory) {
+        pushCommandHistory({
+          label: `Assign Executor ${executor.number}`,
+          undo: async () => {
+            if (previousAssignment?.kind === "sequence") {
+              setPlayback(await invoke<PlaybackDocument>("playback_assign_executor", {
+                pageId,
+                executorId,
+                sequenceId: previousAssignment.objectId,
+              }));
+            } else {
+              setPlayback(await invoke<PlaybackDocument>("playback_clear_executor", { pageId, executorId }));
+            }
+          },
+          redo: async () => {
+            setPlayback(await invoke<PlaybackDocument>("playback_assign_executor", { pageId, executorId, sequenceId }));
+          },
+        });
+      }
     } catch (error) {
       setStatus(String(error));
     }
   }
 
-  async function clearExecutor(executor: Executor) {
+  async function clearExecutor(executor: Executor, recordHistory = true) {
     if (!page) return;
+    const previousAssignment = executor.assignment;
+    const pageId = page.id;
+    const executorId = executor.id;
     try {
       setPlayback(await invoke<PlaybackDocument>("playback_clear_executor", {
-        pageId: page.id,
-        executorId: executor.id,
+        pageId,
+        executorId,
       }));
+      if (recordHistory && previousAssignment?.kind === "sequence") {
+        pushCommandHistory({
+          label: `Clear Executor ${executor.number}`,
+          undo: async () => {
+            setPlayback(await invoke<PlaybackDocument>("playback_assign_executor", {
+              pageId,
+              executorId,
+              sequenceId: previousAssignment.objectId,
+            }));
+          },
+          redo: async () => {
+            setPlayback(await invoke<PlaybackDocument>("playback_clear_executor", { pageId, executorId }));
+          },
+        });
+      }
     } catch (error) {
       setStatus(String(error));
     }
+  }
+
+  function handleExecutorPrimary(executor: Executor) {
+    if (commandState.mode === "store" || commandState.mode === "update") {
+      void assignExecutor(executor);
+      clearCommandEntry();
+      return;
+    }
+    if (commandState.mode === "delete") {
+      void clearExecutor(executor);
+      clearCommandEntry();
+      return;
+    }
+    setSelectedExecutorId(executor.id);
   }
 
   async function fireExecutor(executor: Executor, action: "go" | "back" | "pause" | "off" | "flashOn" | "flashOff" | "toggle") {
@@ -321,7 +378,7 @@ export function PlaybackWindow() {
                     sequence={sequence}
                     state={state}
                     selected={selected}
-                    onSelect={() => setSelectedExecutorId(executor.id)}
+                    onSelect={() => handleExecutorPrimary(executor)}
                     onAssign={() => assignExecutor(executor)}
                     onClear={() => clearExecutor(executor)}
                     onFire={(action) => fireExecutor(executor, action)}

@@ -1,4 +1,5 @@
 import { useCallback, useState } from "react";
+import { useCommandRuntimeSnapshot, type DeskCommandMode, type DeskCommandTarget } from "../command/commandRuntime";
 
 const KEY_HEIGHT = 32;
 const GAP = 4;
@@ -25,7 +26,8 @@ const COMMAND_KEYS: KeyDef[] = [
   { label: "Group", span: 3 },
   { label: "Preset", span: 3 },
   { label: "ESC", span: 4 },
-  { label: "Oops", tone: "danger", span: 4 },
+  { label: "Undo", tone: "danger", span: 2 },
+  { label: "Redo", tone: "danger", span: 2 },
   { label: "Clear", tone: "danger", span: 4 },
   { label: "Store", span: 4 },
   { label: "Update", span: 4 },
@@ -104,14 +106,14 @@ function getPressedStyle(tone: KeyTone): React.CSSProperties {
   };
 }
 
-function keyStyle(key: KeyDef, isPressed: boolean): React.CSSProperties {
+function keyStyle(key: KeyDef, isPressed: boolean, isActive: boolean): React.CSSProperties {
   const tone = key.tone ?? "neutral";
   const numeric = /^[0-9.]$/.test(key.label);
   const depth = isPressed
     ? getPressedStyle(tone).boxShadow
     : "inset 0 1px 1px rgba(255, 255, 255, 0.14), inset 0 -7px 13px rgba(0, 0, 0, 0.22), 0 2px 4px rgba(0, 0, 0, 0.38)";
 
-  return {
+  const style: React.CSSProperties = {
     ...toneStyle[tone],
     ...(isPressed ? getPressedStyle(tone) : {}),
     minWidth: 0,
@@ -142,6 +144,15 @@ function keyStyle(key: KeyDef, isPressed: boolean): React.CSSProperties {
     transition:
       "transform var(--lx-duration-instant) var(--lx-ease-out), filter var(--lx-duration-instant) var(--lx-ease-out), box-shadow var(--lx-duration-instant) var(--lx-ease-out), border-color var(--lx-duration-fast) var(--lx-ease-out)",
   };
+
+  if (!isActive) return style;
+  return {
+    ...style,
+    borderColor: "rgba(245, 184, 77, 0.78)",
+    color: tone === "execute" ? "#18130A" : "#FFD76A",
+    boxShadow:
+      "inset 0 1px 1px rgba(255, 255, 255, 0.14), inset 0 -7px 13px rgba(0, 0, 0, 0.22), 0 0 0 1px rgba(245, 184, 77, 0.34)",
+  };
 }
 
 function keyGridStyle(columns: string): React.CSSProperties {
@@ -161,6 +172,7 @@ export interface CommandButtonPanelProps {
 
 export function CommandButtonPanel({ onButtonPress }: CommandButtonPanelProps) {
   const [pressed, setPressed] = useState<string | null>(null);
+  const commandState = useCommandRuntimeSnapshot();
 
   const handlePress = useCallback(
     (label: string) => {
@@ -175,8 +187,19 @@ export function CommandButtonPanel({ onButtonPress }: CommandButtonPanelProps) {
     <button
       key={key.label}
       onClick={() => handlePress(key.label)}
+      disabled={key.label === "Undo" ? commandState.undoCount === 0 : key.label === "Redo" ? commandState.redoCount === 0 : false}
       style={{
-        ...keyStyle(key, pressed === key.label),
+        ...keyStyle(key, pressed === key.label, isKeyActive(key.label, commandState.mode, commandState.target)),
+        opacity:
+          (key.label === "Undo" && commandState.undoCount === 0) ||
+          (key.label === "Redo" && commandState.redoCount === 0)
+            ? 0.48
+            : undefined,
+        cursor:
+          (key.label === "Undo" && commandState.undoCount === 0) ||
+          (key.label === "Redo" && commandState.redoCount === 0)
+            ? "not-allowed"
+            : "pointer",
         gridColumn: key.span ? `span ${key.span}` : undefined,
       }}
     >
@@ -211,4 +234,27 @@ export function CommandButtonPanel({ onButtonPress }: CommandButtonPanelProps) {
       </div>
     </div>
   );
+}
+
+function isKeyActive(label: string, mode: DeskCommandMode, target: DeskCommandTarget | null) {
+  const modeByLabel: Partial<Record<string, DeskCommandMode>> = {
+    Store: "store",
+    Update: "update",
+    Edit: "edit",
+    Delete: "delete",
+    Copy: "copy",
+    Move: "move",
+    Select: "select",
+    On: "on",
+    Off: "off",
+    Stomp: "stomp",
+  };
+  const targetByLabel: Partial<Record<string, DeskCommandTarget>> = {
+    Fixture: "fixture",
+    Group: "group",
+    Preset: "preset",
+    Sequence: "sequence",
+    Cue: "cue",
+  };
+  return modeByLabel[label] === mode || targetByLabel[label] === target;
 }

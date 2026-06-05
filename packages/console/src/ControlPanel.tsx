@@ -1,14 +1,22 @@
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { dynamicIsland } from "@limxdesk/notifications";
 import { AttributeTabBar } from "./components/AttributeTabBar";
 import { ToolButtonGroup } from "./components/ToolButtonGroup";
 import { BigEncoderWheel } from "./components/BigEncoderWheel";
 import { ModeButtonBar } from "./components/ModeButtonBar";
 import { CommandButtonPanel } from "./components/CommandButtonPanel";
 import { EncoderInfoBar } from "./components/EncoderInfoBar";
-import { clearWorkspaceRuntimeCache } from "./workspace/workspaceRuntime";
+import {
+  activateCommandMode,
+  appendCommandToken,
+  clearCommandEntry,
+  redoLastCommand,
+  setCommandTarget,
+  undoLastCommand,
+  type DeskCommandMode,
+  type DeskCommandTarget,
+} from "./command/commandRuntime";
 import type { AttributeTab } from "./components/AttributeTabBar";
 
 interface EncoderParam {
@@ -405,8 +413,24 @@ export function ControlPanel() {
   }
 
   function handleCommandButton(label: string) {
+    if (label === "Undo") {
+      void undoLastCommand();
+      return;
+    }
+
+    if (label === "Redo") {
+      void redoLastCommand();
+      return;
+    }
+
+    if (label === "ESC") {
+      clearCommandEntry();
+      return;
+    }
+
     if (label === "Clear") {
       clearEncoderWriteState();
+      clearCommandEntry("Clear programmer");
       void invoke("programmer_clear", { target: "contextual" })
         .then(() => refreshRuntimeData())
         .catch((error) => {
@@ -415,39 +439,25 @@ export function ControlPanel() {
       return;
     }
 
-    if (label === "Store") {
-      void storeSingleStepProgram();
+    const mode = commandModeForButton(label);
+    if (mode) {
+      activateCommandMode(mode);
+      return;
     }
-  }
 
-  async function storeSingleStepProgram() {
-    try {
-      clearEncoderWriteState();
-      const result = await invoke<{ sequence: { name: string; cues: unknown[] } }>(
-        "sequence_store_single_step_program",
-        {
-          request: {
-            sequenceId: null,
-            name: null,
-            storeMode: "overwrite",
-          },
-        },
-      );
-      clearWorkspaceRuntimeCache(["frames"]);
-      dynamicIsland.show({
-        type: "success",
-        title: "单步程序已保存",
-        subtitle: `${result.sequence.name} / ${result.sequence.cues.length} cue`,
-        duration: 1800,
-      });
-    } catch (error) {
-      dynamicIsland.show({
-        type: "error",
-        title: "保存单步程序失败",
-        subtitle: String(error),
-        duration: 4200,
-      });
+    const target = commandTargetForButton(label);
+    if (target) {
+      setCommandTarget(target);
+      appendCommandToken(label);
+      return;
     }
+
+    if (label === "Please") {
+      clearCommandEntry("Command executed");
+      return;
+    }
+
+    appendCommandToken(label);
   }
 
   return (
@@ -679,6 +689,29 @@ function resolveProgrammerValue(programmer: Programmer, fixtureId: string, attri
   );
   if (!match) return null;
   return formatProgrammerScalar(match.value, attribute);
+}
+
+function commandModeForButton(label: string): DeskCommandMode | null {
+  if (label === "Store") return "store";
+  if (label === "Update") return "update";
+  if (label === "Edit") return "edit";
+  if (label === "Delete") return "delete";
+  if (label === "Copy") return "copy";
+  if (label === "Move") return "move";
+  if (label === "Select") return "select";
+  if (label === "On") return "on";
+  if (label === "Off") return "off";
+  if (label === "Stomp") return "stomp";
+  return null;
+}
+
+function commandTargetForButton(label: string): DeskCommandTarget | null {
+  if (label === "Fixture") return "fixture";
+  if (label === "Group") return "group";
+  if (label === "Preset") return "preset";
+  if (label === "Sequence") return "sequence";
+  if (label === "Cue") return "cue";
+  return null;
 }
 
 function isProgrammerAttributeActive(programmer: Programmer, fixtureId: string, attribute: string) {
