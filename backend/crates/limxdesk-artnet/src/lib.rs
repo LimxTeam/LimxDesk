@@ -55,6 +55,15 @@ pub fn encode_sacn_dmp(
     sequence: u8,
     source_name: &str,
 ) -> ProtocolResult<Vec<u8>> {
+    encode_sacn_dmp_with_priority(frame, sequence, source_name, 100)
+}
+
+pub fn encode_sacn_dmp_with_priority(
+    frame: &DmxUniverseFrame,
+    sequence: u8,
+    source_name: &str,
+    priority: u8,
+) -> ProtocolResult<Vec<u8>> {
     validate_frame(frame)?;
     let property_count = (frame.data.len() + 1) as u16;
     let root_pdu_length = 38 + 77 + 11 + usize::from(property_count);
@@ -76,7 +85,7 @@ pub fn encode_sacn_dmp(
     let len = bytes.len().min(source.len());
     source[..len].copy_from_slice(&bytes[..len]);
     packet.extend_from_slice(&source);
-    packet.push(100);
+    packet.push(priority.min(200));
     packet.extend_from_slice(&0x0000_u16.to_be_bytes());
     packet.push(sequence);
     packet.push(0);
@@ -146,5 +155,21 @@ mod tests {
         assert_eq!(packet[111], 4);
         assert_eq!(packet[125], 0);
         assert_eq!(&packet[126..], &[1, 2, 3]);
+    }
+
+    #[test]
+    fn encodes_sacn_priority() {
+        let packet = encode_sacn_dmp_with_priority(
+            &DmxUniverseFrame {
+                universe: 1,
+                data: vec![1],
+            },
+            4,
+            "LimxDesk",
+            190,
+        )
+        .unwrap();
+
+        assert_eq!(packet[108], 190);
     }
 }

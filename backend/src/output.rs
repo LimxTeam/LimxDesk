@@ -1,7 +1,7 @@
 use crate::{events, fixture_types, patch, programmer::ProgrammerState, show::ShowRuntimeState};
 use limxdesk_artnet::{
-    encode_artdmx, encode_sacn_dmp, DmxUniverseFrame as ProtocolUniverseFrame, ARTNET_PORT,
-    SACN_PORT,
+    encode_artdmx, encode_sacn_dmp_with_priority, DmxUniverseFrame as ProtocolUniverseFrame,
+    ARTNET_PORT, SACN_PORT,
 };
 use limxdesk_dmx::{
     render_programmer_to_dmx, DmxAttributeProfile, DmxAttributeSlot, DmxFixturePatch,
@@ -9,12 +9,14 @@ use limxdesk_dmx::{
 };
 use limxdesk_fixture_types::FixtureTypeEntry;
 use limxdesk_network::{
-    send_packets, NetworkOutputTarget, NetworkPacket, NetworkProtocol, UdpPacketTransport,
+    enumerate_network_interfaces, send_packets, NetworkInterfaceInfo, NetworkOutputMode,
+    NetworkOutputTarget, NetworkPacket, NetworkProtocol, UdpPacketTransport,
 };
 use limxdesk_patch::PatchDocument;
 use limxdesk_programmer::{Programmer, ProgrammerMode};
 use limxdesk_showfile::ShowRepository;
 use serde::{Deserialize, Serialize};
+use std::net::Ipv4Addr;
 use std::sync::Mutex;
 use tauri::{AppHandle, Manager, State};
 
@@ -81,6 +83,11 @@ pub fn output_get_targets(
 }
 
 #[tauri::command]
+pub fn output_network_interfaces() -> Result<Vec<NetworkInterfaceInfo>, String> {
+    enumerate_network_interfaces().map_err(|error| error.to_string())
+}
+
+#[tauri::command]
 pub fn output_set_targets(
     targets: Vec<NetworkOutputTarget>,
     show_state: State<'_, ShowRuntimeState>,
@@ -88,6 +95,7 @@ pub fn output_set_targets(
     app: AppHandle,
 ) -> Result<Vec<NetworkOutputTarget>, String> {
     let targets = normalize_targets(targets);
+    validate_targets(&targets)?;
     let Some(show) = show_state.current()? else {
         return Err(
             "No show file loaded. Create or load a show before saving output settings.".to_string(),
@@ -249,15 +257,18 @@ fn build_network_packets(
 ) -> Result<Vec<NetworkPacket>, String> {
     let mut packets = Vec::new();
     for target in targets.iter().filter(|target| target.enabled) {
-        for frame in frames {
+        for frame in frames
+            .iter()
+            .filter_map(|frame| map_frame_for_target(frame, target))
+        {
             let protocol_frame = ProtocolUniverseFrame {
                 universe: frame.universe,
-                data: frame.data.clone(),
+                data: frame.data,
             };
             let (payload, destination, port) = match target.protocol {
                 NetworkProtocol::ArtNet => (
                     encode_artdmx(&protocol_frame, sequence).map_err(|error| error.to_string())?,
-                    target.destination.clone(),
+                    resolve_artnet_destination(target),
                     if target.port == 0 {
                         ARTNET_PORT
                     } else {
@@ -265,8 +276,13 @@ fn build_network_packets(
                     },
                 ),
                 NetworkProtocol::Sacn => (
-                    encode_sacn_dmp(&protocol_frame, sequence, "LimxDesk")
-                        .map_err(|error| error.to_string())?,
+                    encode_sacn_dmp_with_priority(
+                        &protocol_frame,
+                        sequence,
+                        "LimxDesk",
+                        target.priority,
+                    )
+                    .map_err(|error| error.to_string())?,
                     resolve_sacn_destination(target, frame.universe),
                     if target.port == 0 {
                         SACN_PORT
@@ -277,8 +293,11 @@ fn build_network_packets(
             };
             packets.push(NetworkPacket {
                 protocol: target.protocol,
+                local_address: target.local_address.clone(),
                 destination,
                 port,
+                ttl: Some(target.ttl),
+                delay_ms: target.delay_ms,
                 payload,
             });
         }
@@ -286,11 +305,60 @@ fn build_network_packets(
     Ok(packets)
 }
 
-fn resolve_sacn_destination(target: &NetworkOutputTarget, universe: u16) -> String {
-    if !target.destination.eq_ignore_ascii_case("multicast") {
-        return target.destination.clone();
+struct TargetFrame {
+    universe: u16,
+    data: Vec<u8>,
+}
+
+fn map_frame_for_target(
+    frame: &DmxUniverseFrame,
+    target: &NetworkOutputTarget,
+) -> Option<TargetFrame> {
+    if target.amount == 0 || frame.universe < target.local_universe {
+        return None;
     }
-    format!("239.255.{}.{}", universe / 256, universe % 256)
+    let offset = frame.universe - target.local_universe;
+    if offset >= target.amount {
+        return None;
+    }
+
+    let universe = match target.protocol {
+        NetworkProtocol::ArtNet => {
+            let port_address = u16::from(target.artnet_net) * 256
+                + u16::from(target.artnet_subnet) * 16
+                + u16::from(target.artnet_universe)
+                + offset;
+            port_address.checked_add(1)?
+        }
+        NetworkProtocol::Sacn => target.sacn_universe.checked_add(offset)?,
+    };
+
+    Some(TargetFrame {
+        universe,
+        data: frame.data.clone(),
+    })
+}
+
+fn resolve_artnet_destination(target: &NetworkOutputTarget) -> String {
+    match target.mode {
+        NetworkOutputMode::OutputBroadcast => default_artnet_broadcast(),
+        NetworkOutputMode::OutputMulticast | NetworkOutputMode::OutputUnicast => {
+            default_if_empty(&target.destination, &default_artnet_broadcast())
+        }
+    }
+}
+
+fn resolve_sacn_destination(target: &NetworkOutputTarget, universe: u16) -> String {
+    if target.mode == NetworkOutputMode::OutputMulticast
+        || target.destination.eq_ignore_ascii_case("multicast")
+    {
+        return format!("239.255.{}.{}", universe / 256, universe % 256);
+    }
+
+    default_if_empty(
+        &target.destination,
+        &format!("239.255.{}.{}", universe / 256, universe % 256),
+    )
 }
 
 fn next_sequence(state: &State<'_, OutputState>) -> Result<u8, String> {
@@ -309,16 +377,38 @@ fn default_targets() -> Vec<NetworkOutputTarget> {
             id: "artnet-broadcast".to_string(),
             label: "Art-Net Broadcast".to_string(),
             protocol: NetworkProtocol::ArtNet,
-            destination: "255.255.255.255".to_string(),
+            mode: NetworkOutputMode::OutputBroadcast,
+            local_address: default_local_address(),
+            destination: default_artnet_broadcast(),
             port: ARTNET_PORT,
+            local_universe: 1,
+            amount: 256,
+            artnet_net: 0,
+            artnet_subnet: 0,
+            artnet_universe: 0,
+            sacn_universe: 1,
+            priority: 100,
+            ttl: 8,
+            delay_ms: 0.0,
             enabled: true,
         },
         NetworkOutputTarget {
             id: "sacn-multicast".to_string(),
             label: "sACN Multicast".to_string(),
             protocol: NetworkProtocol::Sacn,
+            mode: NetworkOutputMode::OutputMulticast,
+            local_address: default_local_address(),
             destination: "multicast".to_string(),
             port: SACN_PORT,
+            local_universe: 1,
+            amount: 8,
+            artnet_net: 0,
+            artnet_subnet: 0,
+            artnet_universe: 0,
+            sacn_universe: 1,
+            priority: 100,
+            ttl: 8,
+            delay_ms: 0.0,
             enabled: true,
         },
     ]
@@ -478,12 +568,16 @@ fn normalize_targets(targets: Vec<NetworkOutputTarget>) -> Vec<NetworkOutputTarg
 
     targets
         .into_iter()
-        .map(|mut target| {
+        .enumerate()
+        .map(|(index, mut target)| {
             if target.id.trim().is_empty() {
-                target.id = format!("{:?}-{}", target.protocol, target.destination);
+                target.id = format!("{:?}-{}", target.protocol, index + 1);
             }
             if target.label.trim().is_empty() {
-                target.label = target.id.clone();
+                target.label = default_label(target.protocol, index + 1);
+            }
+            if target.local_address.trim().is_empty() {
+                target.local_address = default_local_address();
             }
             if target.port == 0 {
                 target.port = match target.protocol {
@@ -491,9 +585,132 @@ fn normalize_targets(targets: Vec<NetworkOutputTarget>) -> Vec<NetworkOutputTarg
                     NetworkProtocol::Sacn => SACN_PORT,
                 };
             }
+            target.local_universe = target.local_universe.clamp(1, 63_999);
+            target.amount = target
+                .amount
+                .clamp(1, protocol_amount_limit(target.protocol));
+            target.delay_ms = if target.delay_ms.is_finite() {
+                target.delay_ms.clamp(0.0, 10_000.0)
+            } else {
+                0.0
+            };
+            target.priority = target.priority.min(200);
+            target.ttl = target.ttl.clamp(1, 255);
+            target.artnet_net = target.artnet_net.min(127);
+            target.artnet_subnet = target.artnet_subnet.min(15);
+            target.artnet_universe = target.artnet_universe.min(15);
+            target.sacn_universe = target.sacn_universe.clamp(1, 63_999);
+
+            match target.protocol {
+                NetworkProtocol::ArtNet => {
+                    if target.mode == NetworkOutputMode::OutputMulticast {
+                        target.mode = NetworkOutputMode::OutputBroadcast;
+                    }
+                    if target.destination.trim().is_empty()
+                        || target.mode == NetworkOutputMode::OutputBroadcast
+                    {
+                        target.destination = default_artnet_broadcast();
+                    }
+                }
+                NetworkProtocol::Sacn => {
+                    if target.mode == NetworkOutputMode::OutputBroadcast {
+                        target.mode = NetworkOutputMode::OutputMulticast;
+                    }
+                    if target.destination.trim().is_empty()
+                        || target.mode == NetworkOutputMode::OutputMulticast
+                    {
+                        target.destination = "multicast".to_string();
+                    }
+                }
+            }
             target
         })
         .collect()
+}
+
+fn validate_targets(targets: &[NetworkOutputTarget]) -> Result<(), String> {
+    for target in targets.iter().filter(|target| target.enabled) {
+        parse_ipv4(&target.local_address)
+            .map_err(|_| format!("{} local address is not a valid IPv4 address", target.label))?;
+        match target.protocol {
+            NetworkProtocol::ArtNet => {
+                if target.mode == NetworkOutputMode::OutputUnicast {
+                    parse_ipv4(&target.destination).map_err(|_| {
+                        format!(
+                            "{} Art-Net unicast destination is not a valid IPv4 address",
+                            target.label
+                        )
+                    })?;
+                }
+                let start = u16::from(target.artnet_net) * 256
+                    + u16::from(target.artnet_subnet) * 16
+                    + u16::from(target.artnet_universe);
+                if start.saturating_add(target.amount) > 32_768 {
+                    return Err(format!(
+                        "{} Art-Net universe range exceeds 15-bit port address",
+                        target.label
+                    ));
+                }
+            }
+            NetworkProtocol::Sacn => {
+                if target.mode == NetworkOutputMode::OutputUnicast {
+                    parse_ipv4(&target.destination).map_err(|_| {
+                        format!(
+                            "{} sACN unicast destination is not a valid IPv4 address",
+                            target.label
+                        )
+                    })?;
+                }
+                if target
+                    .sacn_universe
+                    .saturating_add(target.amount)
+                    .saturating_sub(1)
+                    > 63_999
+                {
+                    return Err(format!(
+                        "{} sACN universe range exceeds 63999",
+                        target.label
+                    ));
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn parse_ipv4(value: &str) -> Result<Ipv4Addr, std::net::AddrParseError> {
+    value.trim().parse::<Ipv4Addr>()
+}
+
+fn default_if_empty(value: &str, fallback: &str) -> String {
+    let value = value.trim();
+    if value.is_empty() {
+        fallback.to_string()
+    } else {
+        value.to_string()
+    }
+}
+
+fn default_local_address() -> String {
+    "0.0.0.0".to_string()
+}
+
+fn default_artnet_broadcast() -> String {
+    "255.255.255.255".to_string()
+}
+
+fn default_label(protocol: NetworkProtocol, index: usize) -> String {
+    match protocol {
+        NetworkProtocol::ArtNet => format!("Art-Net {index}"),
+        NetworkProtocol::Sacn => format!("sACN {index}"),
+    }
+}
+
+fn protocol_amount_limit(protocol: NetworkProtocol) -> u16 {
+    match protocol {
+        NetworkProtocol::ArtNet => 256,
+        NetworkProtocol::Sacn => 512,
+    }
 }
 
 #[cfg(test)]
@@ -507,8 +724,19 @@ mod tests {
             id: "sacn".to_string(),
             label: "sACN".to_string(),
             protocol: NetworkProtocol::Sacn,
+            mode: NetworkOutputMode::OutputMulticast,
+            local_address: "0.0.0.0".to_string(),
             destination: "multicast".to_string(),
             port: 0,
+            local_universe: 1,
+            amount: 8,
+            artnet_net: 0,
+            artnet_subnet: 0,
+            artnet_universe: 0,
+            sacn_universe: 1,
+            priority: 100,
+            ttl: 8,
+            delay_ms: 0.0,
             enabled: true,
         };
 
@@ -522,8 +750,19 @@ mod tests {
             id: "artnet".to_string(),
             label: "Art-Net".to_string(),
             protocol: NetworkProtocol::ArtNet,
+            mode: NetworkOutputMode::OutputUnicast,
+            local_address: "0.0.0.0".to_string(),
             destination: "127.0.0.1".to_string(),
             port: 0,
+            local_universe: 1,
+            amount: 1,
+            artnet_net: 0,
+            artnet_subnet: 0,
+            artnet_universe: 0,
+            sacn_universe: 1,
+            priority: 100,
+            ttl: 8,
+            delay_ms: 0.0,
             enabled: true,
         };
         let mut data = vec![0_u8; 512];

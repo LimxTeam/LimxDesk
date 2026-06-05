@@ -20,8 +20,19 @@ interface NetworkOutputTarget {
   id: string;
   label: string;
   protocol: "artNet" | "sacn";
+  mode: "outputBroadcast" | "outputUnicast" | "outputMulticast";
+  localAddress: string;
   destination: string;
   port: number;
+  localUniverse: number;
+  amount: number;
+  artnetNet: number;
+  artnetSubnet: number;
+  artnetUniverse: number;
+  sacnUniverse: number;
+  priority: number;
+  ttl: number;
+  delayMs: number;
   enabled: boolean;
 }
 
@@ -247,7 +258,10 @@ export function OutputSettingsPage() {
                 </span>
               </div>
               <div className="lx-code" style={{ marginTop: 6, color: "var(--lx-fg-tertiary)" }}>
-                {target.protocol} / {target.destination}:{target.port}
+                {target.protocol} / {target.mode} / {target.localAddress}{" -> "}{targetDestinationLabel(target)}
+              </div>
+              <div className="lx-code" style={{ marginTop: 4, color: "var(--lx-fg-tertiary)" }}>
+                Local {target.localUniverse}-{target.localUniverse + target.amount - 1} / {protocolUniverseLabel(target)} / TTL {target.ttl}
               </div>
             </div>
           ))}
@@ -267,6 +281,18 @@ function Metric({ label, value }: { label: string; value: number }) {
       <div style={{ color: "var(--lx-fg-primary)", fontSize: 20, fontWeight: 850 }}>{value}</div>
     </div>
   );
+}
+
+function targetDestinationLabel(target: NetworkOutputTarget) {
+  if (target.protocol === "sacn" && target.mode === "outputMulticast") return `multicast:${target.port}`;
+  return `${target.destination}:${target.port}`;
+}
+
+function protocolUniverseLabel(target: NetworkOutputTarget) {
+  if (target.protocol === "artNet") {
+    return `Net ${target.artnetNet} / Subnet ${target.artnetSubnet} / Universe ${target.artnetUniverse}`;
+  }
+  return `sACN ${target.sacnUniverse} / Priority ${target.priority}`;
 }
 
 function errorToMessage(error: unknown) {

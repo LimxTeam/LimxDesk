@@ -98,6 +98,7 @@ pub fn run() {
             programmer::programmer_store_values,
             programmer::programmer_reset,
             output::output_get_targets,
+            output::output_network_interfaces,
             output::output_set_targets,
             output::output_render_dmx,
             output::output_send_current,
