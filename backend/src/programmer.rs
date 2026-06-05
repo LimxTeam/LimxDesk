@@ -1,8 +1,9 @@
 use crate::{events, fixture_selection::FixtureSelectionState, output, show::ShowRuntimeState};
-use limxdesk_fixture_selection::FixtureSelectionMode;
+use limxdesk_fixture_selection::{FixtureSelection, FixtureSelectionMode};
 use limxdesk_programmer::{
-    Programmer, ProgrammerClearResult, ProgrammerClearTarget, ProgrammerMode,
-    ProgrammerSetAttributeRequest, ProgrammerValue, SelectionTool, StoreUseSelection,
+    Programmer, ProgrammerAdjustAttributeRequest, ProgrammerClearResult, ProgrammerClearTarget,
+    ProgrammerMode, ProgrammerSetAttributeRequest, ProgrammerValue, SelectionTool,
+    StoreUseSelection,
 };
 use std::sync::Mutex;
 use tauri::{AppHandle, State};
@@ -118,6 +119,32 @@ pub fn programmer_set_attribute_for_selection(
     let programmer = programmer_state
         .current()?
         .set_attribute_for_selection(&selection, request)
+        .map_err(|error| error.to_string())?;
+    let programmer = programmer_state.set_current(programmer)?;
+    events::emit_programmer_changed(&app, &programmer);
+    if let Err(error) = output::request_output_send(&app) {
+        tracing::warn!("failed to request programmer output: {error}");
+    }
+    Ok(programmer)
+}
+
+#[tauri::command]
+pub fn programmer_adjust_attribute_for_selection(
+    request: ProgrammerAdjustAttributeRequest,
+    selection: Option<FixtureSelection>,
+    programmer_state: State<'_, ProgrammerState>,
+    selection_state: State<'_, FixtureSelectionState>,
+    _show_state: State<'_, ShowRuntimeState>,
+    _output_state: State<'_, output::OutputState>,
+    app: AppHandle,
+) -> Result<Programmer, String> {
+    let selection = match selection {
+        Some(selection) => selection,
+        None => selection_state.current()?,
+    };
+    let programmer = programmer_state
+        .current()?
+        .adjust_attribute_for_selection(&selection, request)
         .map_err(|error| error.to_string())?;
     let programmer = programmer_state.set_current(programmer)?;
     events::emit_programmer_changed(&app, &programmer);

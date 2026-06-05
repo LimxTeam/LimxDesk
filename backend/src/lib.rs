@@ -93,6 +93,7 @@ pub fn run() {
             programmer::programmer_apply_selection_tool,
             programmer::programmer_select_part,
             programmer::programmer_set_attribute_for_selection,
+            programmer::programmer_adjust_attribute_for_selection,
             programmer::programmer_clear,
             programmer::programmer_store_values,
             programmer::programmer_reset,

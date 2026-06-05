@@ -130,17 +130,21 @@ type ProgrammerLayer = "absolute" | "relative" | "fade" | "delay";
 type ProgrammerValueSource = "manual" | "preset" | "output";
 type AttributeGroupId = "dimmer" | "position" | "gobo" | "color" | "beam" | "focus" | "control";
 type FixtureAttributeValueKind = "percent" | "angle" | "range" | string;
-interface ProgrammerSetAttributeRequest {
+interface ProgrammerAdjustAttributeRequest {
   attribute: string;
   featureGroup: string;
   layer: ProgrammerLayer;
-  value: ProgrammerScalar;
+  delta: number;
+  valueKind: string;
+  minValue: number | null;
+  maxValue: number | null;
+  defaultValue: number | null;
   source: ProgrammerValueSource;
 }
 
-interface PendingProgrammerWrite {
-  request: ProgrammerSetAttributeRequest;
-  numeric: number;
+interface PendingProgrammerAdjustment {
+  request: ProgrammerAdjustAttributeRequest;
+  selection: FixtureSelection;
 }
 
 const ENCODERS_PER_PAGE = 4;
@@ -178,10 +182,8 @@ export function ControlPanel() {
   const selectedFixtureIdRef = useRef("");
   const fixturesRef = useRef<PatchFixture[]>([]);
   const programmerRef = useRef(programmer);
-  const selectionRef = useRef(selection);
-  const localEncoderNumeric = useRef<Map<string, number>>(new Map());
-  const pendingEncoderWrites = useRef<Map<string, PendingProgrammerWrite>>(new Map());
-  const inFlightEncoderWrites = useRef<Set<string>>(new Set());
+  const pendingEncoderAdjustments = useRef<Map<string, PendingProgrammerAdjustment>>(new Map());
+  const inFlightEncoderAdjustments = useRef<Set<string>>(new Set());
   const encoderWriteGeneration = useRef(0);
 
   useEffect(() => {
@@ -195,7 +197,6 @@ export function ControlPanel() {
     const register = async () => {
       const selectionChanged = await listen<FixtureSelection>("fixture-selection:changed", (event) => {
         clearEncoderWriteState();
-        selectionRef.current = event.payload;
         setSelection(event.payload);
         const nextSelectedId = event.payload.primaryFixtureId ?? "";
         selectedFixtureIdRef.current = nextSelectedId;
@@ -205,7 +206,6 @@ export function ControlPanel() {
         }
       });
       const programmerChanged = await listen<Programmer>("programmer:changed", (event) => {
-        if (hasEncoderWritesInProgress()) return;
         programmerRef.current = event.payload;
         setProgrammer(event.payload);
       });
@@ -283,10 +283,6 @@ export function ControlPanel() {
   }, [programmer]);
 
   useEffect(() => {
-    selectionRef.current = selection;
-  }, [selection]);
-
-  useEffect(() => {
     if (tabs.length === 0) return;
     if (!tabs.some((tab) => tab.id === activeTab)) {
       setActiveTab(tabs[0].id);
@@ -307,7 +303,6 @@ export function ControlPanel() {
       setFixtures(nextFixtures);
       setFixtureTypes(types);
       setSelection(nextSelection);
-      selectionRef.current = nextSelection;
       setProgrammer(currentProgrammer);
       programmerRef.current = currentProgrammer;
       clearEncoderWriteState();
@@ -348,70 +343,62 @@ export function ControlPanel() {
   function handleEncoderDelta(encoder: EncoderParam, delta: number) {
     if (!selectedFixtureIdRef.current || !encoder.attribute || !encoder.featureGroup || !encoder.layer) return;
     const key = encoderWriteKey(selectedFixtureIdRef.current, encoder);
-    const current =
-      localEncoderNumeric.current.get(key) ??
-      resolveProgrammerNumeric(programmerRef.current, selectedFixtureIdRef.current, encoder);
-    const value = deriveProgrammerValue(encoder, current, delta);
-    const numeric = value.numeric ?? current;
     const request = {
       attribute: encoder.attribute,
       featureGroup: encoder.featureGroup,
       layer: encoder.layer,
-      value,
+      delta,
+      valueKind: encoder.valueKind ?? "percent",
+      minValue: encoder.minValue ?? null,
+      maxValue: encoder.maxValue ?? null,
+      defaultValue: encoder.defaultValue ?? null,
       source: "manual",
-    } satisfies ProgrammerSetAttributeRequest;
+    } satisfies ProgrammerAdjustAttributeRequest;
 
-    localEncoderNumeric.current.set(key, numeric);
-    setProgrammer((currentProgrammer) => {
-      const nextProgrammer = applyOptimisticProgrammerValue(currentProgrammer, selectionRef.current, request);
-      programmerRef.current = nextProgrammer;
-      return nextProgrammer;
-    });
-    queueProgrammerWrite(key, { request, numeric });
+    queueProgrammerAdjustment(key, { request, selection });
   }
 
-  function queueProgrammerWrite(key: string, write: PendingProgrammerWrite) {
-    pendingEncoderWrites.current.set(key, write);
-    if (inFlightEncoderWrites.current.has(key)) return;
-    void flushProgrammerWrite(key);
+  function queueProgrammerAdjustment(key: string, adjustment: PendingProgrammerAdjustment) {
+    const pending = pendingEncoderAdjustments.current.get(key);
+    if (pending) {
+      pending.request.delta += adjustment.request.delta;
+    } else {
+      pendingEncoderAdjustments.current.set(key, adjustment);
+    }
+    if (inFlightEncoderAdjustments.current.has(key)) return;
+    void flushProgrammerAdjustment(key);
   }
 
-  async function flushProgrammerWrite(key: string) {
-    const write = pendingEncoderWrites.current.get(key);
-    if (!write) return;
+  async function flushProgrammerAdjustment(key: string) {
+    const adjustment = pendingEncoderAdjustments.current.get(key);
+    if (!adjustment) return;
 
     const generation = encoderWriteGeneration.current;
-    pendingEncoderWrites.current.delete(key);
-    inFlightEncoderWrites.current.add(key);
+    pendingEncoderAdjustments.current.delete(key);
+    inFlightEncoderAdjustments.current.add(key);
 
     try {
-      const nextProgrammer = await invoke<Programmer>("programmer_set_attribute_for_selection", {
-        request: write.request,
+      const nextProgrammer = await invoke<Programmer>("programmer_adjust_attribute_for_selection", {
+        request: adjustment.request,
+        selection: adjustment.selection,
       });
-      if (generation === encoderWriteGeneration.current && !pendingEncoderWrites.current.has(key)) {
+      if (generation === encoderWriteGeneration.current) {
         programmerRef.current = nextProgrammer;
         setProgrammer(nextProgrammer);
       }
     } catch (error) {
       console.error("Failed to update programmer", error);
     } finally {
-      inFlightEncoderWrites.current.delete(key);
-      if (pendingEncoderWrites.current.has(key)) {
-        void flushProgrammerWrite(key);
-      } else if (generation === encoderWriteGeneration.current) {
-        localEncoderNumeric.current.delete(key);
+      inFlightEncoderAdjustments.current.delete(key);
+      if (pendingEncoderAdjustments.current.has(key)) {
+        void flushProgrammerAdjustment(key);
       }
     }
   }
 
-  function hasEncoderWritesInProgress() {
-    return pendingEncoderWrites.current.size > 0 || inFlightEncoderWrites.current.size > 0;
-  }
-
   function clearEncoderWriteState() {
     encoderWriteGeneration.current += 1;
-    localEncoderNumeric.current.clear();
-    pendingEncoderWrites.current.clear();
+    pendingEncoderAdjustments.current.clear();
   }
 
   function handleCommandButton(label: string) {
@@ -650,91 +637,8 @@ function resolveProgrammerValue(programmer: Programmer, fixtureId: string, attri
   return formatProgrammerScalar(match.value, attribute);
 }
 
-function resolveProgrammerNumeric(programmer: Programmer, fixtureId: string, encoder: EncoderParam) {
-  const buffer = programmer.mode === "preview" ? programmer.preview : programmer.live;
-  const values = buffer.parts.flatMap((part) => part.values);
-  const match = values.find(
-    (value) => value.fixtureId === fixtureId && value.attribute === encoder.attribute && value.active,
-  );
-  if (typeof match?.value.numeric === "number" && Number.isFinite(match.value.numeric)) {
-    return match.value.numeric;
-  }
-  return defaultAttributeNumeric(encoder);
-}
-
 function encoderWriteKey(fixtureId: string, encoder: EncoderParam) {
   return `${fixtureId}:${encoder.attribute ?? ""}:${encoder.layer ?? "absolute"}`;
-}
-
-function applyOptimisticProgrammerValue(
-  programmer: Programmer,
-  selection: FixtureSelection,
-  request: ProgrammerSetAttributeRequest,
-): Programmer {
-  const fixtureIds = selection.fixtureIds.length > 0
-    ? selection.fixtureIds
-    : selection.primaryFixtureId
-      ? [selection.primaryFixtureId]
-      : [];
-  if (fixtureIds.length === 0) return programmer;
-
-  const next = cloneProgrammer(programmer);
-  const buffer = next.mode === "preview" ? next.preview : next.live;
-  let part = buffer.parts.find((item) => item.id === buffer.selectedPartId);
-  if (!part) {
-    part = {
-      id: buffer.selectedPartId,
-      label: null,
-      values: [],
-    };
-    buffer.parts.push(part);
-  }
-
-  for (const fixtureId of fixtureIds) {
-    const nextValue: ProgrammerValue = {
-      fixtureId,
-      attribute: request.attribute,
-      featureGroup: request.featureGroup,
-      layer: request.layer,
-      value: request.value,
-      active: true,
-      source: request.source,
-    };
-    const existing = part.values.find(
-      (value) =>
-        value.fixtureId === fixtureId &&
-        value.attribute === request.attribute &&
-        value.layer === request.layer,
-    );
-    if (existing) {
-      Object.assign(existing, nextValue);
-    } else {
-      part.values.push(nextValue);
-    }
-  }
-
-  next.version += 1;
-  return next;
-}
-
-function cloneProgrammer(programmer: Programmer): Programmer {
-  const cloneBuffer = (buffer: ProgrammerBuffer): ProgrammerBuffer => ({
-    selectedPartId: buffer.selectedPartId,
-    parts: buffer.parts.map((part) => ({
-      id: part.id,
-      label: part.label,
-      values: part.values.map((value) => ({
-        ...value,
-        value: { ...value.value },
-      })),
-    })),
-  });
-
-  return {
-    ...programmer,
-    live: cloneBuffer(programmer.live),
-    preview: cloneBuffer(programmer.preview),
-  };
 }
 
 function formatProgrammerScalar(value: ProgrammerScalar, attribute: FixtureModeAttribute | string) {
@@ -785,54 +689,6 @@ function buildAttributeTabs(pageInfo: Record<string, EncoderGroup>): AttributeTa
   return tabs;
 }
 
-function deriveProgrammerValue(encoder: EncoderParam, current: number, delta: number): ProgrammerScalar {
-  const attribute = encoder.attribute ?? "";
-  const lower = attribute.toLowerCase();
-  if (encoder.valueKind === "angle" || lower.includes("pan") || lower.includes("tilt") || lower.includes("rotate") || lower.includes("rot")) {
-    const min = encoder.minValue ?? -180;
-    const max = encoder.maxValue ?? 180;
-    const value = clamp(current + delta * 0.5, Math.min(min, max), Math.max(min, max));
-    return {
-      numeric: value,
-      text: `${value.toFixed(1)}°`,
-    };
-  }
-
-  if (encoder.valueKind === "range") {
-    const min = encoder.minValue ?? 0;
-    const max = encoder.maxValue ?? 255;
-    const span = Math.max(1, Math.abs(max - min));
-    const value = clamp(current + (delta / 360) * span, Math.min(min, max), Math.max(min, max));
-    return {
-      numeric: Math.round(value),
-      text: String(Math.round(value)),
-    };
-  }
-
-  const percent = clamp(current + delta / 3.6, 0, 100);
-  return {
-    numeric: Math.round(percent),
-    text: `${Math.round(percent)}%`,
-  };
-}
-
 function titleCase(value: string) {
   return value.charAt(0).toUpperCase() + value.slice(1);
-}
-
-function defaultAttributeNumeric(encoder: EncoderParam) {
-  if (typeof encoder.defaultValue === "number" && Number.isFinite(encoder.defaultValue)) {
-    return encoder.defaultValue;
-  }
-
-  const attribute = encoder.attribute ?? "";
-  const lower = attribute.toLowerCase();
-  if (lower.includes("pan") || lower.includes("tilt") || lower.includes("rotate") || lower.includes("rot")) {
-    return 0;
-  }
-  return encoder.minValue ?? 0;
-}
-
-function clamp(value: number, min: number, max: number) {
-  return Math.min(max, Math.max(min, value));
 }

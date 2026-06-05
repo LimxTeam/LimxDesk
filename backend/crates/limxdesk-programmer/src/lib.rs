@@ -239,6 +239,20 @@ pub struct ProgrammerSetAttributeRequest {
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
+pub struct ProgrammerAdjustAttributeRequest {
+    pub attribute: String,
+    pub feature_group: String,
+    pub layer: ProgrammerLayer,
+    pub delta: f64,
+    pub value_kind: String,
+    pub min_value: Option<f64>,
+    pub max_value: Option<f64>,
+    pub default_value: Option<f64>,
+    pub source: ProgrammerValueSource,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ProgrammerClearResult {
     pub programmer: Programmer,
     pub clear_selection: bool,
@@ -298,6 +312,49 @@ impl Programmer {
                 feature_group: default_if_empty(&request.feature_group, "Control").to_string(),
                 layer: request.layer,
                 value: request.value.clone(),
+                active: true,
+                source: request.source,
+            });
+        }
+
+        self.bump_version();
+        Ok(self)
+    }
+
+    pub fn adjust_attribute_for_selection(
+        mut self,
+        selection: &FixtureSelection,
+        request: ProgrammerAdjustAttributeRequest,
+    ) -> ProgrammerResult<Self> {
+        self = self.sync_selection(selection);
+        let effective_selection = self.effective_fixture_selection();
+        if effective_selection.fixture_ids.is_empty() {
+            return Err(ProgrammerError::EmptySelection);
+        }
+        validate_attribute(&request.attribute)?;
+
+        let buffer = self.active_buffer_mut();
+        let selected_part_id = buffer.selected_part_id;
+        let part = buffer.ensure_part(selected_part_id)?;
+        for fixture_id in &effective_selection.fixture_ids {
+            let current = part
+                .values
+                .iter()
+                .find(|value| {
+                    value.fixture_id == *fixture_id
+                        && value.attribute == request.attribute
+                        && value.layer == request.layer
+                        && value.active
+                })
+                .and_then(|value| value.value.numeric)
+                .unwrap_or_else(|| request.default_numeric());
+            let value = request.adjusted_value(current);
+            part.upsert_value(ProgrammerValue {
+                fixture_id: fixture_id.clone(),
+                attribute: request.attribute.clone(),
+                feature_group: default_if_empty(&request.feature_group, "Control").to_string(),
+                layer: request.layer,
+                value,
                 active: true,
                 source: request.source,
             });
@@ -431,6 +488,65 @@ impl Programmer {
 
     fn bump_version(&mut self) {
         self.version = self.version.saturating_add(1);
+    }
+}
+
+impl ProgrammerAdjustAttributeRequest {
+    fn adjusted_value(&self, current: f64) -> ProgrammerScalar {
+        let lower = self.attribute.to_ascii_lowercase();
+        if self.value_kind.eq_ignore_ascii_case("angle")
+            || lower.contains("pan")
+            || lower.contains("tilt")
+            || lower.contains("rotate")
+            || lower.contains("rot")
+        {
+            let min = self.min_value.unwrap_or(-180.0);
+            let max = self.max_value.unwrap_or(180.0);
+            let value = clamp(current + self.delta * 0.5, min.min(max), min.max(max));
+            return ProgrammerScalar {
+                numeric: Some(round_to(value, 1)),
+                text: None,
+            };
+        }
+
+        if self.value_kind.eq_ignore_ascii_case("range") {
+            let min = self.min_value.unwrap_or(0.0);
+            let max = self.max_value.unwrap_or(255.0);
+            let span = (max - min).abs().max(1.0);
+            let value = clamp(
+                current + (self.delta / 360.0) * span,
+                min.min(max),
+                min.max(max),
+            );
+            return ProgrammerScalar {
+                numeric: Some(value.round()),
+                text: None,
+            };
+        }
+
+        let value = clamp(current + self.delta / 3.6, 0.0, 100.0);
+        ProgrammerScalar {
+            numeric: Some(value.round()),
+            text: None,
+        }
+    }
+
+    fn default_numeric(&self) -> f64 {
+        if let Some(value) = self.default_value.filter(|value| value.is_finite()) {
+            return value;
+        }
+
+        let lower = self.attribute.to_ascii_lowercase();
+        if self.value_kind.eq_ignore_ascii_case("angle")
+            || lower.contains("pan")
+            || lower.contains("tilt")
+            || lower.contains("rotate")
+            || lower.contains("rot")
+        {
+            return 0.0;
+        }
+
+        self.min_value.unwrap_or(0.0)
     }
 }
 
@@ -683,6 +799,15 @@ fn wrap_index(index: i32, len: usize) -> usize {
     index.rem_euclid(len as i32) as usize
 }
 
+fn clamp(value: f64, min: f64, max: f64) -> f64 {
+    value.min(max).max(min)
+}
+
+fn round_to(value: f64, places: i32) -> f64 {
+    let factor = 10_f64.powi(places);
+    (value * factor).round() / factor
+}
+
 fn validate_attribute(attribute: &str) -> ProgrammerResult<()> {
     if attribute.trim().is_empty() {
         return Err(ProgrammerError::InvalidAttribute(attribute.to_string()));
@@ -727,6 +852,67 @@ mod tests {
             .values
             .iter()
             .all(|value| value.active));
+    }
+
+    #[test]
+    fn adjust_attribute_accumulates_delta_on_authoritative_value() {
+        let selection = fixture_selection(["a"]);
+        let programmer = Programmer::default()
+            .adjust_attribute_for_selection(
+                &selection,
+                adjust_request("Dimmer", "Dimmer", 360.0, "percent", None, None),
+            )
+            .unwrap()
+            .adjust_attribute_for_selection(
+                &selection,
+                adjust_request("Dimmer", "Dimmer", -360.0, "percent", None, None),
+            )
+            .unwrap();
+
+        let value = programmer.live.parts[0].values[0].value.numeric.unwrap();
+        assert_eq!(value, 0.0);
+    }
+
+    #[test]
+    fn adjust_attribute_clamps_percent_to_zero() {
+        let selection = fixture_selection(["a"]);
+        let programmer = Programmer::default()
+            .set_attribute_for_selection(
+                &selection,
+                ProgrammerSetAttributeRequest {
+                    attribute: "Dimmer".to_string(),
+                    feature_group: "Dimmer".to_string(),
+                    layer: ProgrammerLayer::Absolute,
+                    value: ProgrammerScalar {
+                        numeric: Some(1.0),
+                        text: None,
+                    },
+                    source: ProgrammerValueSource::Manual,
+                },
+            )
+            .unwrap()
+            .adjust_attribute_for_selection(
+                &selection,
+                adjust_request("Dimmer", "Dimmer", -360.0, "percent", None, None),
+            )
+            .unwrap();
+
+        let value = programmer.live.parts[0].values[0].value.numeric.unwrap();
+        assert_eq!(value, 0.0);
+    }
+
+    #[test]
+    fn adjust_attribute_uses_physical_range_for_range_values() {
+        let selection = fixture_selection(["a"]);
+        let programmer = Programmer::default()
+            .adjust_attribute_for_selection(
+                &selection,
+                adjust_request("Shutter1", "Strobe", 360.0, "range", Some(1.0), Some(20.0)),
+            )
+            .unwrap();
+
+        let value = programmer.live.parts[0].values[0].value.numeric.unwrap();
+        assert_eq!(value, 20.0);
     }
 
     #[test]
@@ -810,6 +996,27 @@ mod tests {
             fixture_ids: ids.into_iter().map(str::to_string).collect(),
             primary_fixture_id: ids.first().map(|id| id.to_string()),
             version: 1,
+        }
+    }
+
+    fn adjust_request(
+        attribute: &str,
+        feature_group: &str,
+        delta: f64,
+        value_kind: &str,
+        min_value: Option<f64>,
+        max_value: Option<f64>,
+    ) -> ProgrammerAdjustAttributeRequest {
+        ProgrammerAdjustAttributeRequest {
+            attribute: attribute.to_string(),
+            feature_group: feature_group.to_string(),
+            layer: ProgrammerLayer::Absolute,
+            delta,
+            value_kind: value_kind.to_string(),
+            min_value,
+            max_value,
+            default_value: None,
+            source: ProgrammerValueSource::Manual,
         }
     }
 }
