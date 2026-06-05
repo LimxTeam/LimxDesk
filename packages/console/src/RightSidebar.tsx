@@ -104,13 +104,11 @@ export function RightSidebar({
     if (slot.saved) {
       onApplyWindows(slot.windows.map(layoutWindowToWorkspaceWindow));
       setActiveSlot(slot.id);
-      showInfoIsland("视图已召回", `${slot.appearance.name} / ${slot.windows.length} windows`);
       return;
     }
 
     onClearWindows();
     setActiveSlot(null);
-    showInfoIsland("当前视图已清空", `Slot ${slot.id} 为空`);
   }
 
   function openSaveEditor(slot: ViewSlotModel) {
