@@ -15,6 +15,7 @@ import {
   copyOrMoveExecutorAction,
   storeProgrammerOnExecutorAction,
 } from "../command/playbackActions";
+import type { SequenceDocument, SequenceModel } from "../command/sequenceActions";
 import { clearWorkspaceRuntimeCache } from "./workspaceRuntime";
 
 interface PlaybackDocument {
@@ -63,25 +64,6 @@ interface ExecutorButtons {
 interface SequenceLoadResult {
   document: SequenceDocument;
   runtime: SequenceRuntimeSnapshot;
-}
-
-interface SequenceDocument {
-  sequences: SequenceModel[];
-  selectedSequenceId: string | null;
-  version: number;
-}
-
-interface SequenceModel {
-  id: string;
-  number: number;
-  name: string;
-  cues: CueModel[];
-}
-
-interface CueModel {
-  id: string;
-  number: number;
-  name: string;
 }
 
 interface SequenceRuntimeSnapshot {

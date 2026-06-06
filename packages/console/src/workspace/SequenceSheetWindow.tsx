@@ -4,8 +4,18 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import {
   clearCommandEntry,
+  setCommandSource,
   useCommandRuntimeSnapshot,
 } from "../command/commandRuntime";
+import {
+  copyOrMoveCueAction,
+  deleteCueAction,
+  storeCueAction,
+  type CueModel,
+  type SequenceCommandResult,
+  type SequenceDocument,
+  type SequenceModel,
+} from "../command/sequenceActions";
 import {
   clearWorkspaceRuntimeCache,
 } from "./workspaceRuntime";
@@ -13,89 +23,6 @@ import {
 interface SequenceLoadResult {
   document: SequenceDocument;
   runtime: SequenceRuntimeSnapshot;
-}
-
-interface SequenceCommandResult {
-  document: SequenceDocument;
-  sequence: SequenceModel;
-  cue: CueModel | null;
-}
-
-interface SequenceDocument {
-  sequences: SequenceModel[];
-  selectedSequenceId: string | null;
-  version: number;
-}
-
-interface SequenceModel {
-  id: string;
-  number: number;
-  name: string;
-  priority: number;
-  tracking: boolean;
-  releaseOnOff: boolean;
-  protected: boolean;
-  recipeSlots: SequenceRecipeSlot[];
-  cues: CueModel[];
-  updatedAtMs: number;
-}
-
-interface SequenceRecipeSlot {
-  id: string;
-  engineKind: string;
-  label: string;
-  enabled: boolean;
-}
-
-interface CueModel {
-  id: string;
-  number: number;
-  name: string;
-  trigger: CueTrigger;
-  timing: CueTiming;
-  parts: CuePart[];
-  enabled: boolean;
-  notes: string;
-  updatedAtMs: number;
-}
-
-interface CuePart {
-  id: number;
-  name: string;
-  timing: CueTiming;
-  values: CueValue[];
-  steps: CueStep[];
-}
-
-interface CueStep {
-  id: number;
-  name: string;
-  timing: CueTiming;
-  values: CueValue[];
-}
-
-interface CueValue {
-  fixtureId: string;
-  attribute: string;
-  featureGroup: string;
-  layer: "absolute" | "relative" | "fade" | "delay";
-  numeric: number | null;
-  text: string | null;
-  active: boolean;
-  source: string;
-}
-
-interface CueTrigger {
-  kind: string;
-  time: string | null;
-}
-
-interface CueTiming {
-  fadeIn: number;
-  fadeOut: number;
-  delayIn: number;
-  delayOut: number;
-  duration: number | null;
 }
 
 interface SequenceRuntimeSnapshot {
@@ -254,15 +181,25 @@ export function SequenceSheetWindow() {
   }
 
   async function storeCue(cueId = selectedCueId || null, storeMode: "merge" | "overwrite" = "merge") {
-    await runCommand("sequence_store_programmer", {
-      request: {
+    if (!selectedSequence) return;
+    try {
+      setBusy(true);
+      const result = await storeCueAction({
+        before: document,
         sequenceId: selectedSequence?.id ?? null,
         cueId,
         cueNumber: cueId ? null : nextCueNumber(selectedSequence),
         cueName: null,
         storeMode,
-      },
-    });
+      });
+      applyLoadResult({ document: result.result.document, runtime });
+      setSelectedCueId(result.result.cue?.id ?? cueId ?? "");
+      setStatus(result.status);
+    } catch (error) {
+      setStatus(String(error));
+    } finally {
+      setBusy(false);
+    }
   }
 
   async function storeSingleStep(updateSelected: boolean) {
@@ -297,10 +234,60 @@ export function SequenceSheetWindow() {
 
   async function deleteCue(cue: CueModel) {
     if (!selectedSequence) return;
-    await runCommand("sequence_delete_cue", {
-      sequenceId: selectedSequence.id,
-      cueId: cue.id,
-    });
+    try {
+      setBusy(true);
+      const result = await deleteCueAction({
+        before: document,
+        sequenceId: selectedSequence.id,
+        cue,
+      });
+      applyLoadResult({ document: result.result.document, runtime });
+      setSelectedCueId("");
+      setStatus(result.status);
+    } catch (error) {
+      setStatus(String(error));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function copyOrMoveCue(target: CueModel) {
+    if (!selectedSequence) return;
+    const source = commandState.source;
+    if (!source) {
+      setCommandSource({ pool: "cue", id: target.number, label: `Cue ${formatCueNumber(target.number)}` });
+      setSelectedCueId(target.id);
+      setStatus(`${commandState.mode.toUpperCase()} source: Cue ${formatCueNumber(target.number)}`);
+      return;
+    }
+    if (source.pool !== "cue") {
+      setStatus(`${commandState.mode.toUpperCase()} source is not a cue`);
+      return;
+    }
+    const sourceNumber = Number(source.id);
+    if (!Number.isFinite(sourceNumber)) {
+      setStatus("Cue source is invalid");
+      return;
+    }
+    try {
+      setBusy(true);
+      const mode = commandState.mode === "move" ? "move" : "copy";
+      const result = await copyOrMoveCueAction({
+        before: document,
+        sequenceId: selectedSequence.id,
+        sourceNumber,
+        targetNumber: target.number,
+        mode,
+      });
+      applyLoadResult({ document: result.result.document, runtime });
+      setSelectedCueId(result.result.cue?.id ?? target.id);
+      setStatus(result.status);
+      clearCommandEntry(result.status);
+    } catch (error) {
+      setStatus(String(error));
+    } finally {
+      setBusy(false);
+    }
   }
 
   async function goToCue(cue: CueModel) {
@@ -322,6 +309,10 @@ export function SequenceSheetWindow() {
   }
 
   function handleCueRowClick(cue: CueModel) {
+    if (commandState.mode === "copy" || commandState.mode === "move") {
+      void copyOrMoveCue(cue);
+      return;
+    }
     if (commandState.mode === "delete") {
       void deleteCue(cue);
       clearCommandEntry();

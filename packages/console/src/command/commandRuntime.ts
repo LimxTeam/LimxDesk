@@ -18,7 +18,7 @@ export type DeskCommandTarget = "fixture" | "group" | "preset" | "sequence" | "c
 export type DeskCommandOperator = "Thru" | "+" | "-" | "If" | "At" | "/" | ".";
 
 export interface DeskCommandSource {
-  pool: "group" | "preset" | "sequence" | "executor";
+  pool: "group" | "preset" | "sequence" | "cue" | "executor";
   id: number | string;
   category?: string;
   label: string;

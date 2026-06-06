@@ -18,10 +18,11 @@ import {
 } from "./playbackActions";
 import {
   copyOrMoveSequenceAction,
+  copyOrMoveCueAction,
+  deleteCueAction,
   deleteSequenceAction,
-  pushSequenceHistory,
+  storeCueAction,
   storeSingleStepSequence,
-  type SequenceCommandResult,
   type SequenceLoadResult,
   type SequenceModel,
 } from "./sequenceActions";
@@ -381,10 +382,6 @@ function numbersEqual(left: number, right: number) {
   return Math.abs(left - right) < Number.EPSILON;
 }
 
-function formatCueNumber(value: number) {
-  return Number.isInteger(value) ? String(value) : value.toFixed(3).replace(/0+$/, "").replace(/\.$/, "");
-}
-
 async function handleCueCommand(command: DeskCommandState) {
   const number = lastNumber(command.tokens);
   const result = await invoke<SequenceLoadResult>("sequence_load_current_show");
@@ -397,18 +394,15 @@ async function handleCueCommand(command: DeskCommandState) {
   }
 
   if (command.mode === "store" || command.mode === "update") {
-    const before = result.document;
-    const stored = await invoke<SequenceCommandResult>("sequence_store_programmer", {
-      request: {
-        sequenceId: selected.id,
-        cueId: null,
-        cueNumber: number ?? null,
-        cueName: number ? `Cue ${number}` : null,
-        storeMode: command.mode === "update" ? "overwrite" : "merge",
-      },
+    const stored = await storeCueAction({
+      before: result.document,
+      sequenceId: selected.id,
+      cueId: null,
+      cueNumber: number ?? null,
+      cueName: number ? `Cue ${number}` : null,
+      storeMode: command.mode === "update" ? "overwrite" : "merge",
     });
-    pushSequenceHistory(`${command.mode === "update" ? "Update" : "Store"} Cue ${number ?? "next"}`, before, stored.document);
-    return { handled: true, status: `${command.mode === "update" ? "Updated" : "Stored"} Cue ${number ?? "next"}` };
+    return { handled: true, status: stored.status };
   }
 
   if (command.mode === "copy" || command.mode === "move") {
@@ -416,21 +410,14 @@ async function handleCueCommand(command: DeskCommandState) {
     if (!pair) {
       return { handled: true, keepCommand: true, status: `${command.mode.toUpperCase()} Cue needs source At destination` };
     }
-    const before = result.document;
-    const moved = await invoke<SequenceCommandResult>(command.mode === "copy" ? "sequence_copy_cue" : "sequence_move_cue", {
+    const moved = await copyOrMoveCueAction({
+      before: result.document,
       sequenceId: selected.id,
       sourceNumber: pair.source,
       targetNumber: pair.target,
+      mode: command.mode,
     });
-    pushSequenceHistory(
-      `${command.mode === "copy" ? "Copy" : "Move"} Cue ${formatCueNumber(pair.source)} At ${formatCueNumber(pair.target)}`,
-      before,
-      moved.document,
-    );
-    return {
-      handled: true,
-      status: `${command.mode === "copy" ? "Copied" : "Moved"} Cue ${formatCueNumber(pair.source)} At ${formatCueNumber(pair.target)}`,
-    };
+    return { handled: true, status: moved.status };
   }
 
   if (!number) {
@@ -443,13 +430,12 @@ async function handleCueCommand(command: DeskCommandState) {
   }
 
   if (command.mode === "delete") {
-    const before = result.document;
-    const deleted = await invoke<SequenceCommandResult>("sequence_delete_cue", {
+    const deleted = await deleteCueAction({
+      before: result.document,
       sequenceId: selected.id,
-      cueId: cue.id,
+      cue,
     });
-    pushSequenceHistory(`Delete Cue ${formatCueNumber(number)}`, before, deleted.document);
-    return { handled: true, status: `Deleted Cue ${number}` };
+    return { handled: true, status: deleted.status };
   }
 
   if (command.mode === "on" || command.mode === "select" || command.mode === "idle") {

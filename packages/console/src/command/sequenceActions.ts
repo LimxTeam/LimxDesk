@@ -15,13 +15,71 @@ export interface SequenceModel {
   id: string;
   number: number;
   name: string;
+  priority: number;
+  tracking: boolean;
+  releaseOnOff: boolean;
+  protected: boolean;
+  recipeSlots: SequenceRecipeSlot[];
   cues: CueModel[];
+  updatedAtMs: number;
+}
+
+export interface SequenceRecipeSlot {
+  id: string;
+  engineKind: string;
+  label: string;
+  enabled: boolean;
 }
 
 export interface CueModel {
   id: string;
   number: number;
   name: string;
+  trigger: CueTrigger;
+  timing: CueTiming;
+  parts: CuePart[];
+  enabled: boolean;
+  notes: string;
+  updatedAtMs: number;
+}
+
+export interface CuePart {
+  id: number;
+  name: string;
+  timing: CueTiming;
+  values: CueValue[];
+  steps: CueStep[];
+}
+
+export interface CueStep {
+  id: number;
+  name: string;
+  timing: CueTiming;
+  values: CueValue[];
+}
+
+export interface CueValue {
+  fixtureId: string;
+  attribute: string;
+  featureGroup: string;
+  layer: "absolute" | "relative" | "fade" | "delay";
+  numeric: number | null;
+  text: string | null;
+  active: boolean;
+  source: string;
+}
+
+export interface CueTrigger {
+  kind: string;
+  time: string | null;
+}
+
+export interface CueTiming {
+  fadeIn: number;
+  fadeOut: number;
+  delayIn: number;
+  delayOut: number;
+  duration: number | null;
 }
 
 export interface SequenceCommandResult {
@@ -103,4 +161,91 @@ export async function copyOrMoveSequenceAction({
     label,
     status: `${mode === "copy" ? "Copied" : "Moved"} Sequence ${sourceNumber} At ${targetNumber}`,
   };
+}
+
+export async function storeCueAction({
+  before,
+  sequenceId,
+  cueId,
+  cueNumber,
+  cueName,
+  storeMode,
+}: {
+  before: SequenceDocument;
+  sequenceId: string;
+  cueId: string | null;
+  cueNumber: number | null;
+  cueName: string | null;
+  storeMode: "merge" | "overwrite";
+}) {
+  const result = await invoke<SequenceCommandResult>("sequence_store_programmer", {
+    request: {
+      sequenceId,
+      cueId,
+      cueNumber,
+      cueName,
+      storeMode,
+    },
+  });
+  const label = `${storeMode === "overwrite" ? "Update" : "Store"} Cue ${formatCueNumber(cueNumber ?? result.cue?.number ?? "next")}`;
+  pushSequenceHistory(label, before, result.document);
+  return {
+    result,
+    label,
+    status: `${storeMode === "overwrite" ? "Updated" : "Stored"} Cue ${formatCueNumber(cueNumber ?? result.cue?.number ?? "next")}`,
+  };
+}
+
+export async function deleteCueAction({
+  before,
+  sequenceId,
+  cue,
+}: {
+  before: SequenceDocument;
+  sequenceId: string;
+  cue: CueModel;
+}) {
+  const result = await invoke<SequenceCommandResult>("sequence_delete_cue", {
+    sequenceId,
+    cueId: cue.id,
+  });
+  const label = `Delete Cue ${formatCueNumber(cue.number)}`;
+  pushSequenceHistory(label, before, result.document);
+  return {
+    result,
+    label,
+    status: `Deleted Cue ${formatCueNumber(cue.number)}`,
+  };
+}
+
+export async function copyOrMoveCueAction({
+  before,
+  sequenceId,
+  sourceNumber,
+  targetNumber,
+  mode,
+}: {
+  before: SequenceDocument;
+  sequenceId: string;
+  sourceNumber: number;
+  targetNumber: number;
+  mode: "copy" | "move";
+}) {
+  const result = await invoke<SequenceCommandResult>(mode === "copy" ? "sequence_copy_cue" : "sequence_move_cue", {
+    sequenceId,
+    sourceNumber,
+    targetNumber,
+  });
+  const label = `${mode === "copy" ? "Copy" : "Move"} Cue ${formatCueNumber(sourceNumber)} At ${formatCueNumber(targetNumber)}`;
+  pushSequenceHistory(label, before, result.document);
+  return {
+    result,
+    label,
+    status: `${mode === "copy" ? "Copied" : "Moved"} Cue ${formatCueNumber(sourceNumber)} At ${formatCueNumber(targetNumber)}`,
+  };
+}
+
+function formatCueNumber(value: number | string) {
+  if (typeof value === "string") return value;
+  return Number.isInteger(value) ? String(value) : value.toFixed(3).replace(/0+$/, "").replace(/\.$/, "");
 }
