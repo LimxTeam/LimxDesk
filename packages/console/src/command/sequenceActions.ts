@@ -88,6 +88,17 @@ export interface SequenceCommandResult {
   cue: CueModel | null;
 }
 
+export interface CuePatch {
+  name?: string;
+  number?: number;
+  enabled?: boolean;
+  fadeIn?: number;
+  fadeOut?: number;
+  delayIn?: number;
+  delayOut?: number;
+  notes?: string;
+}
+
 export function pushSequenceHistory(label: string, before: SequenceDocument, after: SequenceDocument) {
   pushCommandHistory({
     label,
@@ -215,6 +226,31 @@ export async function deleteCueAction({
     result,
     label,
     status: `Deleted Cue ${formatCueNumber(cue.number)}`,
+  };
+}
+
+export async function updateCueAction({
+  before,
+  sequenceId,
+  cue,
+  patch,
+}: {
+  before: SequenceDocument;
+  sequenceId: string;
+  cue: CueModel;
+  patch: CuePatch;
+}) {
+  const result = await invoke<SequenceCommandResult>("sequence_update_cue", {
+    sequenceId,
+    cueId: cue.id,
+    patch,
+  });
+  const label = `Update Cue ${formatCueNumber(cue.number)}`;
+  pushSequenceHistory(label, before, result.document);
+  return {
+    result,
+    label,
+    status: `Updated Cue ${formatCueNumber(result.cue?.number ?? cue.number)}`,
   };
 }
 

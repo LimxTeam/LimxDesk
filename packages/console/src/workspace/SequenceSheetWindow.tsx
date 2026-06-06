@@ -11,7 +11,9 @@ import {
   copyOrMoveCueAction,
   deleteCueAction,
   storeCueAction,
+  updateCueAction,
   type CueModel,
+  type CuePatch,
   type SequenceCommandResult,
   type SequenceDocument,
   type SequenceModel,
@@ -223,13 +225,24 @@ export function SequenceSheetWindow() {
     );
   }
 
-  async function updateCue(cue: CueModel, patch: Record<string, unknown>) {
+  async function updateCue(cue: CueModel, patch: CuePatch) {
     if (!selectedSequence) return;
-    await runCommand("sequence_update_cue", {
-      sequenceId: selectedSequence.id,
-      cueId: cue.id,
-      patch,
-    });
+    try {
+      setBusy(true);
+      const result = await updateCueAction({
+        before: document,
+        sequenceId: selectedSequence.id,
+        cue,
+        patch,
+      });
+      applyLoadResult({ document: result.result.document, runtime });
+      setSelectedCueId(result.result.cue?.id ?? cue.id);
+      setStatus(result.status);
+    } catch (error) {
+      setStatus(String(error));
+    } finally {
+      setBusy(false);
+    }
   }
 
   async function deleteCue(cue: CueModel) {
@@ -456,6 +469,7 @@ export function SequenceSheetWindow() {
                   <BodyCell>
                     <input
                       className="lx-input lx-input-sm"
+                      disabled={busy}
                       defaultValue={cue.name}
                       onBlur={(event) => {
                         if (event.currentTarget.value !== cue.name) {
@@ -466,10 +480,10 @@ export function SequenceSheetWindow() {
                   </BodyCell>
                   <BodyCell>{cue.trigger.kind}</BodyCell>
                   <BodyCell>
-                    <NumberEdit value={cue.timing.fadeIn} onCommit={(value) => updateCue(cue, { fadeIn: value })} />
+                    <NumberEdit value={cue.timing.fadeIn} disabled={busy} onCommit={(value) => updateCue(cue, { fadeIn: value })} />
                   </BodyCell>
                   <BodyCell>
-                    <NumberEdit value={cue.timing.delayIn} onCommit={(value) => updateCue(cue, { delayIn: value })} />
+                    <NumberEdit value={cue.timing.delayIn} disabled={busy} onCommit={(value) => updateCue(cue, { delayIn: value })} />
                   </BodyCell>
                   <BodyCell mono>{cueValueCount(cue)}</BodyCell>
                   <BodyCell>{cueValueSummary(cue)}</BodyCell>
@@ -513,13 +527,14 @@ function Metric({ label, value, active = false }: { label: string; value: string
   );
 }
 
-function NumberEdit({ value, onCommit }: { value: number; onCommit: (value: number) => void }) {
+function NumberEdit({ value, disabled, onCommit }: { value: number; disabled?: boolean; onCommit: (value: number) => void }) {
   return (
     <input
       className="lx-input lx-input-sm"
       type="number"
       min={0}
       step={0.1}
+      disabled={disabled}
       defaultValue={roundTime(value)}
       onBlur={(event) => {
         const next = Number(event.currentTarget.value);
