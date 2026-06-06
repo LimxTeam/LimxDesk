@@ -425,7 +425,7 @@ function targetFromToken(token: string): DeskCommandTarget | null {
   if (token === "preset") return "preset";
   if (token === "sequence") return "sequence";
   if (token === "cue") return "cue";
-  if (token === "executor" || token === "playback") return "executor";
+  if (token === "executor" || token === "exec" || token === "playback" || token === "desk") return "executor";
   return null;
 }
 

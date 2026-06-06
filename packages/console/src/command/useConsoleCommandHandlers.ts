@@ -132,11 +132,11 @@ export function useConsoleCommandHandlers() {
       if (!command.target && inferredSlot && inferredSlot >= 100 && isExecutorMode(command.mode)) {
         return handleExecutorCommand({ ...command, target: "executor" });
       }
+      if (!command.target && inferredNumbers.length === 0 && (command.mode === "on" || command.mode === "off")) {
+        return handleSelectionOnOffCommand(command);
+      }
       if (!command.target && inferredNumbers.length > 0 && (command.mode === "idle" || command.mode === "select")) {
         return handleFixtureCommand({ ...command, target: "fixture" });
-      }
-      if (commandHasToken(command, "If")) {
-        return { handled: true, keepCommand: true, status: "If filter is armed; choose an object target or press ESC" };
       }
       if (command.mode === "stomp") {
         return handleStompCommand(command);
@@ -156,13 +156,16 @@ export function useConsoleCommandHandlers() {
       if (command.target === "executor") {
         return handleExecutorCommand(command);
       }
+      if (commandHasToken(command, "If")) {
+        return { handled: true, keepCommand: true, status: "If filter is armed; choose an object target or press ESC" };
+      }
       return false;
     });
   }, []);
 }
 
 async function handleFixtureCommand(command: DeskCommandState) {
-  if (command.mode !== "idle" && command.mode !== "select" && command.mode !== "on") {
+  if (command.mode !== "idle" && command.mode !== "select" && command.mode !== "on" && command.mode !== "off") {
     return { handled: true, keepCommand: true, status: `${command.mode.toUpperCase()} Fixture needs a sheet or target workflow` };
   }
 
@@ -176,19 +179,33 @@ async function handleFixtureCommand(command: DeskCommandState) {
   const ids = fixtureNumbers
     .map((number) => fixtures.find((fixture) => fixture.fid === number)?.id)
     .filter((id): id is string => Boolean(id));
-  if (ids.length === 0) {
+  let nextIds = ids;
+  if (commandHasToken(command, "If")) {
+    const current = await invoke<FixtureSelection>("fixture_selection_get");
+    const selected = new Set(current.fixtureIds.map(parentFixtureId));
+    nextIds = nextIds.filter((id) => selected.has(parentFixtureId(id)));
+  }
+  if (nextIds.length === 0) {
     return { handled: true, keepCommand: true, status: `No patched fixtures: ${fixtureNumbers.join(", ")}` };
   }
 
   await invoke<FixtureSelection>("fixture_selection_select", {
-    fixtureIds: ids,
-    primaryFixtureId: ids[ids.length - 1] ?? ids[0] ?? null,
+    fixtureIds: nextIds,
+    primaryFixtureId: nextIds[nextIds.length - 1] ?? nextIds[0] ?? null,
     mode: "replace",
   });
 
+  if (command.mode === "off") {
+    await invoke("programmer_clear", { target: "selection" });
+    return {
+      handled: true,
+      status: `Off Fixture ${fixtureNumbers.join(", ")}`,
+    };
+  }
+
   return {
     handled: true,
-    status: `Selected Fixture ${fixtureNumbers.join(", ")}`,
+    status: `${commandHasToken(command, "If") ? "Filtered" : "Selected"} Fixture ${fixtureNumbers.join(", ")}`,
   };
 }
 
@@ -408,12 +425,39 @@ async function handleAtCommand(command: DeskCommandState) {
   return { handled: true, status: `At ${value}` };
 }
 
+async function handleSelectionOnOffCommand(command: DeskCommandState) {
+  const selection = await invoke<FixtureSelection>("fixture_selection_get");
+  if (selection.fixtureIds.length === 0) {
+    return { handled: true, keepCommand: true, status: `${command.mode.toUpperCase()} needs selected fixtures or an executor` };
+  }
+
+  const attribute = await resolveDimmerAttribute(selection.primaryFixtureId ?? selection.fixtureIds[0]);
+  const value = command.mode === "on" ? atMaximum(attribute) : atMinimum(attribute);
+  await invoke<Programmer>("programmer_set_attribute_for_selection", {
+    request: {
+      attribute: attribute.name,
+      featureGroup: attribute.featureGroup,
+      layer: "absolute",
+      value: {
+        numeric: value,
+        text: null,
+      },
+      source: "manual",
+    },
+  });
+  return { handled: true, status: `${command.mode === "on" ? "On" : "Off"} selected fixtures` };
+}
+
 async function handleStompCommand(command: DeskCommandState) {
   if (command.target && command.target !== "fixture") {
     return { handled: true, keepCommand: true, status: `Stomp ${command.target} is not available` };
   }
   await invoke("programmer_clear", { target: "active" });
   return { handled: true, status: "Stomp active programmer values" };
+}
+
+function parentFixtureId(id: string) {
+  return id.split("::sub:")[0] ?? id;
 }
 
 async function resolveDimmerAttribute(fixtureId: string | null): Promise<FixtureModeAttribute> {

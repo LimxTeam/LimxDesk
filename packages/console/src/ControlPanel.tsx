@@ -461,6 +461,21 @@ export function ControlPanel() {
     appendCommandToken(label);
   }
 
+  useEffect(() => {
+    function handleGlobalKeyDown(event: KeyboardEvent) {
+      if (event.altKey || event.ctrlKey || event.metaKey) return;
+      if (isEditableEventTarget(event.target)) return;
+
+      const button = commandButtonForKeyboardEvent(event);
+      if (!button) return;
+      event.preventDefault();
+      handleCommandButton(button);
+    }
+
+    window.addEventListener("keydown", handleGlobalKeyDown);
+    return () => window.removeEventListener("keydown", handleGlobalKeyDown);
+  }, []);
+
   return (
     <div
       style={{
@@ -714,6 +729,47 @@ function commandTargetForButton(label: string): DeskCommandTarget | null {
   if (label === "Cue") return "cue";
   if (label === "DESK") return "executor";
   return null;
+}
+
+function commandButtonForKeyboardEvent(event: KeyboardEvent) {
+  if (/^[0-9]$/.test(event.key)) return event.key;
+  if (event.code.startsWith("Numpad") && /^[0-9]$/.test(event.code.replace("Numpad", ""))) {
+    return event.code.replace("Numpad", "");
+  }
+  if (event.key === "Enter" || event.code === "NumpadEnter") return "Please";
+  if (event.key === "Escape") return "ESC";
+  if (event.key === "Backspace") return "ESC";
+  if (event.key === "Delete") return "Delete";
+  if (event.key === "+") return "+";
+  if (event.key === "-") return "-";
+  if (event.key === ".") return ".";
+  if (event.key === "/") return "/";
+  if (event.code === "NumpadAdd") return "+";
+  if (event.code === "NumpadSubtract") return "-";
+  if (event.code === "NumpadDecimal") return ".";
+  if (event.code === "NumpadDivide") return "/";
+
+  const key = event.key.toLowerCase();
+  if (key === "t") return "Thru";
+  if (key === "a") return "At";
+  if (key === "i") return "If";
+  if (key === "s") return "Store";
+  if (key === "u") return "Update";
+  if (key === "e") return "Edit";
+  if (key === "c") return "Clear";
+  if (key === "f") return "Fixture";
+  if (key === "g") return "Group";
+  if (key === "p") return "Preset";
+  if (key === "q") return "Sequence";
+  if (key === "d") return "DESK";
+  if (key === "o") return "On";
+  return null;
+}
+
+function isEditableEventTarget(target: EventTarget | null) {
+  if (!(target instanceof HTMLElement)) return false;
+  const tagName = target.tagName.toLowerCase();
+  return tagName === "input" || tagName === "textarea" || tagName === "select" || target.isContentEditable;
 }
 
 function isProgrammerAttributeActive(programmer: Programmer, fixtureId: string, attribute: string) {

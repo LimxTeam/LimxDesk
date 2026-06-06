@@ -189,7 +189,7 @@ export function CommandButtonPanel({ onButtonPress }: CommandButtonPanelProps) {
       onClick={() => handlePress(key.label)}
       disabled={key.label === "Undo" ? commandState.undoCount === 0 : key.label === "Redo" ? commandState.redoCount === 0 : false}
       style={{
-        ...keyStyle(key, pressed === key.label, isKeyActive(key.label, commandState.mode, commandState.target)),
+        ...keyStyle(key, pressed === key.label, isKeyActive(key.label, commandState.mode, commandState.target, commandState.tokens)),
         opacity:
           (key.label === "Undo" && commandState.undoCount === 0) ||
           (key.label === "Redo" && commandState.redoCount === 0)
@@ -236,7 +236,7 @@ export function CommandButtonPanel({ onButtonPress }: CommandButtonPanelProps) {
   );
 }
 
-function isKeyActive(label: string, mode: DeskCommandMode, target: DeskCommandTarget | null) {
+function isKeyActive(label: string, mode: DeskCommandMode, target: DeskCommandTarget | null, tokens: string[]) {
   const modeByLabel: Partial<Record<string, DeskCommandMode>> = {
     Store: "store",
     Update: "update",
@@ -257,5 +257,6 @@ function isKeyActive(label: string, mode: DeskCommandMode, target: DeskCommandTa
     Cue: "cue",
     DESK: "executor",
   };
-  return modeByLabel[label] === mode || targetByLabel[label] === target;
+  const tokenLabels = new Set(["Thru", "+", "-", "If", "At", "/", "."]);
+  return modeByLabel[label] === mode || targetByLabel[label] === target || (tokenLabels.has(label) && tokens.includes(label));
 }
