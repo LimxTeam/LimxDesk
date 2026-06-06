@@ -21,6 +21,7 @@ import {
   subscribeCommandRuntime,
   type DeskCommandState,
 } from "./command/commandRuntime";
+import { runFixtureSelectionHistory } from "./command/selectionHistory";
 import {
   activeProgrammerValues,
   copyOrMoveGroupSlot,
@@ -279,11 +280,13 @@ async function handleGlobalGroupCommand(
 
   if (command.mode === "select" || command.mode === "idle") {
     if (!slot) return { handled: true, keepCommand: true, status: `Group ${id} is empty` };
-    await invoke("fixture_selection_select", {
-      fixtureIds: slot.fixtureIds,
-      primaryFixtureId: slot.primaryFixtureId ?? slot.fixtureIds[0] ?? null,
-      mode: "replace",
-    });
+    await runFixtureSelectionHistory(`Select Group ${id}`, () =>
+      invoke<FixtureSelection>("fixture_selection_select", {
+        fixtureIds: slot.fixtureIds,
+        primaryFixtureId: slot.primaryFixtureId ?? slot.fixtureIds[0] ?? null,
+        mode: "replace",
+      }),
+    );
     return { handled: true, status: `Selected Group ${id}` };
   }
 

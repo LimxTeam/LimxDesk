@@ -29,6 +29,7 @@ import {
   type SequenceLoadResult,
   type SequenceModel,
 } from "./sequenceActions";
+import { runFixtureSelectionHistory } from "./selectionHistory";
 
 interface PatchDocument {
   fixtures: PatchFixture[];
@@ -218,11 +219,13 @@ async function handleFixtureCommand(command: DeskCommandState) {
     return { handled: true, keepCommand: true, status: `No patched fixtures: ${fallbackNumbers.join(", ")}` };
   }
 
-  await invoke<FixtureSelection>("fixture_selection_select", {
-    fixtureIds: nextIds,
-    primaryFixtureId: nextIds[nextIds.length - 1] ?? nextIds[0] ?? null,
-    mode: "replace",
-  });
+  await runFixtureSelectionHistory(`${commandHasToken(command, "If") ? "Filter" : "Select"} Fixture ${fallbackNumbers.join(", ")}`, () =>
+    invoke<FixtureSelection>("fixture_selection_select", {
+      fixtureIds: nextIds,
+      primaryFixtureId: nextIds[nextIds.length - 1] ?? nextIds[0] ?? null,
+      mode: "replace",
+    }),
+  );
 
   if (command.mode === "on" || command.mode === "off") {
     const attribute = await resolveDimmerAttribute(nextIds[nextIds.length - 1] ?? nextIds[0] ?? null);

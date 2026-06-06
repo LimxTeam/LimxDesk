@@ -20,6 +20,7 @@ import {
   type DeskCommandMode,
   type DeskCommandTarget,
 } from "./command/commandRuntime";
+import { restoreFixtureSelection } from "./command/selectionHistory";
 import type { AttributeTab } from "./components/AttributeTabBar";
 
 interface EncoderParam {
@@ -887,16 +888,4 @@ function buildAttributeTabs(pageInfo: Record<string, EncoderGroup>): AttributeTa
 
 function titleCase(value: string) {
   return value.charAt(0).toUpperCase() + value.slice(1);
-}
-
-async function restoreFixtureSelection(selection: FixtureSelection) {
-  if (selection.fixtureIds.length === 0) {
-    await invoke("fixture_selection_clear");
-    return;
-  }
-  await invoke("fixture_selection_select", {
-    fixtureIds: selection.fixtureIds,
-    primaryFixtureId: selection.primaryFixtureId,
-    mode: "replace",
-  });
 }
