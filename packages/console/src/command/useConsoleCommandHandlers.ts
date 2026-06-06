@@ -8,6 +8,7 @@ import {
   commandSlotNumber,
   commandSourceTargetSlotPair,
   commandValueAfter,
+  pushCommandHistory,
   registerCommandHandler,
   type DeskCommandState,
 } from "./commandRuntime";
@@ -80,6 +81,11 @@ interface ProgrammerValue {
   };
   active: boolean;
   source: "manual" | "preset" | "output";
+}
+
+interface ProgrammerClearResult {
+  programmer: Programmer;
+  clearSelection: boolean;
 }
 
 interface FixtureTypeEntry {
@@ -221,18 +227,20 @@ async function handleFixtureCommand(command: DeskCommandState) {
   if (command.mode === "on" || command.mode === "off") {
     const attribute = await resolveDimmerAttribute(nextIds[nextIds.length - 1] ?? nextIds[0] ?? null);
     const value = command.mode === "on" ? atMaximum(attribute) : atMinimum(attribute);
-    await invoke<Programmer>("programmer_set_attribute_for_selection", {
-      request: {
-        attribute: attribute.name,
-        featureGroup: attribute.featureGroup,
-        layer: "absolute",
-        value: {
-          numeric: value,
-          text: null,
+    await runProgrammerHistory(`${command.mode === "on" ? "On" : "Off"} Fixture ${fallbackNumbers.join(", ")}`, () =>
+      invoke<Programmer>("programmer_set_attribute_for_selection", {
+        request: {
+          attribute: attribute.name,
+          featureGroup: attribute.featureGroup,
+          layer: "absolute",
+          value: {
+            numeric: value,
+            text: null,
+          },
+          source: "manual",
         },
-        source: "manual",
-      },
-    });
+      }),
+    );
     return {
       handled: true,
       status: `${command.mode === "on" ? "On" : "Off"} Fixture ${fallbackNumbers.join(", ")}`,
@@ -684,18 +692,20 @@ async function handleAtCommand(command: DeskCommandState) {
   }
 
   const attribute = await resolveDimmerAttribute(selection.primaryFixtureId ?? selection.fixtureIds[0]);
-  await invoke<Programmer>("programmer_set_attribute_for_selection", {
-    request: {
-      attribute: attribute.name,
-      featureGroup: attribute.featureGroup,
-      layer: "absolute",
-      value: {
-        numeric: clamp(value, atMinimum(attribute), atMaximum(attribute)),
-        text: null,
+  await runProgrammerHistory(`At ${value}`, () =>
+    invoke<Programmer>("programmer_set_attribute_for_selection", {
+      request: {
+        attribute: attribute.name,
+        featureGroup: attribute.featureGroup,
+        layer: "absolute",
+        value: {
+          numeric: clamp(value, atMinimum(attribute), atMaximum(attribute)),
+          text: null,
+        },
+        source: "manual",
       },
-      source: "manual",
-    },
-  });
+    }),
+  );
   return { handled: true, status: `At ${value}` };
 }
 
@@ -707,18 +717,20 @@ async function handleSelectionOnOffCommand(command: DeskCommandState) {
 
   const attribute = await resolveDimmerAttribute(selection.primaryFixtureId ?? selection.fixtureIds[0]);
   const value = command.mode === "on" ? atMaximum(attribute) : atMinimum(attribute);
-  await invoke<Programmer>("programmer_set_attribute_for_selection", {
-    request: {
-      attribute: attribute.name,
-      featureGroup: attribute.featureGroup,
-      layer: "absolute",
-      value: {
-        numeric: value,
-        text: null,
+  await runProgrammerHistory(`${command.mode === "on" ? "On" : "Off"} selected fixtures`, () =>
+    invoke<Programmer>("programmer_set_attribute_for_selection", {
+      request: {
+        attribute: attribute.name,
+        featureGroup: attribute.featureGroup,
+        layer: "absolute",
+        value: {
+          numeric: value,
+          text: null,
+        },
+        source: "manual",
       },
-      source: "manual",
-    },
-  });
+    }),
+  );
   return { handled: true, status: `${command.mode === "on" ? "On" : "Off"} selected fixtures` };
 }
 
@@ -726,12 +738,26 @@ async function handleStompCommand(command: DeskCommandState) {
   if (command.target && command.target !== "fixture") {
     return { handled: true, keepCommand: true, status: `Stomp ${command.target} is not available` };
   }
-  await invoke("programmer_clear", { target: "active" });
+  await runProgrammerHistory("Stomp active programmer values", async () => {
+    const result = await invoke<ProgrammerClearResult>("programmer_clear", { target: "active" });
+    return result.programmer;
+  });
   return { handled: true, status: "Stomp active programmer values" };
 }
 
 function parentFixtureId(id: string) {
   return id.split("::sub:")[0] ?? id;
+}
+
+async function runProgrammerHistory(label: string, action: () => Promise<Programmer>) {
+  const before = await invoke<Programmer>("programmer_get");
+  const after = await action();
+  pushCommandHistory({
+    label,
+    undo: () => invoke("programmer_replace_current", { programmer: before }),
+    redo: () => invoke("programmer_replace_current", { programmer: after }),
+  });
+  return after;
 }
 
 async function resolveDimmerAttribute(fixtureId: string | null): Promise<FixtureModeAttribute> {

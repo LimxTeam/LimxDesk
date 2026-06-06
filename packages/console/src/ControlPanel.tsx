@@ -13,6 +13,7 @@ import {
   cancelCommandStep,
   clearCommandEntry,
   executeCurrentCommand,
+  pushCommandHistory,
   redoLastCommand,
   setCommandTarget,
   undoLastCommand,
@@ -131,6 +132,10 @@ interface ProgrammerValue {
   value: ProgrammerScalar;
   active: boolean;
   source: ProgrammerValueSource;
+}
+
+interface ProgrammerClearResult {
+  programmer: Programmer;
 }
 
 interface ProgrammerScalar {
@@ -433,11 +438,7 @@ export function ControlPanel() {
     if (label === "Clear") {
       clearEncoderWriteState();
       clearCommandEntry("Clear programmer");
-      void invoke("programmer_clear", { target: "contextual" })
-        .then(() => refreshRuntimeData())
-        .catch((error) => {
-          console.error("Failed to clear programmer", error);
-        });
+      void clearProgrammerWithHistory();
       return;
     }
 
@@ -459,6 +460,31 @@ export function ControlPanel() {
     }
 
     appendCommandToken(label);
+  }
+
+  async function clearProgrammerWithHistory() {
+    try {
+      const [beforeProgrammer, beforeSelection] = await Promise.all([
+        invoke<Programmer>("programmer_get"),
+        invoke<FixtureSelection>("fixture_selection_get"),
+      ]);
+      const result = await invoke<ProgrammerClearResult>("programmer_clear", { target: "contextual" });
+      const afterSelection = await invoke<FixtureSelection>("fixture_selection_get");
+      pushCommandHistory({
+        label: "Clear programmer",
+        undo: async () => {
+          await invoke("programmer_replace_current", { programmer: beforeProgrammer });
+          await restoreFixtureSelection(beforeSelection);
+        },
+        redo: async () => {
+          await invoke("programmer_replace_current", { programmer: result.programmer });
+          await restoreFixtureSelection(afterSelection);
+        },
+      });
+      await refreshRuntimeData(afterSelection);
+    } catch (error) {
+      console.error("Failed to clear programmer", error);
+    }
   }
 
   useEffect(() => {
@@ -861,4 +887,16 @@ function buildAttributeTabs(pageInfo: Record<string, EncoderGroup>): AttributeTa
 
 function titleCase(value: string) {
   return value.charAt(0).toUpperCase() + value.slice(1);
+}
+
+async function restoreFixtureSelection(selection: FixtureSelection) {
+  if (selection.fixtureIds.length === 0) {
+    await invoke("fixture_selection_clear");
+    return;
+  }
+  await invoke("fixture_selection_select", {
+    fixtureIds: selection.fixtureIds,
+    primaryFixtureId: selection.primaryFixtureId,
+    mode: "replace",
+  });
 }

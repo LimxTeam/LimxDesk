@@ -38,6 +38,22 @@ pub fn programmer_get(state: State<'_, ProgrammerState>) -> Result<Programmer, S
 }
 
 #[tauri::command]
+pub fn programmer_replace_current(
+    programmer: Programmer,
+    state: State<'_, ProgrammerState>,
+    _show_state: State<'_, ShowRuntimeState>,
+    _output_state: State<'_, output::OutputState>,
+    app: AppHandle,
+) -> Result<Programmer, String> {
+    let programmer = state.set_current(programmer)?;
+    events::emit_programmer_changed(&app, &programmer);
+    if let Err(error) = output::request_output_send(&app) {
+        tracing::warn!("failed to request programmer output after replace: {error}");
+    }
+    Ok(programmer)
+}
+
+#[tauri::command]
 pub fn programmer_set_mode(
     mode: ProgrammerMode,
     state: State<'_, ProgrammerState>,
