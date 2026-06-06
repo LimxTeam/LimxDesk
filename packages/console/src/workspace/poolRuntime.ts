@@ -72,7 +72,9 @@ const GRID_COLS = 24;
 const GRID_ROWS = 14;
 const EPHEMERAL_CONFIG_KEYS = new Set(["groupEditorId", "presetEditorId", "presetEditorCategory"]);
 
-export function ensurePoolWindow(windows: WorkspaceWindow[], type: Extract<WorkspaceWindowType, "groups" | "presets">) {
+export type WorkspacePoolWindowType = Extract<WorkspaceWindowType, "groups" | "presets" | "sequence-pool">;
+
+export function ensurePoolWindow(windows: WorkspaceWindow[], type: WorkspacePoolWindowType) {
   const existing = windows.find((window) => window.type === type);
   if (existing) {
     return { windows, window: existing };

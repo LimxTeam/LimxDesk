@@ -15,8 +15,10 @@ import { ShowFileDialog } from "./components/ShowFileDialog";
 import { useConsoleCommandHandlers } from "./command/useConsoleCommandHandlers";
 import {
   commandSlotNumber,
+  getCommandRuntimeSnapshot,
   pushCommandHistory,
   registerCommandHandler,
+  subscribeCommandRuntime,
   type DeskCommandState,
 } from "./command/commandRuntime";
 import {
@@ -40,7 +42,6 @@ import type { WorkspaceWindow } from "./workspace/types";
 /** 侧边栏宽度过渡 */
 const SLIDE = "width 0.22s cubic-bezier(0.32, 0.72, 0, 1)";
 export function ConsoleShell({ children }: { children?: React.ReactNode }) {
-  useConsoleCommandHandlers();
   const [leftCollapsed, setLeftCollapsed] = useState(false);
   const [rightCollapsed, setRightCollapsed] = useState(false);
   const [showFileDialogOpen, setShowFileDialogOpen] = useState(false);
@@ -55,9 +56,26 @@ export function ConsoleShell({ children }: { children?: React.ReactNode }) {
       if (command.target === "preset") {
         return handleGlobalPresetCommand(command, workspaceRef);
       }
+      if (command.target === "sequence" || (!command.target && (command.mode === "store" || command.mode === "update"))) {
+        ensureSequencePoolWindow(workspaceRef);
+        return false;
+      }
       return false;
     });
   }, []);
+
+  useEffect(() => {
+    const unsubscribe = subscribeCommandRuntime(() => {
+      const command = getCommandRuntimeSnapshot();
+      if (command.target === "sequence") {
+        ensureSequencePoolWindow(workspaceRef);
+      }
+    });
+    return () => {
+      unsubscribe();
+    };
+  }, []);
+  useConsoleCommandHandlers();
 
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100%", width: "100%", overflow: "hidden" }}>
@@ -281,6 +299,14 @@ async function handleGlobalGroupCommand(
   }
 
   return false;
+}
+
+function ensureSequencePoolWindow(workspaceRef: React.RefObject<WorkspaceCanvasHandle | null>) {
+  const snapshot = workspaceRef.current?.getWindows() ?? [];
+  const { windows } = ensurePoolWindow(snapshot, "sequence-pool");
+  if (windows !== snapshot) {
+    workspaceRef.current?.applyWindows(windows);
+  }
 }
 
 async function handleGlobalPresetCommand(

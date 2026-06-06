@@ -4,8 +4,6 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import {
   clearCommandEntry,
-  commandSlotNumber,
-  registerCommandHandler,
   useCommandRuntimeSnapshot,
 } from "../command/commandRuntime";
 import {
@@ -116,8 +114,6 @@ interface SequenceRuntimeState {
   updatedAtMs: number;
 }
 
-const SEQUENCE_POOL_SLOT_COUNT = 120;
-
 export function SequenceSheetWindow() {
   const [document, setDocument] = useState<SequenceDocument>({
     sequences: [],
@@ -145,13 +141,6 @@ export function SequenceSheetWindow() {
     () => runtime.states.find((state) => state.sequenceId === selectedSequence?.id) ?? null,
     [runtime.states, selectedSequence?.id],
   );
-  const sequencesByNumber = useMemo(() => {
-    const map = new Map<number, SequenceModel>();
-    for (const sequence of document.sequences) {
-      map.set(sequence.number, sequence);
-    }
-    return map;
-  }, [document.sequences]);
   const cues = useMemo(() => {
     const needle = query.trim().toLowerCase();
     const source = selectedSequence?.cues ?? [];
@@ -211,45 +200,6 @@ export function SequenceSheetWindow() {
       unlisteners.forEach((unlisten) => unlisten());
     };
   }, []);
-
-  useEffect(() => {
-    return registerCommandHandler("sequence-sheet-window", async (command) => {
-      if (command.target !== "sequence") return false;
-      const number = commandSlotNumber(command);
-      if (!number || number < 1 || number > SEQUENCE_POOL_SLOT_COUNT) {
-        setStatus("Sequence command needs a pool number");
-        return { handled: true, keepCommand: true, status: "Sequence command needs a pool number" };
-      }
-      const sequence = sequencesByNumber.get(number);
-      if (command.mode === "store") {
-        await storeSequenceSlot(number, sequence, false);
-        return { handled: true, status: `Stored Sequence ${number}` };
-      }
-      if (command.mode === "update") {
-        await storeSequenceSlot(number, sequence, true);
-        return { handled: true, status: `Updated Sequence ${number}` };
-      }
-      if (command.mode === "delete") {
-        if (sequence) {
-          await deleteSequenceSlot(sequence);
-          return { handled: true, status: `Deleted Sequence ${number}` };
-        } else {
-          setStatus(`Sequence ${number} is empty`);
-          return { handled: true, keepCommand: true, status: `Sequence ${number} is empty` };
-        }
-      }
-      if (command.mode === "select" || command.mode === "idle") {
-        if (sequence) {
-          handleSelectSequence(sequence.id);
-          return { handled: true, status: `Selected Sequence ${number}` };
-        } else {
-          setStatus(`Sequence ${number} is empty`);
-          return { handled: true, keepCommand: true, status: `Sequence ${number} is empty` };
-        }
-      }
-      return false;
-    });
-  }, [sequencesByNumber, runtime, selectedSequence]);
 
   async function loadSequences() {
     try {
@@ -371,53 +321,6 @@ export function SequenceSheetWindow() {
     void runCommand("sequence_select", { sequenceId });
   }
 
-  async function storeSequenceSlot(number: number, sequence: SequenceModel | undefined, overwrite: boolean) {
-    await runCommand<SequenceCommandResult>(
-      "sequence_store_single_step_program",
-      {
-        request: {
-          sequenceId: sequence?.id ?? null,
-          sequenceNumber: number,
-          name: sequence?.name ?? `Sequence ${number}`,
-          storeMode: overwrite ? "overwrite" : "merge",
-        },
-      },
-      (result) => {
-        applyLoadResult({ document: result.document, runtime });
-        setSelectedSequenceId(result.sequence.id);
-        setSelectedCueId(result.cue?.id ?? "");
-        setStatus(`Stored Sequence ${result.sequence.number}`);
-      },
-    );
-  }
-
-  async function deleteSequenceSlot(sequence: SequenceModel) {
-    await runCommand<SequenceDocument>("sequence_delete", { sequenceId: sequence.id }, (nextDocument) => {
-      setDocument(nextDocument);
-      setSelectedSequenceId(nextDocument.selectedSequenceId ?? nextDocument.sequences[0]?.id ?? "");
-      setSelectedCueId("");
-      setStatus(`Deleted Sequence ${sequence.number}`);
-    });
-  }
-
-  function handleSequenceSlotClick(number: number, sequence: SequenceModel | undefined) {
-    if (commandState.mode === "store") {
-      void storeSequenceSlot(number, sequence, false).then(() => clearCommandEntry());
-      return;
-    }
-    if (commandState.mode === "update") {
-      void storeSequenceSlot(number, sequence, true).then(() => clearCommandEntry());
-      return;
-    }
-    if (commandState.mode === "delete") {
-      if (sequence) void deleteSequenceSlot(sequence).then(() => clearCommandEntry());
-      return;
-    }
-    if (sequence) {
-      handleSelectSequence(sequence.id);
-    }
-  }
-
   function handleCueRowClick(cue: CueModel) {
     if (commandState.mode === "delete") {
       void deleteCue(cue);
@@ -515,30 +418,6 @@ export function SequenceSheetWindow() {
           placeholder="Search cue, value, trigger..."
           style={{ flex: 1, minWidth: 160 }}
         />
-      </div>
-
-      <div style={sequencePoolStyle}>
-        {Array.from({ length: SEQUENCE_POOL_SLOT_COUNT }, (_, index) => {
-          const number = index + 1;
-          const sequence = sequencesByNumber.get(number);
-          const active = selectedSequence?.id === sequence?.id;
-          const running = runtime.states.some((state) => state.sequenceId === sequence?.id && state.active);
-          return (
-            <button
-              key={number}
-              type="button"
-              onClick={() => handleSequenceSlotClick(number, sequence)}
-              style={sequenceTileStyle(Boolean(sequence), active, running, commandState.mode !== "idle")}
-              title={sequence ? `Sequence ${number}: ${sequence.name}` : `Sequence ${number}`}
-            >
-              <span style={sequenceTileNumberStyle}>{number}</span>
-              <strong>{sequence?.name ?? ""}</strong>
-              <small className="lx-code">
-                {sequence ? `${sequence.cues.length} cue${sequence.cues.length === 1 ? "" : "s"}` : commandState.mode === "store" ? "store" : ""}
-              </small>
-            </button>
-          );
-        })}
       </div>
 
       <div style={summaryStyle}>
@@ -730,7 +609,7 @@ function roundTime(value: number) {
 
 const rootStyle: CSSProperties = {
   display: "grid",
-  gridTemplateRows: "34px 142px 58px minmax(0, 1fr) 24px",
+  gridTemplateRows: "34px 58px minmax(0, 1fr) 24px",
   minHeight: 0,
   height: "100%",
   background: "var(--lx-bg-abyss)",
@@ -752,52 +631,6 @@ const summaryStyle: CSSProperties = {
   gap: 6,
   padding: 8,
   borderBottom: "1px solid var(--lx-stroke)",
-};
-
-const sequencePoolStyle: CSSProperties = {
-  display: "grid",
-  gridTemplateColumns: "repeat(10, minmax(86px, 1fr))",
-  gridAutoRows: 58,
-  gap: 6,
-  minHeight: 0,
-  overflow: "auto",
-  padding: 8,
-  borderBottom: "1px solid var(--lx-stroke)",
-  background: "linear-gradient(180deg, rgba(255,255,255,0.025), rgba(0,0,0,0.14))",
-};
-
-function sequenceTileStyle(stored: boolean, active: boolean, running: boolean, commandArmed: boolean): CSSProperties {
-  return {
-    display: "grid",
-    gridTemplateRows: "12px minmax(0, 1fr) 12px",
-    gap: 2,
-    minWidth: 0,
-    padding: "5px 6px",
-    border: active
-      ? "1px solid var(--lx-accent-bright)"
-      : running
-        ? "1px solid rgba(120,217,120,0.62)"
-        : commandArmed
-          ? "1px solid rgba(245,184,77,0.34)"
-          : "1px solid var(--lx-stroke)",
-    borderRadius: "var(--lx-radius-sm)",
-    background: stored
-      ? "linear-gradient(180deg, rgba(46,52,64,0.96), rgba(18,20,26,0.98))"
-      : commandArmed
-        ? "rgba(245,184,77,0.06)"
-        : "rgba(0,0,0,0.24)",
-    color: stored ? "var(--lx-fg-primary)" : "var(--lx-fg-tertiary)",
-    textAlign: "left",
-    cursor: "pointer",
-    overflow: "hidden",
-    boxShadow: running ? "inset 0 0 0 1px rgba(120,217,120,0.22)" : undefined,
-  };
-}
-
-const sequenceTileNumberStyle: CSSProperties = {
-  color: "var(--lx-accent-bright)",
-  fontSize: 9,
-  fontWeight: 900,
 };
 
 const metricStyle: CSSProperties = {

@@ -1,5 +1,6 @@
 export type WorkspaceWindowType =
   | "fixture-sheet"
+  | "sequence-pool"
   | "sequence-sheet"
   | "dmx-sheet"
   | "playback"

@@ -1,6 +1,7 @@
 import { FixtureSheetWindow } from "./FixtureSheetWindow";
 import { DmxSheetWindow } from "./DmxSheetWindow";
 import { PlaybackWindow } from "./PlaybackWindow";
+import { SequencePoolWindow } from "./SequencePoolWindow";
 import { SequenceSheetWindow } from "./SequenceSheetWindow";
 import {
   ColorPickerWindow,
@@ -25,6 +26,10 @@ export function WindowSurface({ window, onConfigChange }: WindowSurfaceProps) {
 
   if (window.type === "dmx-sheet") {
     return <DmxSheetWindow />;
+  }
+
+  if (window.type === "sequence-pool") {
+    return <SequencePoolWindow />;
   }
 
   if (window.type === "sequence-sheet") {
