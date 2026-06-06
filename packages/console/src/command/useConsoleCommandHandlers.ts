@@ -116,6 +116,10 @@ export function useConsoleCommandHandlers() {
         return handleAssignCommand(command);
       }
 
+      if (commandHasToken(command, "At") && command.mode !== "copy" && command.mode !== "move") {
+        return handleAtCommand(command);
+      }
+
       const defaultTarget = inferDefaultTarget(command, inferredNumbers, inferredSlot);
       if (defaultTarget === "executor") {
         return handleExecutorCommand({ ...command, target: "executor" });
@@ -132,9 +136,6 @@ export function useConsoleCommandHandlers() {
       }
       if (command.mode === "stomp") {
         return handleStompCommand(command);
-      }
-      if (commandHasToken(command, "At") && command.mode !== "copy" && command.mode !== "move") {
-        return handleAtCommand(command);
       }
       if (command.target === "fixture") {
         return handleFixtureCommand(command);
@@ -668,9 +669,9 @@ async function handleAtCommand(command: DeskCommandState) {
     return { handled: true, keepCommand: true, status: "At command needs a value" };
   }
 
-  if (command.target === "fixture") {
-    const atIndex = command.tokens.findIndex((token) => token.toLowerCase() === "at");
-    const fixtureTokens = atIndex >= 0 ? command.tokens.slice(0, atIndex) : command.tokens;
+  const atIndex = command.tokens.findIndex((token) => token.toLowerCase() === "at");
+  const fixtureTokens = atIndex >= 0 ? command.tokens.slice(0, atIndex) : command.tokens;
+  if (command.target === "fixture" || (!command.target && commandNumberSet({ ...command, tokens: fixtureTokens }).length > 0)) {
     const selectionResult = await handleFixtureCommand({ ...command, mode: "select", tokens: fixtureTokens });
     if (typeof selectionResult === "object" && selectionResult.handled && selectionResult.keepCommand) {
       return selectionResult;
