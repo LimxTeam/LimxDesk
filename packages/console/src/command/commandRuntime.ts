@@ -293,7 +293,7 @@ export function commandLineText(
 
   const segments = [
     command.mode === "idle" ? null : command.mode,
-    command.target,
+    formatCommandTarget(command.target),
     command.source?.label,
     ...command.tokens,
   ].filter((segment): segment is string => Boolean(segment));
@@ -302,7 +302,13 @@ export function commandLineText(
 
 function formatObjectPhrase(phrase: DeskCommandObjectPhrase | undefined) {
   if (!phrase) return null;
-  return `${titleCase(phrase.target)} ${formatCommandNumbers(phrase.numbers)}`;
+  return `${formatCommandTarget(phrase.target)} ${formatCommandNumbers(phrase.numbers)}`;
+}
+
+function formatCommandTarget(target: DeskCommandTarget | null | undefined) {
+  if (!target) return null;
+  if (target === "executor") return "/";
+  return titleCase(target);
 }
 
 function formatCommandNumbers(numbers: number[]) {
@@ -665,7 +671,17 @@ function targetFromToken(token: string): DeskCommandTarget | null {
   if (token === "preset" || token === "presets" || token === "p") return "preset";
   if (token === "sequence" || token === "sequences" || token === "seq" || token === "s") return "sequence";
   if (token === "cue") return "cue";
-  if (token === "executor" || token === "executors" || token === "exec" || token === "x" || token === "playback" || token === "desk") return "executor";
+  if (
+    token === "executor" ||
+    token === "executors" ||
+    token === "exec" ||
+    token === "x" ||
+    token === "playback" ||
+    token === "desk" ||
+    token === "/"
+  ) {
+    return "executor";
+  }
   return null;
 }
 

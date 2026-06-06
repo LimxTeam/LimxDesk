@@ -172,6 +172,10 @@ function inferDefaultTarget(
   if (command.target) return null;
   if (command.objectPhrases.length > 0) return null;
 
+  if (command.tokens.includes("/")) {
+    return "executor";
+  }
+
   if (inferredSlot && inferredSlot >= 100 && isExecutorMode(command.mode)) {
     return "executor";
   }
@@ -661,7 +665,7 @@ function commandExecutorAddress(command: DeskCommandState) {
   }
 
   const slashIndex = command.tokens.indexOf("/");
-  if (slashIndex > 0 && slashIndex < command.tokens.length - 1) {
+  if (slashIndex >= 0 && slashIndex < command.tokens.length - 1) {
     return {
       pageNumber: lastInteger(command.tokens.slice(0, slashIndex)),
       executorNumber: firstInteger(command.tokens.slice(slashIndex + 1)),
