@@ -17,6 +17,8 @@ import {
   setCommandSource,
   useCommandRuntimeSnapshot,
 } from "../command/commandRuntime";
+import { runProgrammerHistory } from "../command/programmerHistory";
+import { runFixtureSelectionHistory } from "../command/selectionHistory";
 import {
   clearWorkspaceRuntimeCache,
   loadCachedFixtureTypes,
@@ -330,11 +332,14 @@ export function GroupsWindow({ config, onConfigChange }: WindowToolProps) {
   async function recallSlot(slot: GroupSlot) {
     if (slot.fixtureIds.length === 0) return;
     setActiveSlotId(slot.id);
-    await invoke("fixture_selection_select", {
-      fixtureIds: slot.fixtureIds,
-      primaryFixtureId: slot.primaryFixtureId ?? slot.fixtureIds[0] ?? null,
-      mode: "replace",
-    });
+    const selection = await runFixtureSelectionHistory(`Select Group ${slot.id}`, () =>
+      invoke<FixtureSelection>("fixture_selection_select", {
+        fixtureIds: slot.fixtureIds,
+        primaryFixtureId: slot.primaryFixtureId ?? slot.fixtureIds[0] ?? null,
+        mode: "replace",
+      }),
+    );
+    setWorkspaceRuntimeValue("selection", selection);
   }
 
   function handleSlotClick(id: number, slot: GroupSlot | undefined) {
@@ -824,11 +829,15 @@ export function PresetsWindow({ config, onConfigChange }: WindowToolProps) {
   }
 
   async function recallSlot(slot: PresetSlot) {
-    await Promise.all(
-      slot.values
-        .filter((value) => value.active)
-        .map((value) => setProgrammerAttribute(value, value.value.numeric ?? 0, "preset")),
-    );
+    const programmer = await runProgrammerHistory(`Recall ${presetCategoryLabel(slot.category)} Preset ${slot.id}`, async () => {
+      await Promise.all(
+        slot.values
+          .filter((value) => value.active)
+          .map((value) => setProgrammerAttribute(value, value.value.numeric ?? 0, "preset")),
+      );
+      return invoke<Programmer>("programmer_get");
+    });
+    setWorkspaceRuntimeValue("programmer", programmer);
   }
 
   function clearSlot(slot: PresetSlot) {

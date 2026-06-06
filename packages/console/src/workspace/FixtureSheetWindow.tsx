@@ -2,6 +2,7 @@ import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, ReactNode } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
+import { runFixtureSelectionHistory } from "../command/selectionHistory";
 import {
   clearWorkspaceRuntimeCache,
   loadCachedDmxFrames,
@@ -469,10 +470,14 @@ export function FixtureSheetWindow() {
       return [row.id];
     });
 
-    void invoke("fixture_selection_select", {
-      fixtureIds,
-      primaryFixtureId: row.id,
-      mode,
+    void runFixtureSelectionHistory(`Select Fixture ${row.fidLabel}`, () =>
+      invoke<FixtureSelection>("fixture_selection_select", {
+        fixtureIds,
+        primaryFixtureId: row.id,
+        mode,
+      }),
+    ).then((selection) => {
+      setWorkspaceRuntimeValue("selection", selection);
     });
   }, [anchorId, visibleRows]);
 

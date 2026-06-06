@@ -8,7 +8,6 @@ import {
   commandSlotNumber,
   commandSourceTargetSlotPair,
   commandValueAfter,
-  pushCommandHistory,
   registerCommandHandler,
   type DeskCommandState,
 } from "./commandRuntime";
@@ -29,6 +28,7 @@ import {
   type SequenceLoadResult,
   type SequenceModel,
 } from "./sequenceActions";
+import { runProgrammerHistory } from "./programmerHistory";
 import { runFixtureSelectionHistory } from "./selectionHistory";
 
 interface PatchDocument {
@@ -750,17 +750,6 @@ async function handleStompCommand(command: DeskCommandState) {
 
 function parentFixtureId(id: string) {
   return id.split("::sub:")[0] ?? id;
-}
-
-async function runProgrammerHistory(label: string, action: () => Promise<Programmer>) {
-  const before = await invoke<Programmer>("programmer_get");
-  const after = await action();
-  pushCommandHistory({
-    label,
-    undo: () => invoke("programmer_replace_current", { programmer: before }),
-    redo: () => invoke("programmer_replace_current", { programmer: after }),
-  });
-  return after;
 }
 
 async function resolveDimmerAttribute(fixtureId: string | null): Promise<FixtureModeAttribute> {
