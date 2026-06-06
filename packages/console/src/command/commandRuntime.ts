@@ -24,11 +24,17 @@ export interface DeskCommandSource {
   label: string;
 }
 
+export interface DeskCommandObjectPhrase {
+  target: DeskCommandTarget;
+  numbers: number[];
+}
+
 export interface DeskCommandState {
   mode: DeskCommandMode;
   target: DeskCommandTarget | null;
   source: DeskCommandSource | null;
   tokens: string[];
+  objectPhrases: DeskCommandObjectPhrase[];
   status: string;
   undoCount: number;
   redoCount: number;
@@ -49,7 +55,7 @@ export interface DeskCommandHandlerResult {
   status?: string;
 }
 
-export type ParsedDeskCommand = Pick<DeskCommandState, "mode" | "target" | "source" | "tokens" | "status">;
+export type ParsedDeskCommand = Pick<DeskCommandState, "mode" | "target" | "source" | "tokens" | "objectPhrases" | "status">;
 
 export type DeskCommandHandler = (
   state: DeskCommandState,
@@ -65,6 +71,7 @@ let state: DeskCommandState = {
   target: null,
   source: null,
   tokens: [],
+  objectPhrases: [],
   status: "Ready",
   undoCount: 0,
   redoCount: 0,
@@ -121,6 +128,7 @@ export function appendCommandToken(token: string) {
   const nextTokens = appendSmartToken(state.tokens, normalizeToken(token));
   setCommandState({
     tokens: nextTokens,
+    objectPhrases: [],
     status: commandLineText({ ...state, tokens: nextTokens }),
   });
 }
@@ -133,7 +141,11 @@ export function cancelCommandStep() {
 
   if (state.tokens.length > 0) {
     const tokens = state.tokens.slice(0, -1);
-    setCommandState({ tokens, status: tokens.length > 0 ? commandLineText({ ...state, tokens }) : commandModeStatus(state.mode) });
+    setCommandState({
+      tokens,
+      objectPhrases: [],
+      status: tokens.length > 0 ? commandLineText({ ...state, tokens }) : commandModeStatus(state.mode),
+    });
     return;
   }
 
@@ -151,6 +163,7 @@ export function clearCommandEntry(status = "Ready") {
     target: null,
     source: null,
     tokens: [],
+    objectPhrases: [],
     status,
   });
 }
@@ -263,7 +276,21 @@ export function isCommandModeActive(mode: DeskCommandMode) {
   return state.mode === mode;
 }
 
-export function commandLineText(command: Pick<DeskCommandState, "mode" | "target" | "tokens"> & Partial<Pick<DeskCommandState, "source">> = state) {
+export function commandLineText(
+  command: Pick<DeskCommandState, "mode" | "target" | "tokens"> & Partial<Pick<DeskCommandState, "source" | "objectPhrases">> = state,
+) {
+  if (command.objectPhrases && command.objectPhrases.length > 1) {
+    const segments = [
+      command.mode === "idle" ? null : command.mode,
+      command.source?.label,
+      formatObjectPhrase(command.objectPhrases[0]),
+      "At",
+      formatObjectPhrase(command.objectPhrases[1]),
+      ...command.tokens.filter((token) => token.toLowerCase() === "if" || token === "+" || token === "-"),
+    ].filter((segment): segment is string => Boolean(segment));
+    return segments.length > 0 ? segments.join(" ") : "Ready";
+  }
+
   const segments = [
     command.mode === "idle" ? null : command.mode,
     command.target,
@@ -271,6 +298,11 @@ export function commandLineText(command: Pick<DeskCommandState, "mode" | "target
     ...command.tokens,
   ].filter((segment): segment is string => Boolean(segment));
   return segments.length > 0 ? segments.join(" ") : "Ready";
+}
+
+function formatObjectPhrase(phrase: DeskCommandObjectPhrase | undefined) {
+  if (!phrase) return null;
+  return `${titleCase(phrase.target)} ${phrase.numbers.join(" ")}`;
 }
 
 export function commandSlotNumber(command: DeskCommandState) {
@@ -348,17 +380,35 @@ export function commandNumberSet(command: DeskCommandState) {
   return Array.from(result).sort((left, right) => left - right);
 }
 
-export function commandSourceTargetSlotPair(command: DeskCommandState, pool?: DeskCommandSource["pool"]) {
+export function commandSourceTargetSlotPair(
+  command: DeskCommandState,
+  pool?: DeskCommandSource["pool"],
+): { source: number; target: number } | null {
+  const phrasePair = commandObjectPhrasePair(command, pool);
+  if (phrasePair) return phrasePair;
   const tokenPair = commandSourceTargetPairFromTokens(command.tokens);
   if (tokenPair) return tokenPair;
   if (!command.source || (pool && command.source.pool !== pool)) return null;
   const source = Number(command.source.id);
   const target = commandSlotNumber(command);
-  if (!Number.isInteger(source) || !target) return null;
+  if (!Number.isInteger(source) || target === null) return null;
   return { source, target };
 }
 
-function commandSourceTargetPairFromTokens(tokens: string[]) {
+export function commandObjectNumbers(command: DeskCommandState, target: DeskCommandTarget) {
+  return command.objectPhrases.find((phrase) => phrase.target === target)?.numbers ?? [];
+}
+
+export function commandObjectPhrasePair(command: DeskCommandState, target?: DeskCommandTarget): { source: number; target: number } | null {
+  const phrases = target ? command.objectPhrases.filter((phrase) => phrase.target === target) : command.objectPhrases;
+  if (phrases.length < 2) return null;
+  const source = phrases[0]?.numbers.at(-1) ?? null;
+  const destination = phrases[1]?.numbers[0] ?? null;
+  if (source === null || destination === null || !Number.isInteger(source) || !Number.isInteger(destination)) return null;
+  return { source, target: destination };
+}
+
+function commandSourceTargetPairFromTokens(tokens: string[]): { source: number; target: number } | null {
   const atIndex = tokens.findIndex((token) => token.toLowerCase() === "at");
   if (atIndex <= 0 || atIndex >= tokens.length - 1) return null;
   const source = lastInteger(tokens.slice(0, atIndex));
@@ -434,12 +484,14 @@ export function parseCommandText(text: string): ParsedDeskCommand {
   let mode: DeskCommandMode = "idle";
   let target: DeskCommandTarget | null = null;
   const tokens: string[] = [];
+  const normalizedTokens: string[] = [];
   for (const rawToken of rawTokens) {
     const token = normalizeToken(rawToken);
     const normalized = token.toLowerCase();
     if (normalized === "please") {
       continue;
     }
+    normalizedTokens.push(token);
     const parsedMode = modeFromToken(normalized);
     if (parsedMode) {
       mode = parsedMode;
@@ -452,17 +504,52 @@ export function parseCommandText(text: string): ParsedDeskCommand {
     }
     tokens.push(token);
   }
+  const objectPhrases = parseObjectPhrases(normalizedTokens);
   return {
     mode,
     target,
     source: null,
     tokens,
-    status: commandLineText({ mode, target, source: null, tokens }),
+    objectPhrases,
+    status: commandLineText({ mode, target, source: null, tokens, objectPhrases }),
   };
 }
 
 function tokenizeCommandText(text: string) {
   return text.match(/\d+(?:\.\d+)?|[a-zA-Z]+|[+\-/]/g) ?? [];
+}
+
+function parseObjectPhrases(tokens: string[]): DeskCommandObjectPhrase[] {
+  const phrases: DeskCommandObjectPhrase[] = [];
+  let currentTarget: DeskCommandTarget | null = null;
+  let currentNumbers: number[] = [];
+
+  const flush = () => {
+    if (!currentTarget || currentNumbers.length === 0) return;
+    phrases.push({
+      target: currentTarget,
+      numbers: currentNumbers,
+    });
+    currentNumbers = [];
+  };
+
+  for (const token of tokens) {
+    const target = targetFromToken(token.toLowerCase());
+    if (target) {
+      flush();
+      currentTarget = target;
+      continue;
+    }
+    if (!currentTarget) continue;
+    if (/^\d+(?:\.\d+)?$/.test(token)) {
+      const value = Number(token);
+      if (Number.isFinite(value)) {
+        currentNumbers.push(value);
+      }
+    }
+  }
+  flush();
+  return phrases;
 }
 
 function immediateCommandFromText(text: string): "undo" | "redo" | null {
@@ -496,6 +583,10 @@ function targetFromToken(token: string): DeskCommandTarget | null {
   if (token === "cue") return "cue";
   if (token === "executor" || token === "executors" || token === "exec" || token === "x" || token === "playback" || token === "desk") return "executor";
   return null;
+}
+
+function titleCase(value: string) {
+  return value.charAt(0).toUpperCase() + value.slice(1);
 }
 
 function commandModeStatus(mode: DeskCommandMode) {

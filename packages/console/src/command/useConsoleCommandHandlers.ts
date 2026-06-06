@@ -3,6 +3,8 @@ import { invoke } from "@tauri-apps/api/core";
 import {
   commandHasToken,
   commandNumberSet,
+  commandObjectNumbers,
+  commandObjectPhrasePair,
   commandSlotNumber,
   commandSourceTargetSlotPair,
   commandValueAfter,
@@ -329,6 +331,9 @@ function isExecutorMode(mode: DeskCommandState["mode"]) {
 }
 
 function commandSourceTargetNumberPair(command: DeskCommandState) {
+  const phrasePair = commandObjectPhrasePair(command, "cue");
+  if (phrasePair) return phrasePair;
+
   const atIndex = command.tokens.findIndex((token) => token.toLowerCase() === "at");
   if (atIndex <= 0 || atIndex >= command.tokens.length - 1) return null;
   const source = lastNumber(command.tokens.slice(0, atIndex));
@@ -338,13 +343,23 @@ function commandSourceTargetNumberPair(command: DeskCommandState) {
 }
 
 function commandAssignSequenceExecutorAddress(command: DeskCommandState) {
+  const sequenceNumber = commandObjectNumbers(command, "sequence").at(-1) ?? null;
+  const executorAddress = commandExecutorAddress(command);
+  if (sequenceNumber && executorAddress.executorNumber) {
+    return {
+      sequenceNumber,
+      pageNumber: executorAddress.pageNumber,
+      executorNumber: executorAddress.executorNumber,
+    };
+  }
+
   const atIndex = command.tokens.findIndex((token) => token.toLowerCase() === "at");
   if (atIndex <= 0 || atIndex >= command.tokens.length - 1) return null;
-  const sequenceNumber = lastInteger(command.tokens.slice(0, atIndex));
+  const fallbackSequenceNumber = lastInteger(command.tokens.slice(0, atIndex));
   const address = commandExecutorAddress({ ...command, tokens: command.tokens.slice(atIndex + 1) });
-  if (!sequenceNumber || !address.executorNumber) return null;
+  if (!fallbackSequenceNumber || !address.executorNumber) return null;
   return {
-    sequenceNumber,
+    sequenceNumber: fallbackSequenceNumber,
     pageNumber: address.pageNumber,
     executorNumber: address.executorNumber,
   };
@@ -595,6 +610,14 @@ async function handleExecutorCommand(command: DeskCommandState) {
 }
 
 function commandExecutorAddress(command: DeskCommandState) {
+  const executorNumbers = commandObjectNumbers(command, "executor");
+  if (executorNumbers.length > 0) {
+    return {
+      pageNumber: executorNumbers.length > 1 ? Math.trunc(executorNumbers[0] ?? 0) : null,
+      executorNumber: Math.trunc(executorNumbers.at(-1) ?? 0),
+    };
+  }
+
   const slashIndex = command.tokens.indexOf("/");
   if (slashIndex > 0 && slashIndex < command.tokens.length - 1) {
     return {
