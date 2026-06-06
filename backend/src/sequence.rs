@@ -109,17 +109,41 @@ pub fn sequence_load_current_show(
 }
 
 #[tauri::command]
+pub fn sequence_replace_current_show(
+    document: SequenceDocument,
+    show_state: State<'_, ShowRuntimeState>,
+    sequence_state: State<'_, SequenceState>,
+    app: AppHandle,
+) -> Result<SequenceDocument, String> {
+    let Some(_show) = show_state.current()? else {
+        return Err(
+            "No show file loaded. Create or load a show before editing sequences.".to_string(),
+        );
+    };
+    let document = normalize_document(document);
+    save_and_emit(&document, &show_state, &app)?;
+    sequence_state.clear()?;
+    let snapshot = sequence_state.snapshot()?;
+    events::emit_sequence_state_changed(&app, &snapshot);
+    request_sequence_output(&app);
+    Ok(document)
+}
+
+#[tauri::command]
 pub fn sequence_create(
     name: Option<String>,
     show_state: State<'_, ShowRuntimeState>,
     app: AppHandle,
 ) -> Result<SequenceCommandResult, String> {
     let Some(_show) = show_state.current()? else {
-        return Err("No show file loaded. Create or load a show before editing sequences.".to_string());
+        return Err(
+            "No show file loaded. Create or load a show before editing sequences.".to_string(),
+        );
     };
     let now = now_ms()?;
-    let result = limxdesk_sequence::create_sequence(load_sequence_document(&show_state)?, name, now)
-        .map_err(|error| error.to_string())?;
+    let result =
+        limxdesk_sequence::create_sequence(load_sequence_document(&show_state)?, name, now)
+            .map_err(|error| error.to_string())?;
     save_and_emit(&result.document, &show_state, &app)?;
     Ok(result)
 }
@@ -230,7 +254,9 @@ pub fn sequence_store_single_step_program(
     app: AppHandle,
 ) -> Result<SequenceCommandResult, String> {
     let Some(_show) = show_state.current()? else {
-        return Err("No show file loaded. Create or load a show before storing programs.".to_string());
+        return Err(
+            "No show file loaded. Create or load a show before storing programs.".to_string(),
+        );
     };
     let selection = selection_state.current()?;
     let values = programmer_state
@@ -275,8 +301,13 @@ pub fn sequence_delete_cue(
     show_state: State<'_, ShowRuntimeState>,
     app: AppHandle,
 ) -> Result<SequenceCommandResult, String> {
-    let result = delete_cue(load_sequence_document(&show_state)?, &sequence_id, &cue_id, now_ms()?)
-        .map_err(|error| error.to_string())?;
+    let result = delete_cue(
+        load_sequence_document(&show_state)?,
+        &sequence_id,
+        &cue_id,
+        now_ms()?,
+    )
+    .map_err(|error| error.to_string())?;
     save_and_emit(&result.document, &show_state, &app)?;
     request_sequence_output(&app);
     Ok(result)
@@ -339,7 +370,13 @@ pub fn sequence_go(
     sequence_state: State<'_, SequenceState>,
     app: AppHandle,
 ) -> Result<SequenceRuntimeSnapshot, String> {
-    run_sequence_direction(sequence_id, PlaybackDirection::Go, show_state, sequence_state, app)
+    run_sequence_direction(
+        sequence_id,
+        PlaybackDirection::Go,
+        show_state,
+        sequence_state,
+        app,
+    )
 }
 
 #[tauri::command]
@@ -349,7 +386,13 @@ pub fn sequence_back(
     sequence_state: State<'_, SequenceState>,
     app: AppHandle,
 ) -> Result<SequenceRuntimeSnapshot, String> {
-    run_sequence_direction(sequence_id, PlaybackDirection::Back, show_state, sequence_state, app)
+    run_sequence_direction(
+        sequence_id,
+        PlaybackDirection::Back,
+        show_state,
+        sequence_state,
+        app,
+    )
 }
 
 #[tauri::command]
@@ -384,7 +427,11 @@ pub fn sequence_off(
 ) -> Result<SequenceRuntimeSnapshot, String> {
     let document = load_sequence_document(&show_state)?;
     let sequence = resolve_sequence(&document, sequence_id)?;
-    let state = off_state(&sequence.id, sequence_state.state_for(&sequence.id)?, now_ms()?);
+    let state = off_state(
+        &sequence.id,
+        sequence_state.state_for(&sequence.id)?,
+        now_ms()?,
+    );
     let snapshot = sequence_state.set_state(state)?;
     events::emit_sequence_state_changed(&app, &snapshot);
     request_sequence_output(&app);
@@ -421,7 +468,11 @@ pub(crate) fn active_sequence_output_values(
     let states = sequence_state.snapshot()?.states;
     let mut output_values = Vec::new();
     for state in states {
-        let Some(sequence) = document.sequences.iter().find(|sequence| sequence.id == state.sequence_id) else {
+        let Some(sequence) = document
+            .sequences
+            .iter()
+            .find(|sequence| sequence.id == state.sequence_id)
+        else {
             continue;
         };
         output_values.extend(
@@ -476,7 +527,12 @@ fn resolve_sequence(
 ) -> Result<&limxdesk_sequence::Sequence, String> {
     let id = sequence_id
         .or(document.selected_sequence_id.clone())
-        .or_else(|| document.sequences.first().map(|sequence| sequence.id.clone()))
+        .or_else(|| {
+            document
+                .sequences
+                .first()
+                .map(|sequence| sequence.id.clone())
+        })
         .ok_or_else(|| "no sequence exists".to_string())?;
     document
         .sequences

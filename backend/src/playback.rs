@@ -1,11 +1,6 @@
 use crate::{
-    events,
-    fixture_selection::FixtureSelectionState,
-    output,
-    programmer::ProgrammerState,
-    sequence,
-    sequence::SequenceState,
-    show::ShowRuntimeState,
+    events, fixture_selection::FixtureSelectionState, output, programmer::ProgrammerState,
+    sequence, sequence::SequenceState, show::ShowRuntimeState,
 };
 use limxdesk_cue::CueStoreMode;
 use limxdesk_playback::{
@@ -36,6 +31,23 @@ pub fn playback_load_current_show(
 }
 
 #[tauri::command]
+pub fn playback_replace_current_show(
+    document: PlaybackDocument,
+    show_state: State<'_, ShowRuntimeState>,
+    app: AppHandle,
+) -> Result<PlaybackDocument, String> {
+    let Some(_show) = show_state.current()? else {
+        return Err(
+            "No show file loaded. Create or load a show before editing playback.".to_string(),
+        );
+    };
+    let document = normalize_document(document);
+    save_and_emit(&document, &show_state, &app)?;
+    request_playback_output(&app);
+    Ok(document)
+}
+
+#[tauri::command]
 pub fn playback_assign_executor(
     page_id: String,
     executor_id: String,
@@ -54,8 +66,13 @@ pub fn playback_assign_executor(
         object_id: sequence.id.clone(),
         object_name: sequence.name.clone(),
     };
-    let document = assign_executor(load_playback_document(&show_state)?, &page_id, &executor_id, assignment)
-        .map_err(|error| error.to_string())?;
+    let document = assign_executor(
+        load_playback_document(&show_state)?,
+        &page_id,
+        &executor_id,
+        assignment,
+    )
+    .map_err(|error| error.to_string())?;
     save_and_emit(&document, &show_state, &app)?;
     Ok(document)
 }
@@ -71,16 +88,21 @@ pub fn playback_store_programmer_on_executor(
     app: AppHandle,
 ) -> Result<PlaybackStoreExecutorResult, String> {
     let Some(_show) = show_state.current()? else {
-        return Err("No show file loaded. Create or load a show before editing playback.".to_string());
+        return Err(
+            "No show file loaded. Create or load a show before editing playback.".to_string(),
+        );
     };
 
     let playback_document = load_playback_document(&show_state)?;
     let executor = find_executor(&playback_document, &page_id, &executor_id)
         .map_err(|error| error.to_string())?
         .clone();
-    let existing_sequence_id = executor.assignment.as_ref().and_then(|assignment| match assignment.kind {
-        ExecutorAssignmentKind::Sequence => Some(assignment.object_id.clone()),
-    });
+    let existing_sequence_id = executor
+        .assignment
+        .as_ref()
+        .and_then(|assignment| match assignment.kind {
+            ExecutorAssignmentKind::Sequence => Some(assignment.object_id.clone()),
+        });
     let selection = selection_state.current()?;
     let values = programmer_state
         .current()?
@@ -180,18 +202,21 @@ pub fn playback_fire_executor(
     app: AppHandle,
 ) -> Result<sequence::SequenceRuntimeSnapshot, String> {
     let document = load_playback_document(&show_state)?;
-    let executor = find_executor(&document, &page_id, &executor_id).map_err(|error| error.to_string())?;
+    let executor =
+        find_executor(&document, &page_id, &executor_id).map_err(|error| error.to_string())?;
     let Some(assignment) = executor.assignment.as_ref() else {
         return Ok(sequence_state.snapshot()?);
     };
     match assignment.kind {
         ExecutorAssignmentKind::Sequence => match action {
-            PlaybackAction::Go | PlaybackAction::Toggle | PlaybackAction::FlashOn => sequence::sequence_go(
-                Some(assignment.object_id.clone()),
-                show_state,
-                sequence_state,
-                app,
-            ),
+            PlaybackAction::Go | PlaybackAction::Toggle | PlaybackAction::FlashOn => {
+                sequence::sequence_go(
+                    Some(assignment.object_id.clone()),
+                    show_state,
+                    sequence_state,
+                    app,
+                )
+            }
             PlaybackAction::Back => sequence::sequence_back(
                 Some(assignment.object_id.clone()),
                 show_state,
@@ -263,9 +288,12 @@ fn save_and_emit(
     app: &AppHandle,
 ) -> Result<(), String> {
     let Some(_show) = show_state.current()? else {
-        return Err("No show file loaded. Create or load a show before editing playback.".to_string());
+        return Err(
+            "No show file loaded. Create or load a show before editing playback.".to_string(),
+        );
     };
-    let saved = show_state.write_section(PLAYBACK_SECTION_KEY, PLAYBACK_SECTION_VERSION, document)?;
+    let saved =
+        show_state.write_section(PLAYBACK_SECTION_KEY, PLAYBACK_SECTION_VERSION, document)?;
     events::emit_playback_changed(app, &saved);
     Ok(())
 }
