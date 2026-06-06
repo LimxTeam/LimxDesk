@@ -15,6 +15,7 @@ import {
   assignSequenceToExecutorAction,
   clearExecutorAction,
   copyOrMoveExecutorAction,
+  pushPlaybackHistory,
   storeProgrammerOnExecutorAction,
   type PlaybackDocument,
 } from "./playbackActions";
@@ -664,17 +665,19 @@ function commandExecutorAddress(command: DeskCommandState) {
     };
   }
 
-  const slashIndex = command.tokens.indexOf("/");
-  if (slashIndex >= 0 && slashIndex < command.tokens.length - 1) {
+  const atIndex = command.tokens.findIndex((token) => token.toLowerCase() === "at");
+  const addressTokens = atIndex > 0 ? command.tokens.slice(0, atIndex) : command.tokens;
+  const slashIndex = addressTokens.indexOf("/");
+  if (slashIndex >= 0 && slashIndex < addressTokens.length - 1) {
     return {
-      pageNumber: lastInteger(command.tokens.slice(0, slashIndex)),
-      executorNumber: firstInteger(command.tokens.slice(slashIndex + 1)),
+      pageNumber: lastInteger(addressTokens.slice(0, slashIndex)),
+      executorNumber: firstInteger(addressTokens.slice(slashIndex + 1)),
     };
   }
 
   return {
     pageNumber: null,
-    executorNumber: commandSlotNumber(command),
+    executorNumber: lastInteger(addressTokens),
   };
 }
 
@@ -682,6 +685,10 @@ async function handleAtCommand(command: DeskCommandState) {
   const value = commandValueAfter(command, "At");
   if (value === null) {
     return { handled: true, keepCommand: true, status: "At command needs a value" };
+  }
+
+  if (isExecutorAtCommand(command)) {
+    return handleExecutorAtCommand(command, value);
   }
 
   const atIndex = command.tokens.findIndex((token) => token.toLowerCase() === "at");
@@ -714,6 +721,42 @@ async function handleAtCommand(command: DeskCommandState) {
     }),
   );
   return { handled: true, status: `At ${value}` };
+}
+
+async function handleExecutorAtCommand(command: DeskCommandState, value: number) {
+  const address = commandExecutorAddress(command);
+  const number = address.executorNumber;
+  if (!number) {
+    return { handled: true, keepCommand: true, status: "Executor At needs an executor number" };
+  }
+
+  const before = await invoke<PlaybackDocument>("playback_load_current_show");
+  const page =
+    (address.pageNumber ? before.pages.find((item) => item.number === address.pageNumber) : null) ??
+    before.pages.find((item) => item.id === before.selectedPageId) ??
+    before.pages[0] ??
+    null;
+  const executor = page?.executors.find((item) => item.number === number) ?? null;
+  if (!page || !executor) {
+    return { handled: true, keepCommand: true, status: `Executor ${number} not found` };
+  }
+
+  const master = clamp(value, 0, 100) / 100;
+  const after = await invoke<PlaybackDocument>("playback_set_executor_master", {
+    pageId: page.id,
+    executorId: executor.id,
+    master,
+  });
+  pushPlaybackHistory(`Executor ${number} At ${Math.round(master * 100)}`, before, after);
+  return { handled: true, status: `Executor ${number} At ${Math.round(master * 100)}` };
+}
+
+function isExecutorAtCommand(command: DeskCommandState) {
+  if (command.target === "executor") return true;
+  if (commandObjectNumbers(command, "executor").length > 0) return true;
+  const atIndex = command.tokens.findIndex((token) => token.toLowerCase() === "at");
+  const addressTokens = atIndex > 0 ? command.tokens.slice(0, atIndex) : command.tokens;
+  return addressTokens.includes("/");
 }
 
 async function handleSelectionOnOffCommand(command: DeskCommandState) {

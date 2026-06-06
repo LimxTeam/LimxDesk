@@ -63,6 +63,11 @@ try {
   const copyExecutor = parseCommandText("Copy / 101 At / 102");
   assert.deepEqual(commandSourceTargetSlotPair(copyExecutor, "executor"), { source: 101, target: 102 });
 
+  const executorAt = parseCommandText("Executor 101 At 50");
+  assert.equal(executorAt.target, "executor");
+  assert.deepEqual(commandObjectNumbers(executorAt, "executor"), [101]);
+  assert.equal(commandLineText(executorAt), "/ 101 At 50");
+
   clearCommandEntry();
   setCommandTarget("fixture");
   for (const key of ["1", "Thru", "5", "+", "8", "-", "3"]) {
