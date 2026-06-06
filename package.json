@@ -7,6 +7,8 @@
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
+    "test": "pnpm test:command",
+    "test:command": "node scripts/test-command-runtime.mjs",
     "typecheck": "tsc --noEmit",
     "tauri": "powershell -NoProfile -ExecutionPolicy Bypass -Command \"Set-Location -LiteralPath backend; ..\\node_modules\\.bin\\tauri\"",
     "tauri:dev": "powershell -NoProfile -ExecutionPolicy Bypass -Command \"Set-Location -LiteralPath backend; ..\\node_modules\\.bin\\tauri dev\"",
