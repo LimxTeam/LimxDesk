@@ -4,6 +4,7 @@ import {
   commandHasToken,
   commandNumberSet,
   commandSlotNumber,
+  commandSourceTargetSlotPair,
   commandValueAfter,
   pushCommandHistory,
   registerCommandHandler,
@@ -56,6 +57,13 @@ interface PlaybackStoreExecutorResult {
 interface ExecutorModel {
   id: string;
   number: number;
+  assignment: ExecutorAssignment | null;
+}
+
+interface ExecutorAssignment {
+  kind: "sequence";
+  objectId: string;
+  objectName: string;
 }
 
 interface PatchDocument {
@@ -306,7 +314,7 @@ async function handleSequenceCommand(command: DeskCommandState) {
   }
 
   if (command.mode === "copy" || command.mode === "move") {
-    const pair = commandSourceTargetPair(command);
+    const pair = commandSourceTargetSlotPair(command, "sequence");
     if (!pair) {
       return { handled: true, keepCommand: true, status: `${command.mode.toUpperCase()} Sequence needs source At destination` };
     }
@@ -370,15 +378,6 @@ function isExecutorMode(mode: DeskCommandState["mode"]) {
     mode === "off" ||
     mode === "select"
   );
-}
-
-function commandSourceTargetPair(command: DeskCommandState) {
-  const atIndex = command.tokens.findIndex((token) => token.toLowerCase() === "at");
-  if (atIndex <= 0 || atIndex >= command.tokens.length - 1) return null;
-  const source = lastInteger(command.tokens.slice(0, atIndex));
-  const target = firstInteger(command.tokens.slice(atIndex + 1));
-  if (!source || !target) return null;
-  return { source, target };
 }
 
 function commandSourceTargetNumberPair(command: DeskCommandState) {
@@ -633,7 +632,7 @@ async function handleExecutorCommand(command: DeskCommandState) {
   }
 
   if (command.mode === "copy" || command.mode === "move") {
-    const pair = commandSourceTargetPair(command);
+    const pair = commandSourceTargetSlotPair(command, "executor");
     if (!pair) {
       return { handled: true, keepCommand: true, status: `${command.mode.toUpperCase()} Executor needs source At destination` };
     }
@@ -641,6 +640,9 @@ async function handleExecutorCommand(command: DeskCommandState) {
     const target = page.executors.find((item) => item.number === pair.target);
     if (!source || !target) {
       return { handled: true, keepCommand: true, status: `Executor ${!source ? pair.source : pair.target} not found` };
+    }
+    if (!source.assignment) {
+      return { handled: true, keepCommand: true, status: `Executor ${pair.source} is empty` };
     }
     const after = await invoke<PlaybackDocument>(command.mode === "copy" ? "playback_copy_executor" : "playback_move_executor", {
       pageId: page.id,

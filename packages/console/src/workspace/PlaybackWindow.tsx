@@ -7,6 +7,7 @@ import {
   commandSlotNumber,
   pushCommandHistory,
   registerCommandHandler,
+  setCommandSource,
   useCommandRuntimeSnapshot,
 } from "../command/commandRuntime";
 import { clearWorkspaceRuntimeCache } from "./workspaceRuntime";
@@ -386,6 +387,55 @@ export function PlaybackWindow() {
     }
   }
 
+  async function copyOrMoveExecutor(target: Executor) {
+    if (!page) return;
+    const source = commandState.source;
+    if (!source) {
+      if (!target.assignment) {
+        setStatus(`Executor ${target.number} is empty`);
+        return;
+      }
+      setCommandSource({ pool: "executor", id: target.number, label: `Executor ${target.number}` });
+      setSelectedExecutorId(target.id);
+      setStatus(`${commandState.mode.toUpperCase()} source: Executor ${target.number}`);
+      return;
+    }
+    if (source.pool !== "executor") {
+      setStatus(`${commandState.mode.toUpperCase()} source is not an executor`);
+      return;
+    }
+    const sourceNumber = Number(source.id);
+    const sourceExecutor = page.executors.find((item) => item.number === sourceNumber);
+    if (!sourceExecutor) {
+      setCommandSource(null);
+      setStatus(`Executor ${source.id} not found`);
+      return;
+    }
+    if (!sourceExecutor.assignment) {
+      setCommandSource(null);
+      setStatus(`Executor ${sourceNumber} is empty`);
+      return;
+    }
+    try {
+      const before = playback;
+      const after = await invoke<PlaybackDocument>(commandState.mode === "move" ? "playback_move_executor" : "playback_copy_executor", {
+        pageId: page.id,
+        sourceExecutorId: sourceExecutor.id,
+        targetExecutorId: target.id,
+      });
+      setPlayback(after);
+      setSelectedExecutorId(target.id);
+      pushCommandHistory({
+        label: `${commandState.mode === "move" ? "Move" : "Copy"} Executor ${sourceNumber} At ${target.number}`,
+        undo: async () => setPlayback(await invoke<PlaybackDocument>("playback_replace_current_show", { document: before })),
+        redo: async () => setPlayback(await invoke<PlaybackDocument>("playback_replace_current_show", { document: after })),
+      });
+      clearCommandEntry(`${commandState.mode === "move" ? "Moved" : "Copied"} Executor ${sourceNumber} At ${target.number}`);
+    } catch (error) {
+      setStatus(String(error));
+    }
+  }
+
   function handleExecutorPrimary(executor: Executor) {
     if (commandState.mode === "assign") {
       const sourceSequence =
@@ -397,6 +447,11 @@ export function PlaybackWindow() {
       } else {
         setStatus("Assign needs a sequence source");
       }
+      return;
+    }
+
+    if (commandState.mode === "copy" || commandState.mode === "move") {
+      void copyOrMoveExecutor(executor);
       return;
     }
 

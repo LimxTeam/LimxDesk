@@ -15,6 +15,7 @@ import { ShowFileDialog } from "./components/ShowFileDialog";
 import { useConsoleCommandHandlers } from "./command/useConsoleCommandHandlers";
 import {
   commandSlotNumber,
+  commandSourceTargetSlotPair,
   getCommandRuntimeSnapshot,
   pushCommandHistory,
   registerCommandHandler,
@@ -23,7 +24,6 @@ import {
 } from "./command/commandRuntime";
 import {
   activeProgrammerValues,
-  commandSourceTargetPair,
   GROUP_SLOT_COUNT,
   PRESET_SLOT_COUNT,
   ensurePoolWindow,
@@ -258,7 +258,7 @@ async function handleGlobalGroupCommand(
   }
 
   if (command.mode === "copy" || command.mode === "move") {
-    const pair = commandSourceTargetPair(command.tokens);
+    const pair = commandSourceTargetSlotPair(command, "group");
     if (!pair) return { handled: true, keepCommand: true, status: `${command.mode.toUpperCase()} Group needs source At destination` };
     const source = slots.find((item) => item.id === pair.source);
     if (!source) return { handled: true, keepCommand: true, status: `Group ${pair.source} is empty` };
@@ -359,7 +359,7 @@ async function handleGlobalPresetCommand(
   }
 
   if (command.mode === "copy" || command.mode === "move") {
-    const pair = commandSourceTargetPair(command.tokens);
+    const pair = commandSourceTargetSlotPair(command, "preset");
     if (!pair) return { handled: true, keepCommand: true, status: `${command.mode.toUpperCase()} Preset needs source At destination` };
     const source = slots.find((item) => item.category === "all" && item.id === pair.source);
     if (!source) return { handled: true, keepCommand: true, status: `Preset ${pair.source} is empty` };

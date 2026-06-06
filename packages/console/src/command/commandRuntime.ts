@@ -245,10 +245,11 @@ export function isCommandModeActive(mode: DeskCommandMode) {
   return state.mode === mode;
 }
 
-export function commandLineText(command: Pick<DeskCommandState, "mode" | "target" | "tokens"> = state) {
+export function commandLineText(command: Pick<DeskCommandState, "mode" | "target" | "tokens"> & Partial<Pick<DeskCommandState, "source">> = state) {
   const segments = [
     command.mode === "idle" ? null : command.mode,
     command.target,
+    command.source?.label,
     ...command.tokens,
   ].filter((segment): segment is string => Boolean(segment));
   return segments.length > 0 ? segments.join(" ") : "Ready";
@@ -329,6 +330,25 @@ export function commandNumberSet(command: DeskCommandState) {
   return Array.from(result).sort((left, right) => left - right);
 }
 
+export function commandSourceTargetSlotPair(command: DeskCommandState, pool?: DeskCommandSource["pool"]) {
+  const tokenPair = commandSourceTargetPairFromTokens(command.tokens);
+  if (tokenPair) return tokenPair;
+  if (!command.source || (pool && command.source.pool !== pool)) return null;
+  const source = Number(command.source.id);
+  const target = commandSlotNumber(command);
+  if (!Number.isInteger(source) || !target) return null;
+  return { source, target };
+}
+
+function commandSourceTargetPairFromTokens(tokens: string[]) {
+  const atIndex = tokens.findIndex((token) => token.toLowerCase() === "at");
+  if (atIndex <= 0 || atIndex >= tokens.length - 1) return null;
+  const source = lastInteger(tokens.slice(0, atIndex));
+  const target = firstInteger(tokens.slice(atIndex + 1));
+  if (!source || !target) return null;
+  return { source, target };
+}
+
 function setCommandState(patch: Partial<DeskCommandState>) {
   state = {
     ...state,
@@ -361,6 +381,20 @@ function appendSmartToken(tokens: string[], token: string) {
     return [...tokens.slice(0, -1), `${tokens[tokens.length - 1]}${token}`];
   }
   return [...tokens, token];
+}
+
+function firstInteger(tokens: string[]) {
+  for (const token of tokens) {
+    if (/^\d+$/.test(token)) return Number(token);
+  }
+  return null;
+}
+
+function lastInteger(tokens: string[]) {
+  for (let index = tokens.length - 1; index >= 0; index -= 1) {
+    if (/^\d+$/.test(tokens[index])) return Number(tokens[index]);
+  }
+  return null;
 }
 
 function normalizeToken(token: string) {

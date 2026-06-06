@@ -171,15 +171,6 @@ export function activeProgrammerValues(programmer: Programmer) {
   return buffer.parts.flatMap((part) => part.values).filter((value) => value.active);
 }
 
-export function commandSourceTargetPair(tokens: string[]) {
-  const atIndex = tokens.findIndex((token) => token.toLowerCase() === "at");
-  if (atIndex <= 0 || atIndex >= tokens.length - 1) return null;
-  const source = lastInteger(tokens.slice(0, atIndex));
-  const target = firstInteger(tokens.slice(atIndex + 1));
-  if (!source || !target) return null;
-  return { source, target };
-}
-
 export function presetCategoryLabel(category: PresetCategoryId) {
   if (category === "all") return "Preset";
   return category.charAt(0).toUpperCase() + category.slice(1);
@@ -234,20 +225,6 @@ function clampInt(value: unknown, min: number, max: number) {
   const number = typeof value === "number" ? value : Number(value);
   if (!Number.isFinite(number)) return min;
   return Math.round(Math.min(max, Math.max(min, number)));
-}
-
-function firstInteger(tokens: string[]) {
-  for (const token of tokens) {
-    if (/^\d+$/.test(token)) return Number(token);
-  }
-  return null;
-}
-
-function lastInteger(tokens: string[]) {
-  for (let index = tokens.length - 1; index >= 0; index -= 1) {
-    if (/^\d+$/.test(tokens[index])) return Number(tokens[index]);
-  }
-  return null;
 }
 
 function isPresetCategory(value: unknown): value is PresetCategoryId {
