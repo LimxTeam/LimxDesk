@@ -161,14 +161,15 @@ async function handleFixtureCommand(command: DeskCommandState) {
     return { handled: true, keepCommand: true, status: `${command.mode.toUpperCase()} Fixture needs a sheet or target workflow` };
   }
 
-  const fixtureNumbers = commandNumberSet(command);
-  if (fixtureNumbers.length === 0) {
+  const fixtureNumbers = commandObjectNumbers(command, "fixture");
+  const fallbackNumbers = fixtureNumbers.length > 0 ? fixtureNumbers : commandNumberSet(command);
+  if (fallbackNumbers.length === 0) {
     return { handled: true, keepCommand: true, status: "Fixture command needs fixture IDs" };
   }
 
   const document = await invoke<PatchDocument | null>("patch_load_current_show");
   const fixtures = document?.fixtures ?? [];
-  const ids = fixtureNumbers
+  const ids = fallbackNumbers
     .map((number) => fixtures.find((fixture) => fixture.fid === number)?.id)
     .filter((id): id is string => Boolean(id));
   let nextIds = ids;
@@ -178,7 +179,7 @@ async function handleFixtureCommand(command: DeskCommandState) {
     nextIds = nextIds.filter((id) => selected.has(parentFixtureId(id)));
   }
   if (nextIds.length === 0) {
-    return { handled: true, keepCommand: true, status: `No patched fixtures: ${fixtureNumbers.join(", ")}` };
+    return { handled: true, keepCommand: true, status: `No patched fixtures: ${fallbackNumbers.join(", ")}` };
   }
 
   await invoke<FixtureSelection>("fixture_selection_select", {
@@ -204,18 +205,18 @@ async function handleFixtureCommand(command: DeskCommandState) {
     });
     return {
       handled: true,
-      status: `${command.mode === "on" ? "On" : "Off"} Fixture ${fixtureNumbers.join(", ")}`,
+      status: `${command.mode === "on" ? "On" : "Off"} Fixture ${fallbackNumbers.join(", ")}`,
     };
   }
 
   return {
     handled: true,
-    status: `${commandHasToken(command, "If") ? "Filtered" : "Selected"} Fixture ${fixtureNumbers.join(", ")}`,
+    status: `${commandHasToken(command, "If") ? "Filtered" : "Selected"} Fixture ${fallbackNumbers.join(", ")}`,
   };
 }
 
 async function handleSequenceCommand(command: DeskCommandState) {
-  const requestedNumber = commandSlotNumber(command);
+  const requestedNumber = commandObjectNumbers(command, "sequence").at(-1) ?? commandSlotNumber(command);
   const result = await invoke<SequenceLoadResult>("sequence_load_current_show");
   const selected =
     result.document.sequences.find((sequence) => sequence.id === result.document.selectedSequenceId) ??
@@ -398,7 +399,7 @@ function numbersEqual(left: number, right: number) {
 }
 
 async function handleCueCommand(command: DeskCommandState) {
-  const number = lastNumber(command.tokens);
+  const number = commandObjectNumbers(command, "cue").at(-1) ?? lastNumber(command.tokens);
   const result = await invoke<SequenceLoadResult>("sequence_load_current_show");
   const selected =
     result.document.sequences.find((sequence) => sequence.id === result.document.selectedSequenceId) ??

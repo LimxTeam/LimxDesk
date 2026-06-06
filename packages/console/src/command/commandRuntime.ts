@@ -302,7 +302,35 @@ export function commandLineText(
 
 function formatObjectPhrase(phrase: DeskCommandObjectPhrase | undefined) {
   if (!phrase) return null;
-  return `${titleCase(phrase.target)} ${phrase.numbers.join(" ")}`;
+  return `${titleCase(phrase.target)} ${formatCommandNumbers(phrase.numbers)}`;
+}
+
+function formatCommandNumbers(numbers: number[]) {
+  const segments: string[] = [];
+  for (let index = 0; index < numbers.length; index += 1) {
+    const start = numbers[index];
+    if (!Number.isInteger(start)) {
+      segments.push(String(start));
+      continue;
+    }
+
+    let endIndex = index;
+    while (
+      endIndex + 1 < numbers.length &&
+      Number.isInteger(numbers[endIndex + 1]) &&
+      numbers[endIndex + 1] === numbers[endIndex] + 1
+    ) {
+      endIndex += 1;
+    }
+
+    if (endIndex - index >= 2) {
+      segments.push(`${start} Thru ${numbers[endIndex]}`);
+      index = endIndex;
+    } else {
+      segments.push(String(start));
+    }
+  }
+  return segments.join(" ");
 }
 
 export function commandSlotNumber(command: DeskCommandState) {
@@ -396,7 +424,9 @@ export function commandSourceTargetSlotPair(
 }
 
 export function commandObjectNumbers(command: DeskCommandState, target: DeskCommandTarget) {
-  return command.objectPhrases.find((phrase) => phrase.target === target)?.numbers ?? [];
+  return command.objectPhrases
+    .filter((phrase) => phrase.target === target)
+    .flatMap((phrase) => phrase.numbers);
 }
 
 export function commandObjectPhrasePair(command: DeskCommandState, target?: DeskCommandTarget): { source: number; target: number } | null {
@@ -522,15 +552,19 @@ function tokenizeCommandText(text: string) {
 function parseObjectPhrases(tokens: string[]): DeskCommandObjectPhrase[] {
   const phrases: DeskCommandObjectPhrase[] = [];
   let currentTarget: DeskCommandTarget | null = null;
-  let currentNumbers: number[] = [];
+  let currentTokens: string[] = [];
 
   const flush = () => {
-    if (!currentTarget || currentNumbers.length === 0) return;
+    const numbers = expandPhraseNumbers(currentTokens);
+    if (!currentTarget || numbers.length === 0) {
+      currentTokens = [];
+      return;
+    }
     phrases.push({
       target: currentTarget,
-      numbers: currentNumbers,
+      numbers,
     });
-    currentNumbers = [];
+    currentTokens = [];
   };
 
   for (const token of tokens) {
@@ -540,16 +574,66 @@ function parseObjectPhrases(tokens: string[]): DeskCommandObjectPhrase[] {
       currentTarget = target;
       continue;
     }
-    if (!currentTarget) continue;
-    if (/^\d+(?:\.\d+)?$/.test(token)) {
-      const value = Number(token);
-      if (Number.isFinite(value)) {
-        currentNumbers.push(value);
-      }
+    if (token === "At") {
+      flush();
+      currentTarget = null;
+      continue;
     }
+    if (!currentTarget) continue;
+    currentTokens.push(token);
   }
   flush();
   return phrases;
+}
+
+function expandPhraseNumbers(tokens: string[]) {
+  const result = new Set<number>();
+  let operator: "+" | "-" = "+";
+
+  for (let index = 0; index < tokens.length; index += 1) {
+    const token = tokens[index];
+    if (token === "+") {
+      operator = "+";
+      continue;
+    }
+    if (token === "-") {
+      operator = "-";
+      continue;
+    }
+    if (!/^\d+(?:\.\d+)?$/.test(token)) {
+      continue;
+    }
+
+    const start = Number(token);
+    let values = [start];
+    if (tokens[index + 1] === "Thru" && /^\d+(?:\.\d+)?$/.test(tokens[index + 2] ?? "")) {
+      const end = Number(tokens[index + 2]);
+      values = expandRange(start, end);
+      index += 2;
+    }
+
+    for (const value of values) {
+      if (operator === "-") {
+        result.delete(value);
+      } else {
+        result.add(value);
+      }
+    }
+  }
+
+  return Array.from(result).sort((left, right) => left - right);
+}
+
+function expandRange(start: number, end: number) {
+  if (!Number.isInteger(start) || !Number.isInteger(end)) {
+    return [start, end];
+  }
+  const step = start <= end ? 1 : -1;
+  const values: number[] = [];
+  for (let value = start; step > 0 ? value <= end : value >= end; value += step) {
+    values.push(value);
+  }
+  return values;
 }
 
 function immediateCommandFromText(text: string): "undo" | "redo" | null {
