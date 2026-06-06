@@ -3,26 +3,55 @@ import { Keyboard, Globe, Mail, Network, Play } from "lucide-react";
 import {
   cancelCommandStep,
   commandLineText,
+  parseCommandText,
   submitCommandText,
   useCommandRuntimeSnapshot,
 } from "./command/commandRuntime";
 
 export function CommandBar() {
   const [value, setValue] = useState("");
+  const [history, setHistory] = useState<string[]>([]);
+  const [historyIndex, setHistoryIndex] = useState<number | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const commandState = useCommandRuntimeSnapshot();
   const currentCommandLine = commandLineText(commandState);
+  const previewCommandLine = value.trim() ? commandLineText(parseCommandText(value)) : currentCommandLine;
 
   function handleKeyDown(e: KeyboardEvent<HTMLInputElement>) {
     if (e.key === "Enter" && value.trim()) {
-      void submitCommandText(value.trim());
+      const next = value.trim();
+      setHistory((prev) => [next, ...prev.filter((item) => item !== next)].slice(0, 24));
+      setHistoryIndex(null);
+      void submitCommandText(next);
       setValue("");
       return;
     }
 
     if (e.key === "Escape") {
       cancelCommandStep();
+      setHistoryIndex(null);
       setValue("");
+      return;
+    }
+
+    if (e.key === "ArrowUp" && history.length > 0) {
+      e.preventDefault();
+      const nextIndex = historyIndex === null ? 0 : Math.min(historyIndex + 1, history.length - 1);
+      setHistoryIndex(nextIndex);
+      setValue(history[nextIndex] ?? "");
+      return;
+    }
+
+    if (e.key === "ArrowDown" && historyIndex !== null) {
+      e.preventDefault();
+      const nextIndex = historyIndex - 1;
+      if (nextIndex < 0) {
+        setHistoryIndex(null);
+        setValue("");
+        return;
+      }
+      setHistoryIndex(nextIndex);
+      setValue(history[nextIndex] ?? "");
     }
   }
 
@@ -64,17 +93,17 @@ export function CommandBar() {
         }}
         onClick={() => inputRef.current?.focus()}
       >
-        {!value && currentCommandLine !== "Ready" ? (
+        {previewCommandLine !== "Ready" ? (
           <span
             className="lx-code"
             style={{
-              color: "var(--lx-accent-bright)",
+              color: value.trim() ? "var(--lx-primary-bright)" : "var(--lx-accent-bright)",
               fontSize: 11,
               marginRight: 8,
               whiteSpace: "nowrap",
             }}
           >
-            {currentCommandLine}
+            {previewCommandLine}
           </span>
         ) : null}
         <input

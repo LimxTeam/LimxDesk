@@ -49,6 +49,8 @@ export interface DeskCommandHandlerResult {
   status?: string;
 }
 
+export type ParsedDeskCommand = Pick<DeskCommandState, "mode" | "target" | "source" | "tokens" | "status">;
+
 export type DeskCommandHandler = (
   state: DeskCommandState,
 ) => boolean | DeskCommandHandlerResult | Promise<boolean | DeskCommandHandlerResult>;
@@ -191,7 +193,23 @@ function normalizeHandlerResult(value: boolean | DeskCommandHandlerResult): Desk
 }
 
 export async function submitCommandText(text: string) {
-  const parsed = parseCommandText(text);
+  const trimmed = text.trim();
+  if (!trimmed) {
+    setCommandState({ status: "No command entered" });
+    return;
+  }
+
+  const immediate = immediateCommandFromText(trimmed);
+  if (immediate === "undo") {
+    await undoLastCommand();
+    return;
+  }
+  if (immediate === "redo") {
+    await redoLastCommand();
+    return;
+  }
+
+  const parsed = parseCommandText(trimmed);
   setCommandState(parsed);
   await executeCurrentCommand();
 }
@@ -403,6 +421,7 @@ function normalizeToken(token: string) {
   if (lower === "thru" || lower === "through") return "Thru";
   if (lower === "if") return "If";
   if (lower === "at") return "At";
+  if (lower === "please" || lower === "enter") return "Please";
   return trimmed;
 }
 
@@ -410,14 +429,17 @@ function isStandaloneOperator(token: string) {
   return token === "Thru" || token === "+" || token === "-" || token === "If" || token === "At" || token === "/" || token === ".";
 }
 
-function parseCommandText(text: string): Partial<DeskCommandState> {
-  const rawTokens = text.trim().split(/\s+/).filter(Boolean);
+export function parseCommandText(text: string): ParsedDeskCommand {
+  const rawTokens = tokenizeCommandText(text);
   let mode: DeskCommandMode = "idle";
   let target: DeskCommandTarget | null = null;
   const tokens: string[] = [];
   for (const rawToken of rawTokens) {
     const token = normalizeToken(rawToken);
     const normalized = token.toLowerCase();
+    if (normalized === "please") {
+      continue;
+    }
     const parsedMode = modeFromToken(normalized);
     if (parsedMode) {
       mode = parsedMode;
@@ -435,19 +457,30 @@ function parseCommandText(text: string): Partial<DeskCommandState> {
     target,
     source: null,
     tokens,
-    status: text.trim(),
+    status: commandLineText({ mode, target, source: null, tokens }),
   };
+}
+
+function tokenizeCommandText(text: string) {
+  return text.match(/\d+(?:\.\d+)?|[a-zA-Z]+|[+\-/]/g) ?? [];
+}
+
+function immediateCommandFromText(text: string): "undo" | "redo" | null {
+  const normalized = text.trim().toLowerCase();
+  if (normalized === "undo" || normalized === "oops") return "undo";
+  if (normalized === "redo") return "redo";
+  return null;
 }
 
 function modeFromToken(token: string): DeskCommandMode | null {
   if (token === "store") return "store";
   if (token === "update") return "update";
   if (token === "edit") return "edit";
-  if (token === "delete") return "delete";
+  if (token === "delete" || token === "del") return "delete";
   if (token === "copy") return "copy";
   if (token === "move") return "move";
   if (token === "assign") return "assign";
-  if (token === "select") return "select";
+  if (token === "select" || token === "sel") return "select";
   if (token === "on") return "on";
   if (token === "off") return "off";
   if (token === "stomp") return "stomp";
@@ -456,12 +489,12 @@ function modeFromToken(token: string): DeskCommandMode | null {
 }
 
 function targetFromToken(token: string): DeskCommandTarget | null {
-  if (token === "fixture") return "fixture";
-  if (token === "group") return "group";
-  if (token === "preset") return "preset";
-  if (token === "sequence") return "sequence";
+  if (token === "fixture" || token === "fixtures" || token === "fix" || token === "f") return "fixture";
+  if (token === "group" || token === "groups" || token === "grp" || token === "g") return "group";
+  if (token === "preset" || token === "presets" || token === "p") return "preset";
+  if (token === "sequence" || token === "sequences" || token === "seq" || token === "s") return "sequence";
   if (token === "cue") return "cue";
-  if (token === "executor" || token === "exec" || token === "playback" || token === "desk") return "executor";
+  if (token === "executor" || token === "executors" || token === "exec" || token === "x" || token === "playback" || token === "desk") return "executor";
   return null;
 }
 

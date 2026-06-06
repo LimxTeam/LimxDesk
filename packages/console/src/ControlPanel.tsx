@@ -751,6 +751,8 @@ function commandButtonForKeyboardEvent(event: KeyboardEvent) {
   if (event.code === "NumpadDivide") return "/";
 
   const key = event.key.toLowerCase();
+  if (key === "z") return "Undo";
+  if (key === "y") return "Redo";
   if (key === "t") return "Thru";
   if (key === "a") return "At";
   if (key === "x") return "Assign";
@@ -759,12 +761,17 @@ function commandButtonForKeyboardEvent(event: KeyboardEvent) {
   if (key === "u") return "Update";
   if (key === "e") return "Edit";
   if (key === "c") return "Clear";
+  if (key === "v") return "Copy";
+  if (key === "m") return "Move";
+  if (key === "l") return "Select";
   if (key === "f") return "Fixture";
   if (key === "g") return "Group";
   if (key === "p") return "Preset";
   if (key === "q") return "Sequence";
+  if (key === "b") return "Cue";
   if (key === "d") return "DESK";
   if (key === "o") return "On";
+  if (key === "n") return "Off";
   return null;
 }
 
