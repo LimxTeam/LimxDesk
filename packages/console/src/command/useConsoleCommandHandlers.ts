@@ -448,13 +448,15 @@ async function handleCueCommand(command: DeskCommandState) {
 }
 
 async function handleExecutorCommand(command: DeskCommandState) {
-  const number = commandSlotNumber(command);
+  const address = commandExecutorAddress(command);
+  const number = address.executorNumber;
   if (!number) {
     return { handled: true, keepCommand: true, status: "Executor command needs an executor number" };
   }
 
   const playback = await invoke<PlaybackDocument>("playback_load_current_show");
   const page =
+    (address.pageNumber ? playback.pages.find((item) => item.number === address.pageNumber) : null) ??
     playback.pages.find((item) => item.id === playback.selectedPageId) ??
     playback.pages[0] ??
     null;
@@ -523,6 +525,21 @@ async function handleExecutorCommand(command: DeskCommandState) {
   }
 
   return false;
+}
+
+function commandExecutorAddress(command: DeskCommandState) {
+  const slashIndex = command.tokens.indexOf("/");
+  if (slashIndex > 0 && slashIndex < command.tokens.length - 1) {
+    return {
+      pageNumber: lastInteger(command.tokens.slice(0, slashIndex)),
+      executorNumber: firstInteger(command.tokens.slice(slashIndex + 1)),
+    };
+  }
+
+  return {
+    pageNumber: null,
+    executorNumber: commandSlotNumber(command),
+  };
 }
 
 async function handleAtCommand(command: DeskCommandState) {
