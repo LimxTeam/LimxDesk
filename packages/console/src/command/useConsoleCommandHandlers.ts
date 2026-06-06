@@ -112,23 +112,23 @@ export function useConsoleCommandHandlers() {
     return registerCommandHandler("console-global-objects", async (command) => {
       const inferredNumbers = commandNumberSet(command);
       const inferredSlot = commandSlotNumber(command);
-      if (!command.target && command.mode === "store" && inferredNumbers.length === 0) {
-        return handleSequenceCommand({ ...command, target: "sequence" });
-      }
-      if (!command.target && command.mode === "update" && inferredNumbers.length === 0) {
-        return handleSequenceCommand({ ...command, target: "sequence" });
-      }
       if (command.mode === "assign") {
         return handleAssignCommand(command);
       }
-      if (!command.target && inferredSlot && inferredSlot >= 100 && isExecutorMode(command.mode)) {
+
+      const defaultTarget = inferDefaultTarget(command, inferredNumbers, inferredSlot);
+      if (defaultTarget === "executor") {
         return handleExecutorCommand({ ...command, target: "executor" });
       }
+      if (defaultTarget === "sequence") {
+        return handleSequenceCommand({ ...command, target: "sequence" });
+      }
+      if (defaultTarget === "fixture") {
+        return handleFixtureCommand({ ...command, target: "fixture" });
+      }
+
       if (!command.target && inferredNumbers.length === 0 && (command.mode === "on" || command.mode === "off")) {
         return handleSelectionOnOffCommand(command);
-      }
-      if (!command.target && inferredNumbers.length > 0 && (command.mode === "idle" || command.mode === "select")) {
-        return handleFixtureCommand({ ...command, target: "fixture" });
       }
       if (command.mode === "stomp") {
         return handleStompCommand(command);
@@ -154,6 +154,35 @@ export function useConsoleCommandHandlers() {
       return false;
     });
   }, []);
+}
+
+function inferDefaultTarget(
+  command: DeskCommandState,
+  inferredNumbers: number[],
+  inferredSlot: number | null,
+): "fixture" | "sequence" | "executor" | null {
+  if (command.target) return null;
+  if (command.objectPhrases.length > 0) return null;
+
+  if (inferredSlot && inferredSlot >= 100 && isExecutorMode(command.mode)) {
+    return "executor";
+  }
+
+  if (command.mode === "store" || command.mode === "update") {
+    return "sequence";
+  }
+
+  if (inferredNumbers.length === 0) return null;
+
+  if (command.mode === "idle" || command.mode === "select" || command.mode === "on" || command.mode === "off") {
+    return "fixture";
+  }
+
+  if (command.mode === "delete" || command.mode === "edit" || command.mode === "copy" || command.mode === "move") {
+    return "sequence";
+  }
+
+  return null;
 }
 
 async function handleFixtureCommand(command: DeskCommandState) {

@@ -675,8 +675,8 @@ function titleCase(value: string) {
 
 function commandModeStatus(mode: DeskCommandMode) {
   if (mode === "idle") return "Ready";
-  if (mode === "store") return "Store: choose a target slot";
-  if (mode === "update") return "Update: choose an existing object";
+  if (mode === "store") return "Store: choose target; <100 defaults Sequence, >=100 Executor";
+  if (mode === "update") return "Update: choose target; <100 defaults Sequence, >=100 Executor";
   if (mode === "edit") return "Edit: choose an object";
   if (mode === "delete") return "Delete: choose an object";
   if (mode === "copy") return "Copy: choose source, then destination";
