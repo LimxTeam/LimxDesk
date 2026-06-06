@@ -7,11 +7,11 @@ use limxdesk_dmx::{DmxChannelSource, DmxOutputValue};
 use limxdesk_platform::current_timestamp_millis;
 use limxdesk_programmer::StoreUseSelection;
 use limxdesk_sequence::{
-    advance_state, copy_sequence_to_number, cue_output_values, delete_cue, delete_sequence,
-    goto_state, move_sequence_to_number, normalize_document, off_state, select_sequence,
-    set_master_state, store_programmer_values, store_single_step_program, update_cue,
-    CuePatch, PlaybackDirection, SequenceCommandResult, SequenceDocument, SequenceRuntimeState,
-    SequenceStoreRequest, SingleStepStoreRequest,
+    advance_state, copy_cue_to_number, copy_sequence_to_number, cue_output_values, delete_cue,
+    delete_sequence, goto_state, move_cue_to_number, move_sequence_to_number, normalize_document,
+    off_state, select_sequence, set_master_state, store_programmer_values,
+    store_single_step_program, update_cue, CuePatch, PlaybackDirection, SequenceCommandResult,
+    SequenceDocument, SequenceRuntimeState, SequenceStoreRequest, SingleStepStoreRequest,
 };
 use limxdesk_showfile::LoadedShow;
 use serde::{Deserialize, Serialize};
@@ -278,6 +278,56 @@ pub fn sequence_delete_cue(
     let result = delete_cue(load_sequence_document(&show_state)?, &sequence_id, &cue_id, now_ms()?)
         .map_err(|error| error.to_string())?;
     save_and_emit(&result.document, &show_state, &app)?;
+    request_sequence_output(&app);
+    Ok(result)
+}
+
+#[tauri::command]
+pub fn sequence_copy_cue(
+    sequence_id: String,
+    source_number: f64,
+    target_number: f64,
+    show_state: State<'_, ShowRuntimeState>,
+    app: AppHandle,
+) -> Result<SequenceCommandResult, String> {
+    let result = copy_cue_to_number(
+        load_sequence_document(&show_state)?,
+        &sequence_id,
+        source_number,
+        target_number,
+        now_ms()?,
+    )
+    .map_err(|error| error.to_string())?;
+    save_and_emit(&result.document, &show_state, &app)?;
+    request_sequence_output(&app);
+    Ok(result)
+}
+
+#[tauri::command]
+pub fn sequence_move_cue(
+    sequence_id: String,
+    source_number: f64,
+    target_number: f64,
+    show_state: State<'_, ShowRuntimeState>,
+    sequence_state: State<'_, SequenceState>,
+    app: AppHandle,
+) -> Result<SequenceCommandResult, String> {
+    let result = move_cue_to_number(
+        load_sequence_document(&show_state)?,
+        &sequence_id,
+        source_number,
+        target_number,
+        now_ms()?,
+    )
+    .map_err(|error| error.to_string())?;
+    save_and_emit(&result.document, &show_state, &app)?;
+    let state = sequence_state.state_for(&sequence_id)?;
+    if let Some(mut state) = state {
+        state.current_cue_id = None;
+        state.next_cue_id = result.sequence.cues.first().map(|cue| cue.id.clone());
+        let snapshot = sequence_state.set_state(state)?;
+        events::emit_sequence_state_changed(&app, &snapshot);
+    }
     request_sequence_output(&app);
     Ok(result)
 }

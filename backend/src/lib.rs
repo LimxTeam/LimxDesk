@@ -111,6 +111,8 @@ pub fn run() {
             sequence::sequence_store_single_step_program,
             sequence::sequence_update_cue,
             sequence::sequence_delete_cue,
+            sequence::sequence_copy_cue,
+            sequence::sequence_move_cue,
             sequence::sequence_go,
             sequence::sequence_back,
             sequence::sequence_goto_cue,

@@ -432,6 +432,96 @@ pub fn delete_cue(
     })
 }
 
+pub fn copy_cue_to_number(
+    mut document: SequenceDocument,
+    sequence_id: &str,
+    source_number: f64,
+    target_number: f64,
+    now_ms: u64,
+) -> SequenceResult<SequenceCommandResult> {
+    document = normalize_document(document);
+    limxdesk_cue::validate_cue_number(target_number)?;
+    let sequence = document
+        .sequences
+        .iter_mut()
+        .find(|sequence| sequence.id == sequence_id)
+        .ok_or_else(|| SequenceError::MissingSequence(sequence_id.to_string()))?;
+    let source = sequence
+        .cues
+        .iter()
+        .find(|cue| (cue.number - source_number).abs() < f64::EPSILON)
+        .cloned()
+        .ok_or_else(|| SequenceError::MissingCue(source_number.to_string()))?;
+
+    let target_number = limxdesk_cue::round_cue_number(target_number);
+    sequence.cues.retain(|cue| (cue.number - target_number).abs() >= f64::EPSILON);
+    let mut copied = source;
+    copied.id = Uuid::new_v4().to_string();
+    copied.number = target_number;
+    copied.name = format!("Cue {}", format_cue_number(target_number));
+    copied.updated_at_ms = now_ms;
+    sequence.cues.push(copied.clone());
+    sequence.cues.sort_by(|left, right| left.number.total_cmp(&right.number));
+    sequence.updated_at_ms = now_ms;
+    document.selected_sequence_id = Some(sequence.id.clone());
+    document.version = document.version.saturating_add(1);
+    let sequence = sequence.clone();
+    Ok(SequenceCommandResult {
+        document: normalize_document(document),
+        sequence,
+        cue: Some(copied),
+    })
+}
+
+pub fn move_cue_to_number(
+    mut document: SequenceDocument,
+    sequence_id: &str,
+    source_number: f64,
+    target_number: f64,
+    now_ms: u64,
+) -> SequenceResult<SequenceCommandResult> {
+    document = normalize_document(document);
+    limxdesk_cue::validate_cue_number(target_number)?;
+    let sequence = document
+        .sequences
+        .iter_mut()
+        .find(|sequence| sequence.id == sequence_id)
+        .ok_or_else(|| SequenceError::MissingSequence(sequence_id.to_string()))?;
+
+    let source_index = sequence
+        .cues
+        .iter()
+        .position(|cue| (cue.number - source_number).abs() < f64::EPSILON)
+        .ok_or_else(|| SequenceError::MissingCue(source_number.to_string()))?;
+    let target_number = limxdesk_cue::round_cue_number(target_number);
+    if (source_number - target_number).abs() < f64::EPSILON {
+        let cue = sequence.cues[source_index].clone();
+        let sequence = sequence.clone();
+        return Ok(SequenceCommandResult {
+            document: normalize_document(document),
+            sequence,
+            cue: Some(cue),
+        });
+    }
+
+    let mut cue = sequence.cues.remove(source_index);
+    sequence.cues.retain(|item| (item.number - target_number).abs() >= f64::EPSILON);
+    cue.number = target_number;
+    cue.name = format!("Cue {}", format_cue_number(target_number));
+    cue.updated_at_ms = now_ms;
+    sequence.cues.push(cue.clone());
+    sequence.cues.sort_by(|left, right| left.number.total_cmp(&right.number));
+    sequence.updated_at_ms = now_ms;
+    document.selected_sequence_id = Some(sequence.id.clone());
+    document.version = document.version.saturating_add(1);
+    let sequence = sequence.clone();
+    Ok(SequenceCommandResult {
+        document: normalize_document(document),
+        sequence,
+        cue: Some(cue),
+    })
+}
+
 pub fn delete_sequence(
     mut document: SequenceDocument,
     sequence_id: &str,
@@ -882,6 +972,70 @@ mod tests {
         assert_eq!(document.sequences[0].number, 2);
         assert_eq!(document.sequences[0].id, source_id);
         assert_eq!(document.selected_sequence_id.as_deref(), Some(source_id.as_str()));
+    }
+
+    #[test]
+    fn copy_cue_rekeys_id_and_replaces_target_number() {
+        let first = store_programmer_values(
+            SequenceDocument::default(),
+            SequenceStoreRequest {
+                sequence_id: None,
+                cue_id: None,
+                cue_number: Some(1.0),
+                cue_name: None,
+                store_mode: CueStoreMode::Merge,
+            },
+            vec![programmer_value("1", "Dimmer", 100.0)],
+            10,
+        )
+        .unwrap();
+        let sequence_id = first.sequence.id.clone();
+        let cue_id = first.cue.as_ref().unwrap().id.clone();
+
+        let result = copy_cue_to_number(first.document, &sequence_id, 1.0, 2.5, 11).unwrap();
+
+        assert_eq!(result.sequence.cues.len(), 2);
+        let copied = result.sequence.cues.iter().find(|cue| (cue.number - 2.5).abs() < f64::EPSILON).unwrap();
+        assert_ne!(copied.id, cue_id);
+        assert_eq!(copied.name, "Cue 2.5");
+    }
+
+    #[test]
+    fn move_cue_replaces_target_number_without_rekeying() {
+        let first = store_programmer_values(
+            SequenceDocument::default(),
+            SequenceStoreRequest {
+                sequence_id: None,
+                cue_id: None,
+                cue_number: Some(1.0),
+                cue_name: None,
+                store_mode: CueStoreMode::Merge,
+            },
+            vec![programmer_value("1", "Dimmer", 100.0)],
+            10,
+        )
+        .unwrap();
+        let sequence_id = first.sequence.id.clone();
+        let moved_id = first.cue.as_ref().unwrap().id.clone();
+        let second = store_programmer_values(
+            first.document,
+            SequenceStoreRequest {
+                sequence_id: Some(sequence_id.clone()),
+                cue_id: None,
+                cue_number: Some(2.0),
+                cue_name: None,
+                store_mode: CueStoreMode::Merge,
+            },
+            vec![programmer_value("1", "Pan", 50.0)],
+            11,
+        )
+        .unwrap();
+
+        let result = move_cue_to_number(second.document, &sequence_id, 1.0, 2.0, 12).unwrap();
+
+        assert_eq!(result.sequence.cues.len(), 1);
+        assert_eq!(result.sequence.cues[0].id, moved_id);
+        assert_eq!(result.sequence.cues[0].number, 2.0);
     }
 
     fn programmer_value(fixture_id: &str, attribute: &str, numeric: f64) -> ProgrammerValue {

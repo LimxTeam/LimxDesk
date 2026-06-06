@@ -317,6 +317,29 @@ function commandSourceTargetPair(command: DeskCommandState) {
   return { source, target };
 }
 
+function commandSourceTargetNumberPair(command: DeskCommandState) {
+  const atIndex = command.tokens.findIndex((token) => token.toLowerCase() === "at");
+  if (atIndex <= 0 || atIndex >= command.tokens.length - 1) return null;
+  const source = lastNumber(command.tokens.slice(0, atIndex));
+  const target = firstNumber(command.tokens.slice(atIndex + 1));
+  if (source === null || target === null) return null;
+  return { source, target };
+}
+
+function firstNumber(tokens: string[]) {
+  for (const token of tokens) {
+    if (/^\d+(?:\.\d+)?$/.test(token)) return Number(token);
+  }
+  return null;
+}
+
+function lastNumber(tokens: string[]) {
+  for (let index = tokens.length - 1; index >= 0; index -= 1) {
+    if (/^\d+(?:\.\d+)?$/.test(tokens[index])) return Number(tokens[index]);
+  }
+  return null;
+}
+
 function firstInteger(tokens: string[]) {
   for (const token of tokens) {
     if (/^\d+$/.test(token)) return Number(token);
@@ -331,8 +354,16 @@ function lastInteger(tokens: string[]) {
   return null;
 }
 
+function numbersEqual(left: number, right: number) {
+  return Math.abs(left - right) < Number.EPSILON;
+}
+
+function formatCueNumber(value: number) {
+  return Number.isInteger(value) ? String(value) : value.toFixed(3).replace(/0+$/, "").replace(/\.$/, "");
+}
+
 async function handleCueCommand(command: DeskCommandState) {
-  const number = commandSlotNumber(command);
+  const number = lastNumber(command.tokens);
   const result = await invoke<SequenceLoadResult>("sequence_load_current_show");
   const selected =
     result.document.sequences.find((sequence) => sequence.id === result.document.selectedSequenceId) ??
@@ -355,11 +386,27 @@ async function handleCueCommand(command: DeskCommandState) {
     return { handled: true, status: `${command.mode === "update" ? "Updated" : "Stored"} Cue ${number ?? "next"}` };
   }
 
+  if (command.mode === "copy" || command.mode === "move") {
+    const pair = commandSourceTargetNumberPair(command);
+    if (!pair) {
+      return { handled: true, keepCommand: true, status: `${command.mode.toUpperCase()} Cue needs source At destination` };
+    }
+    await invoke(command.mode === "copy" ? "sequence_copy_cue" : "sequence_move_cue", {
+      sequenceId: selected.id,
+      sourceNumber: pair.source,
+      targetNumber: pair.target,
+    });
+    return {
+      handled: true,
+      status: `${command.mode === "copy" ? "Copied" : "Moved"} Cue ${formatCueNumber(pair.source)} At ${formatCueNumber(pair.target)}`,
+    };
+  }
+
   if (!number) {
     return { handled: true, keepCommand: true, status: "Cue command needs a cue number" };
   }
 
-  const cue = selected.cues?.find((item) => item.number === number);
+  const cue = selected.cues?.find((item) => numbersEqual(item.number, number));
   if (!cue) {
     return { handled: true, keepCommand: true, status: `Cue ${number} is empty` };
   }
@@ -385,8 +432,16 @@ async function handleCueCommand(command: DeskCommandState) {
     return { handled: true, status: `Off Cue ${number}` };
   }
 
-  if (command.mode === "copy" || command.mode === "move" || command.mode === "edit" || command.mode === "stomp") {
-    return { handled: true, keepCommand: true, status: `${command.mode.toUpperCase()} Cue is not available` };
+  if (command.mode === "edit") {
+    await invoke("sequence_goto_cue", {
+      sequenceId: selected.id,
+      cueId: cue.id,
+    });
+    return { handled: true, status: `Edit Cue ${number}` };
+  }
+
+  if (command.mode === "stomp") {
+    return { handled: true, keepCommand: true, status: "STOMP Cue is not available" };
   }
 
   return false;
