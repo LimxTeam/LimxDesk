@@ -255,6 +255,7 @@ function isKeyActive(label: string, mode: DeskCommandMode, target: DeskCommandTa
     Preset: "preset",
     Sequence: "sequence",
     Cue: "cue",
+    DESK: "executor",
   };
   return modeByLabel[label] === mode || targetByLabel[label] === target;
 }

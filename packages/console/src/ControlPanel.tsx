@@ -712,6 +712,7 @@ function commandTargetForButton(label: string): DeskCommandTarget | null {
   if (label === "Preset") return "preset";
   if (label === "Sequence") return "sequence";
   if (label === "Cue") return "cue";
+  if (label === "DESK") return "executor";
   return null;
 }
 

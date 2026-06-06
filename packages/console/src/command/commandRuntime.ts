@@ -14,6 +14,7 @@ export type DeskCommandMode =
   | "stomp";
 
 export type DeskCommandTarget = "fixture" | "group" | "preset" | "sequence" | "cue" | "executor";
+export type DeskCommandOperator = "Thru" | "+" | "-" | "If" | "At" | "/" | ".";
 
 export interface DeskCommandSource {
   pool: "group" | "preset" | "executor";
@@ -114,7 +115,7 @@ export function setCommandSource(source: DeskCommandSource | null) {
 }
 
 export function appendCommandToken(token: string) {
-  const nextTokens = appendSmartToken(state.tokens, token);
+  const nextTokens = appendSmartToken(state.tokens, normalizeToken(token));
   setCommandState({
     tokens: nextTokens,
     status: commandLineText({ ...state, tokens: nextTokens }),
@@ -262,6 +263,71 @@ export function commandSlotNumber(command: DeskCommandState) {
   return null;
 }
 
+export function commandNumbers(command: DeskCommandState) {
+  return command.tokens
+    .filter((token) => /^\d+(?:\.\d+)?$/.test(token))
+    .map(Number)
+    .filter((value) => Number.isFinite(value));
+}
+
+export function commandHasToken(command: DeskCommandState, token: string) {
+  const normalized = normalizeToken(token).toLowerCase();
+  return command.tokens.some((item) => item.toLowerCase() === normalized);
+}
+
+export function commandValueAfter(command: DeskCommandState, token: string) {
+  const normalized = normalizeToken(token).toLowerCase();
+  const index = command.tokens.findIndex((item) => item.toLowerCase() === normalized);
+  if (index < 0) return null;
+  for (const item of command.tokens.slice(index + 1)) {
+    if (/^\d+(?:\.\d+)?$/.test(item)) {
+      const value = Number(item);
+      return Number.isFinite(value) ? value : null;
+    }
+  }
+  return null;
+}
+
+export function commandNumberSet(command: DeskCommandState) {
+  const result = new Set<number>();
+  let operator: "+" | "-" = "+";
+  for (let index = 0; index < command.tokens.length; index += 1) {
+    const token = command.tokens[index];
+    if (token === "+") {
+      operator = "+";
+      continue;
+    }
+    if (token === "-") {
+      operator = "-";
+      continue;
+    }
+    if (!/^\d+$/.test(token)) {
+      continue;
+    }
+
+    const start = Number(token);
+    let values = [start];
+    if (command.tokens[index + 1] === "Thru" && /^\d+$/.test(command.tokens[index + 2] ?? "")) {
+      const end = Number(command.tokens[index + 2]);
+      const step = start <= end ? 1 : -1;
+      values = [];
+      for (let value = start; step > 0 ? value <= end : value >= end; value += step) {
+        values.push(value);
+      }
+      index += 2;
+    }
+
+    for (const value of values) {
+      if (operator === "-") {
+        result.delete(value);
+      } else {
+        result.add(value);
+      }
+    }
+  }
+  return Array.from(result).sort((left, right) => left - right);
+}
+
 function setCommandState(patch: Partial<DeskCommandState>) {
   state = {
     ...state,
@@ -272,6 +338,15 @@ function setCommandState(patch: Partial<DeskCommandState>) {
 }
 
 function appendSmartToken(tokens: string[], token: string) {
+  if (isStandaloneOperator(token)) {
+    if (token === "." && /^\d+$/.test(tokens[tokens.length - 1] ?? "")) {
+      return [...tokens.slice(0, -1), `${tokens[tokens.length - 1]}.`];
+    }
+    if (tokens[tokens.length - 1] === token && token !== "+" && token !== "-") {
+      return tokens;
+    }
+    return [...tokens, token];
+  }
   if (/^\d$/.test(token)) {
     const previous = tokens[tokens.length - 1];
     if (previous && /^\d+$/.test(previous)) {
@@ -287,12 +362,26 @@ function appendSmartToken(tokens: string[], token: string) {
   return [...tokens, token];
 }
 
+function normalizeToken(token: string) {
+  const trimmed = token.trim();
+  const lower = trimmed.toLowerCase();
+  if (lower === "thru" || lower === "through") return "Thru";
+  if (lower === "if") return "If";
+  if (lower === "at") return "At";
+  return trimmed;
+}
+
+function isStandaloneOperator(token: string) {
+  return token === "Thru" || token === "+" || token === "-" || token === "If" || token === "At" || token === "/" || token === ".";
+}
+
 function parseCommandText(text: string): Partial<DeskCommandState> {
   const rawTokens = text.trim().split(/\s+/).filter(Boolean);
   let mode: DeskCommandMode = "idle";
   let target: DeskCommandTarget | null = null;
   const tokens: string[] = [];
-  for (const token of rawTokens) {
+  for (const rawToken of rawTokens) {
+    const token = normalizeToken(rawToken);
     const normalized = token.toLowerCase();
     const parsedMode = modeFromToken(normalized);
     if (parsedMode) {
@@ -326,6 +415,7 @@ function modeFromToken(token: string): DeskCommandMode | null {
   if (token === "on") return "on";
   if (token === "off") return "off";
   if (token === "stomp") return "stomp";
+  if (token === "go") return "on";
   return null;
 }
 

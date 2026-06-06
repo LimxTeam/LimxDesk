@@ -11,6 +11,7 @@ export function CommandBar() {
   const [value, setValue] = useState("");
   const inputRef = useRef<HTMLInputElement>(null);
   const commandState = useCommandRuntimeSnapshot();
+  const currentCommandLine = commandLineText(commandState);
 
   function handleKeyDown(e: KeyboardEvent<HTMLInputElement>) {
     if (e.key === "Enter" && value.trim()) {
@@ -63,7 +64,7 @@ export function CommandBar() {
         }}
         onClick={() => inputRef.current?.focus()}
       >
-        {!value && commandState.mode !== "idle" ? (
+        {!value && currentCommandLine !== "Ready" ? (
           <span
             className="lx-code"
             style={{
@@ -73,7 +74,7 @@ export function CommandBar() {
               whiteSpace: "nowrap",
             }}
           >
-            {commandLineText(commandState)}
+            {currentCommandLine}
           </span>
         ) : null}
         <input
