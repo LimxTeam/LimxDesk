@@ -4,46 +4,21 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import {
   clearCommandEntry,
-  pushCommandHistory,
   setCommandSource,
   useCommandRuntimeSnapshot,
 } from "../command/commandRuntime";
+import {
+  copyOrMoveSequenceAction,
+  deleteSequenceAction,
+  storeSingleStepSequence,
+  type SequenceDocument,
+  type SequenceModel,
+} from "../command/sequenceActions";
 import { clearWorkspaceRuntimeCache } from "./workspaceRuntime";
 
-interface SequenceLoadResult {
+interface SequencePoolLoadResult {
   document: SequenceDocument;
   runtime: SequenceRuntimeSnapshot;
-}
-
-interface SequenceCommandResult {
-  document: SequenceDocument;
-  sequence: SequenceModel;
-  cue: CueModel | null;
-}
-
-interface SequenceDocument {
-  sequences: SequenceModel[];
-  selectedSequenceId: string | null;
-  version: number;
-}
-
-interface SequenceModel {
-  id: string;
-  number: number;
-  name: string;
-  priority: number;
-  tracking: boolean;
-  releaseOnOff: boolean;
-  protected: boolean;
-  recipeSlots: unknown[];
-  cues: CueModel[];
-  updatedAtMs: number;
-}
-
-interface CueModel {
-  id: string;
-  number: number;
-  name: string;
 }
 
 interface SequenceRuntimeSnapshot {
@@ -133,7 +108,7 @@ export function SequencePoolWindow() {
 
   async function loadSequences() {
     try {
-      const result = await invoke<SequenceLoadResult>("sequence_load_current_show");
+      const result = await invoke<SequencePoolLoadResult>("sequence_load_current_show");
       setDocument(result.document);
       setRuntime(result.runtime);
       setStatus(`${result.document.sequences.length} sequences`);
@@ -206,17 +181,14 @@ export function SequencePoolWindow() {
     const before = document;
     setBusySlot(number);
     try {
-      const result = await invoke<SequenceCommandResult>("sequence_store_single_step_program", {
-        request: {
-          sequenceId: sequence?.id ?? null,
-          sequenceNumber: number,
-          name: sequence?.name ?? `Sequence ${number}`,
-          storeMode: overwrite ? "overwrite" : "merge",
-        },
+      const stored = await storeSingleStepSequence({
+        before,
+        number,
+        sequence,
+        overwrite,
       });
-      setDocument(result.document);
-      pushSequenceHistory(`${overwrite ? "Update" : "Store"} Sequence ${number}`, before, result.document);
-      setStatus(`${overwrite ? "Updated" : "Stored"} Sequence ${number}`);
+      setDocument(stored.result.document);
+      setStatus(stored.status);
     } catch (error) {
       setStatus(String(error));
     } finally {
@@ -228,10 +200,9 @@ export function SequencePoolWindow() {
     const before = document;
     setBusySlot(sequence.number);
     try {
-      const after = await invoke<SequenceDocument>("sequence_delete", { sequenceId: sequence.id });
-      setDocument(after);
-      pushSequenceHistory(`Delete Sequence ${sequence.number}`, before, after);
-      setStatus(`Deleted Sequence ${sequence.number}`);
+      const deleted = await deleteSequenceAction(before, sequence);
+      setDocument(deleted.document);
+      setStatus(deleted.status);
     } catch (error) {
       setStatus(String(error));
     } finally {
@@ -259,17 +230,15 @@ export function SequencePoolWindow() {
     const before = document;
     setBusySlot(number);
     try {
-      const after = await invoke<SequenceDocument>(commandState.mode === "copy" ? "sequence_copy" : "sequence_move", {
+      const mode = commandState.mode === "move" ? "move" : "copy";
+      const moved = await copyOrMoveSequenceAction({
+        before,
         sourceNumber: source.id,
         targetNumber: number,
+        mode,
       });
-      setDocument(after);
-      pushSequenceHistory(
-        `${commandState.mode === "copy" ? "Copy" : "Move"} Sequence ${source.id} At ${number}`,
-        before,
-        after,
-      );
-      setStatus(`${commandState.mode === "copy" ? "Copied" : "Moved"} Sequence ${source.id} At ${number}`);
+      setDocument(moved.document);
+      setStatus(moved.status);
       clearCommandEntry();
     } catch (error) {
       setStatus(String(error));
@@ -346,18 +315,6 @@ export function SequencePoolWindow() {
       </div>
     </div>
   );
-}
-
-function pushSequenceHistory(label: string, before: SequenceDocument, after: SequenceDocument) {
-  pushCommandHistory({
-    label,
-    undo: async () => {
-      await invoke("sequence_replace_current_show", { document: before });
-    },
-    redo: async () => {
-      await invoke("sequence_replace_current_show", { document: after });
-    },
-  });
 }
 
 function sequenceStatus(sequence: SequenceModel, state: SequenceRuntimeState | null) {

@@ -6,65 +6,25 @@ import {
   commandSlotNumber,
   commandSourceTargetSlotPair,
   commandValueAfter,
-  pushCommandHistory,
   registerCommandHandler,
   type DeskCommandState,
 } from "./commandRuntime";
-
-interface SequenceLoadResult {
-  document: SequenceDocument;
-}
-
-interface SequenceDocument {
-  sequences: SequenceModel[];
-  selectedSequenceId: string | null;
-}
-
-interface SequenceModel {
-  id: string;
-  number: number;
-  name: string;
-  cues?: CueModel[];
-}
-
-interface SequenceCommandResult {
-  document: SequenceDocument;
-  sequence: SequenceModel;
-  cue: CueModel | null;
-}
-
-interface CueModel {
-  id: string;
-  number: number;
-}
-
-interface PlaybackDocument {
-  pages: PlaybackPage[];
-  selectedPageId: string | null;
-}
-
-interface PlaybackPage {
-  id: string;
-  number: number;
-  executors: ExecutorModel[];
-}
-
-interface PlaybackStoreExecutorResult {
-  playback: PlaybackDocument;
-  sequence: SequenceCommandResult;
-}
-
-interface ExecutorModel {
-  id: string;
-  number: number;
-  assignment: ExecutorAssignment | null;
-}
-
-interface ExecutorAssignment {
-  kind: "sequence";
-  objectId: string;
-  objectName: string;
-}
+import {
+  assignSequenceToExecutorAction,
+  clearExecutorAction,
+  copyOrMoveExecutorAction,
+  storeProgrammerOnExecutorAction,
+  type PlaybackDocument,
+} from "./playbackActions";
+import {
+  copyOrMoveSequenceAction,
+  deleteSequenceAction,
+  pushSequenceHistory,
+  storeSingleStepSequence,
+  type SequenceCommandResult,
+  type SequenceLoadResult,
+  type SequenceModel,
+} from "./sequenceActions";
 
 interface PatchDocument {
   fixtures: PatchFixture[];
@@ -274,17 +234,13 @@ async function handleSequenceCommand(command: DeskCommandState) {
     if (command.mode === "update" && !existing) {
       return { handled: true, keepCommand: true, status: "Update Sequence needs an existing sequence" };
     }
-    const before = result.document;
-    const stored = await invoke<SequenceCommandResult>("sequence_store_single_step_program", {
-      request: {
-        sequenceId: existing?.id ?? null,
-        sequenceNumber: number,
-        name: existing?.name ?? `Sequence ${number}`,
-        storeMode: command.mode === "update" ? "overwrite" : "merge",
-      },
+    const stored = await storeSingleStepSequence({
+      before: result.document,
+      number,
+      sequence: existing,
+      overwrite: command.mode === "update",
     });
-    pushSequenceHistory(`${command.mode === "update" ? "Update" : "Store"} Sequence ${number}`, before, stored.document);
-    return { handled: true, status: `${command.mode === "update" ? "Updated" : "Stored"} Sequence ${number}` };
+    return { handled: true, status: stored.status };
   }
 
   if (command.mode === "on") {
@@ -307,10 +263,8 @@ async function handleSequenceCommand(command: DeskCommandState) {
     if (!existing) {
       return { handled: true, keepCommand: true, status: `Sequence ${number} is empty` };
     }
-    const before = result.document;
-    const after = await invoke<SequenceDocument>("sequence_delete", { sequenceId: existing.id });
-    pushSequenceHistory(`Delete Sequence ${number}`, before, after);
-    return { handled: true, status: `Deleted Sequence ${number}` };
+    const deleted = await deleteSequenceAction(result.document, existing);
+    return { handled: true, status: deleted.status };
   }
 
   if (command.mode === "copy" || command.mode === "move") {
@@ -318,20 +272,13 @@ async function handleSequenceCommand(command: DeskCommandState) {
     if (!pair) {
       return { handled: true, keepCommand: true, status: `${command.mode.toUpperCase()} Sequence needs source At destination` };
     }
-    const before = result.document;
-    const after = await invoke<SequenceDocument>(command.mode === "copy" ? "sequence_copy" : "sequence_move", {
+    const moved = await copyOrMoveSequenceAction({
+      before: result.document,
       sourceNumber: pair.source,
       targetNumber: pair.target,
+      mode: command.mode,
     });
-    pushSequenceHistory(
-      `${command.mode === "copy" ? "Copy" : "Move"} Sequence ${pair.source} At ${pair.target}`,
-      before,
-      after,
-    );
-    return {
-      handled: true,
-      status: `${command.mode === "copy" ? "Copied" : "Moved"} Sequence ${pair.source} At ${pair.target}`,
-    };
+    return { handled: true, status: moved.status };
   }
 
   if (command.mode === "edit") {
@@ -558,19 +505,16 @@ async function handleAssignCommand(command: DeskCommandState) {
     return { handled: true, keepCommand: true, status: `Executor ${address.executorNumber} not found` };
   }
 
-  const after = await invoke<PlaybackDocument>("playback_assign_executor", {
+  const assigned = await assignSequenceToExecutorAction({
+    before: playback,
     pageId: page.id,
     executorId: executor.id,
-    sequenceId: sequence.id,
+    executorNumber: address.executorNumber,
+    sequence,
   });
-  pushPlaybackHistory(
-    `Assign Sequence ${address.sequenceNumber} At Executor ${address.executorNumber}`,
-    playback,
-    after,
-  );
   return {
     handled: true,
-    status: `Assigned Sequence ${address.sequenceNumber} At Executor ${address.executorNumber}`,
+    status: assigned.status,
   };
 }
 
@@ -594,28 +538,25 @@ async function handleExecutorCommand(command: DeskCommandState) {
 
   if (command.mode === "store" || command.mode === "update") {
     const sequenceBefore = await invoke<SequenceLoadResult>("sequence_load_current_show");
-    const stored = await invoke<PlaybackStoreExecutorResult>("playback_store_programmer_on_executor", {
+    const stored = await storeProgrammerOnExecutorAction({
+      playbackBefore: playback,
+      sequenceBefore: sequenceBefore.document,
       pageId: page.id,
       executorId: executor.id,
       storeMode: command.mode === "update" ? "overwrite" : "merge",
+      executorNumber: number,
     });
-    pushPlaybackAndSequenceHistory(
-      `${command.mode === "update" ? "Update" : "Store"} Executor ${number}`,
-      playback,
-      stored.playback,
-      sequenceBefore.document,
-      stored.sequence.document,
-    );
-    return { handled: true, status: `${command.mode === "update" ? "Updated" : "Stored"} Executor ${number}` };
+    return { handled: true, status: stored.status };
   }
 
   if (command.mode === "delete") {
-    const after = await invoke<PlaybackDocument>("playback_clear_executor", {
+    const cleared = await clearExecutorAction({
+      before: playback,
       pageId: page.id,
       executorId: executor.id,
+      executorNumber: number,
     });
-    pushPlaybackHistory(`Clear Executor ${number}`, playback, after);
-    return { handled: true, status: `Cleared Executor ${number}` };
+    return { handled: true, status: cleared.status };
   }
 
   if (command.mode === "on" || command.mode === "off") {
@@ -644,20 +585,16 @@ async function handleExecutorCommand(command: DeskCommandState) {
     if (!source.assignment) {
       return { handled: true, keepCommand: true, status: `Executor ${pair.source} is empty` };
     }
-    const after = await invoke<PlaybackDocument>(command.mode === "copy" ? "playback_copy_executor" : "playback_move_executor", {
+    const moved = await copyOrMoveExecutorAction({
+      before: playback,
       pageId: page.id,
       sourceExecutorId: source.id,
       targetExecutorId: target.id,
+      sourceNumber: pair.source,
+      targetNumber: pair.target,
+      mode: command.mode,
     });
-    pushPlaybackHistory(
-      `${command.mode === "copy" ? "Copy" : "Move"} Executor ${pair.source} At ${pair.target}`,
-      playback,
-      after,
-    );
-    return {
-      handled: true,
-      status: `${command.mode === "copy" ? "Copied" : "Moved"} Executor ${pair.source} At ${pair.target}`,
-    };
+    return { handled: true, status: moved.status };
   }
 
   if (command.mode === "edit") {
@@ -751,50 +688,6 @@ async function handleStompCommand(command: DeskCommandState) {
   }
   await invoke("programmer_clear", { target: "active" });
   return { handled: true, status: "Stomp active programmer values" };
-}
-
-function pushSequenceHistory(label: string, before: SequenceDocument, after: SequenceDocument) {
-  pushCommandHistory({
-    label,
-    undo: async () => {
-      await invoke("sequence_replace_current_show", { document: before });
-    },
-    redo: async () => {
-      await invoke("sequence_replace_current_show", { document: after });
-    },
-  });
-}
-
-function pushPlaybackHistory(label: string, before: PlaybackDocument, after: PlaybackDocument) {
-  pushCommandHistory({
-    label,
-    undo: async () => {
-      await invoke("playback_replace_current_show", { document: before });
-    },
-    redo: async () => {
-      await invoke("playback_replace_current_show", { document: after });
-    },
-  });
-}
-
-function pushPlaybackAndSequenceHistory(
-  label: string,
-  playbackBefore: PlaybackDocument,
-  playbackAfter: PlaybackDocument,
-  sequenceBefore: SequenceDocument,
-  sequenceAfter: SequenceDocument,
-) {
-  pushCommandHistory({
-    label,
-    undo: async () => {
-      await invoke("sequence_replace_current_show", { document: sequenceBefore });
-      await invoke("playback_replace_current_show", { document: playbackBefore });
-    },
-    redo: async () => {
-      await invoke("sequence_replace_current_show", { document: sequenceAfter });
-      await invoke("playback_replace_current_show", { document: playbackAfter });
-    },
-  });
 }
 
 function parentFixtureId(id: string) {

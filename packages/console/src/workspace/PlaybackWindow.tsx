@@ -5,11 +5,16 @@ import { listen } from "@tauri-apps/api/event";
 import {
   clearCommandEntry,
   commandSlotNumber,
-  pushCommandHistory,
   registerCommandHandler,
   setCommandSource,
   useCommandRuntimeSnapshot,
 } from "../command/commandRuntime";
+import {
+  assignSequenceToExecutorAction,
+  clearExecutorAction,
+  copyOrMoveExecutorAction,
+  storeProgrammerOnExecutorAction,
+} from "../command/playbackActions";
 import { clearWorkspaceRuntimeCache } from "./workspaceRuntime";
 
 interface PlaybackDocument {
@@ -60,17 +65,6 @@ interface SequenceLoadResult {
   runtime: SequenceRuntimeSnapshot;
 }
 
-interface PlaybackStoreExecutorResult {
-  playback: PlaybackDocument;
-  sequence: SequenceCommandResult;
-}
-
-interface SequenceCommandResult {
-  document: SequenceDocument;
-  sequence: SequenceModel;
-  cue: CueModel | null;
-}
-
 interface SequenceDocument {
   sequences: SequenceModel[];
   selectedSequenceId: string | null;
@@ -108,6 +102,11 @@ export function PlaybackWindow() {
   const [playback, setPlayback] = useState<PlaybackDocument>({
     pages: [],
     selectedPageId: null,
+    version: 0,
+  });
+  const [sequenceDocument, setSequenceDocument] = useState<SequenceDocument>({
+    sequences: [],
+    selectedSequenceId: null,
     version: 0,
   });
   const [sequences, setSequences] = useState<SequenceModel[]>([]);
@@ -172,6 +171,7 @@ export function PlaybackWindow() {
       });
       const showDeleted = await listen("show:deleted", () => {
         setPlayback({ pages: [], selectedPageId: null, version: 0 });
+        setSequenceDocument({ sequences: [], selectedSequenceId: null, version: 0 });
         setSequences([]);
         setRuntime({ states: [] });
         setStatus("No show loaded");
@@ -259,6 +259,7 @@ export function PlaybackWindow() {
   async function loadSequences() {
     try {
       const result = await invoke<SequenceLoadResult>("sequence_load_current_show");
+      setSequenceDocument(result.document);
       setSequences(result.document.sequences);
       setRuntime(result.runtime);
       setSelectedSequenceId((current) =>
@@ -267,55 +268,37 @@ export function PlaybackWindow() {
           : result.document.selectedSequenceId ?? result.document.sequences[0]?.id ?? "",
       );
     } catch {
+      setSequenceDocument({ sequences: [], selectedSequenceId: null, version: 0 });
       setSequences([]);
       setRuntime({ states: [] });
     }
   }
 
-  async function assignExecutor(executor: Executor, recordHistory = true) {
+  async function assignExecutor(executor: Executor) {
     if (!page) return;
     if (!selectedSequence) {
       await storeProgrammerOnExecutor(executor, "overwrite");
       return;
     }
-    await assignSequenceToExecutor(executor, selectedSequence, recordHistory);
+    await assignSequenceToExecutor(executor, selectedSequence);
   }
 
-  async function assignSequenceToExecutor(executor: Executor, sequence: SequenceModel, recordHistory = true) {
+  async function assignSequenceToExecutor(executor: Executor, sequence: SequenceModel) {
     if (!page) return;
-    const previousAssignment = executor.assignment;
     const pageId = page.id;
     const executorId = executor.id;
-    const sequenceId = sequence.id;
     try {
-      const document = await invoke<PlaybackDocument>("playback_assign_executor", {
+      const assigned = await assignSequenceToExecutorAction({
+        before: playback,
         pageId,
         executorId,
-        sequenceId,
+        executorNumber: executor.number,
+        sequence,
       });
-      setPlayback(document);
+      setPlayback(assigned.document);
       setSelectedExecutorId(executorId);
       setSelectedSequenceId(sequence.id);
-      setStatus(`Assigned ${sequence.name} to executor ${executor.number}`);
-      if (recordHistory) {
-        pushCommandHistory({
-          label: `Assign ${sequence.name} At Executor ${executor.number}`,
-          undo: async () => {
-            if (previousAssignment?.kind === "sequence") {
-              setPlayback(await invoke<PlaybackDocument>("playback_assign_executor", {
-                pageId,
-                executorId,
-                sequenceId: previousAssignment.objectId,
-              }));
-            } else {
-              setPlayback(await invoke<PlaybackDocument>("playback_clear_executor", { pageId, executorId }));
-            }
-          },
-          redo: async () => {
-            setPlayback(await invoke<PlaybackDocument>("playback_assign_executor", { pageId, executorId, sequenceId }));
-          },
-        });
-      }
+      setStatus(assigned.status);
     } catch (error) {
       setStatus(String(error));
     }
@@ -324,64 +307,38 @@ export function PlaybackWindow() {
   async function storeProgrammerOnExecutor(executor: Executor, storeMode: "merge" | "overwrite") {
     if (!page) return;
     try {
-      const result = await invoke<PlaybackStoreExecutorResult>("playback_store_programmer_on_executor", {
+      const stored = await storeProgrammerOnExecutorAction({
+        playbackBefore: playback,
+        sequenceBefore: sequenceDocument,
         pageId: page.id,
         executorId: executor.id,
+        executorNumber: executor.number,
         storeMode,
       });
-      setPlayback(result.playback);
-      setSequences(result.sequence.document.sequences);
-      setSelectedSequenceId(result.sequence.sequence.id);
+      setPlayback(stored.result.playback);
+      setSequenceDocument(stored.result.sequence.document);
+      setSequences(stored.result.sequence.document.sequences);
+      setSelectedSequenceId(stored.result.sequence.sequence.id);
       setSelectedExecutorId(executor.id);
-      setStatus(`Stored ${result.sequence.sequence.name} to executor ${executor.number}`);
-      pushCommandHistory({
-        label: `Store Executor ${executor.number}`,
-        undo: async () => {
-          setPlayback(await invoke<PlaybackDocument>("playback_clear_executor", {
-            pageId: page.id,
-            executorId: executor.id,
-          }));
-        },
-        redo: async () => {
-          const next = await invoke<PlaybackStoreExecutorResult>("playback_store_programmer_on_executor", {
-            pageId: page.id,
-            executorId: executor.id,
-            storeMode,
-          });
-          setPlayback(next.playback);
-          setSequences(next.sequence.document.sequences);
-        },
-      });
+      setStatus(stored.status);
     } catch (error) {
       setStatus(String(error));
     }
   }
 
-  async function clearExecutor(executor: Executor, recordHistory = true) {
+  async function clearExecutor(executor: Executor) {
     if (!page) return;
-    const previousAssignment = executor.assignment;
     const pageId = page.id;
     const executorId = executor.id;
     try {
-      setPlayback(await invoke<PlaybackDocument>("playback_clear_executor", {
+      const cleared = await clearExecutorAction({
+        before: playback,
         pageId,
         executorId,
-      }));
-      if (recordHistory && previousAssignment?.kind === "sequence") {
-        pushCommandHistory({
-          label: `Clear Executor ${executor.number}`,
-          undo: async () => {
-            setPlayback(await invoke<PlaybackDocument>("playback_assign_executor", {
-              pageId,
-              executorId,
-              sequenceId: previousAssignment.objectId,
-            }));
-          },
-          redo: async () => {
-            setPlayback(await invoke<PlaybackDocument>("playback_clear_executor", { pageId, executorId }));
-          },
-        });
-      }
+        executorNumber: executor.number,
+      });
+      setPlayback(cleared.document);
+      setStatus(cleared.status);
     } catch (error) {
       setStatus(String(error));
     }
@@ -417,20 +374,19 @@ export function PlaybackWindow() {
       return;
     }
     try {
-      const before = playback;
-      const after = await invoke<PlaybackDocument>(commandState.mode === "move" ? "playback_move_executor" : "playback_copy_executor", {
+      const mode = commandState.mode === "move" ? "move" : "copy";
+      const moved = await copyOrMoveExecutorAction({
+        before: playback,
         pageId: page.id,
         sourceExecutorId: sourceExecutor.id,
         targetExecutorId: target.id,
+        sourceNumber,
+        targetNumber: target.number,
+        mode,
       });
-      setPlayback(after);
+      setPlayback(moved.document);
       setSelectedExecutorId(target.id);
-      pushCommandHistory({
-        label: `${commandState.mode === "move" ? "Move" : "Copy"} Executor ${sourceNumber} At ${target.number}`,
-        undo: async () => setPlayback(await invoke<PlaybackDocument>("playback_replace_current_show", { document: before })),
-        redo: async () => setPlayback(await invoke<PlaybackDocument>("playback_replace_current_show", { document: after })),
-      });
-      clearCommandEntry(`${commandState.mode === "move" ? "Moved" : "Copied"} Executor ${sourceNumber} At ${target.number}`);
+      clearCommandEntry(moved.status);
     } catch (error) {
       setStatus(String(error));
     }
