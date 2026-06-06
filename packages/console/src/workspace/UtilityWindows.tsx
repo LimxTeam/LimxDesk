@@ -25,6 +25,14 @@ import {
   loadCachedSelection,
   setWorkspaceRuntimeValue,
 } from "./workspaceRuntime";
+import {
+  copyOrMoveGroupSlot,
+  copyOrMovePresetSlot,
+  deleteGroupSlot,
+  deletePresetSlot,
+  storeGroupSlot,
+  storePresetSlot,
+} from "./poolRuntime";
 
 interface WindowToolProps {
   config: Record<string, unknown>;
@@ -282,15 +290,10 @@ export function GroupsWindow({ config, onConfigChange }: WindowToolProps) {
   }
 
   function storeSlot(id: number) {
-    if (selection.fixtureIds.length === 0) return false;
     const existing = slots.find((slot) => slot.id === id);
-    const nextSlot: GroupSlot = {
-      id,
-      appearance: normalizeNamedAppearance(existing?.appearance, `Group ${id}`),
-      fixtureIds: selection.fixtureIds,
-      primaryFixtureId: selection.primaryFixtureId,
-    };
-    commitSlots(`${existing ? "Update" : "Store"} Group ${id}`, slots, upsertSlot(slots, nextSlot));
+    const nextSlots = storeGroupSlot(slots, id, selection);
+    if (!nextSlots) return false;
+    commitSlots(`${existing ? "Update" : "Store"} Group ${id}`, slots, nextSlots);
     setActiveSlotId(id);
     return true;
   }
@@ -298,7 +301,7 @@ export function GroupsWindow({ config, onConfigChange }: WindowToolProps) {
   function clearSlot(id: number) {
     const existing = slots.find((slot) => slot.id === id);
     if (!existing) return false;
-    commitSlots(`Delete Group ${id}`, slots, slots.filter((slot) => slot.id !== id));
+    commitSlots(`Delete Group ${id}`, slots, deleteGroupSlot(slots, id));
     if (activeSlotId === id) setActiveSlotId(null);
     return true;
   }
@@ -316,12 +319,10 @@ export function GroupsWindow({ config, onConfigChange }: WindowToolProps) {
       setCommandSource(null);
       return;
     }
-    const nextSlot = { ...sourceSlot, id, appearance: normalizeNamedAppearance(sourceSlot.appearance, `Group ${id}`) };
-    const withoutDestination = slots.filter((item) => item.id !== id);
-    const base = commandState.mode === "move"
-      ? withoutDestination.filter((item) => item.id !== sourceSlot.id)
-      : withoutDestination;
-    commitSlots(`${commandState.mode === "move" ? "Move" : "Copy"} Group ${sourceSlot.id} to ${id}`, slots, upsertSlot(base, nextSlot));
+    const mode = commandState.mode === "move" ? "move" : "copy";
+    const nextSlots = copyOrMoveGroupSlot(slots, sourceSlot.id, id, mode);
+    if (!nextSlots) return;
+    commitSlots(`${mode === "move" ? "Move" : "Copy"} Group ${sourceSlot.id} to ${id}`, slots, nextSlots);
     setActiveSlotId(id);
     clearCommandEntry();
   }
@@ -816,13 +817,9 @@ export function PresetsWindow({ config, onConfigChange }: WindowToolProps) {
     const values = activeProgrammerValues(programmer).filter((value) => presetValueMatchesCategory(value, category));
     if (values.length === 0) return false;
     const existing = slots.find((slot) => slot.id === id && slot.category === category);
-    const slot: PresetSlot = {
-      id,
-      category,
-      values,
-      appearance: normalizeNamedAppearance(existing?.appearance, `${presetCategoryLabel(category)} ${id}`),
-    };
-    commitSlots(`${existing ? "Update" : "Store"} ${presetCategoryLabel(category)} Preset ${id}`, slots, upsertPresetSlot(slots, slot));
+    const nextSlots = storePresetSlot(slots, id, category, values);
+    if (!nextSlots) return false;
+    commitSlots(`${existing ? "Update" : "Store"} ${presetCategoryLabel(category)} Preset ${id}`, slots, nextSlots);
     return true;
   }
 
@@ -838,7 +835,7 @@ export function PresetsWindow({ config, onConfigChange }: WindowToolProps) {
     commitSlots(
       `Delete ${presetCategoryLabel(slot.category)} Preset ${slot.id}`,
       slots,
-      slots.filter((item) => !(item.category === slot.category && item.id === slot.id)),
+      deletePresetSlot(slots, slot.id, slot.category),
     );
   }
 
@@ -855,19 +852,13 @@ export function PresetsWindow({ config, onConfigChange }: WindowToolProps) {
       setCommandSource(null);
       return;
     }
-    const nextSlot: PresetSlot = {
-      ...sourceSlot,
-      id,
-      appearance: normalizeNamedAppearance(sourceSlot.appearance, `${presetCategoryLabel(category)} ${id}`),
-    };
-    const withoutDestination = slots.filter((item) => !(item.category === category && item.id === id));
-    const base = commandState.mode === "move"
-      ? withoutDestination.filter((item) => !(item.category === category && item.id === sourceSlot.id))
-      : withoutDestination;
+    const mode = commandState.mode === "move" ? "move" : "copy";
+    const nextSlots = copyOrMovePresetSlot(slots, sourceSlot.id, id, category, mode);
+    if (!nextSlots) return;
     commitSlots(
-      `${commandState.mode === "move" ? "Move" : "Copy"} ${presetCategoryLabel(category)} Preset ${sourceSlot.id} to ${id}`,
+      `${mode === "move" ? "Move" : "Copy"} ${presetCategoryLabel(category)} Preset ${sourceSlot.id} to ${id}`,
       slots,
-      upsertPresetSlot(base, nextSlot),
+      nextSlots,
     );
     clearCommandEntry();
   }

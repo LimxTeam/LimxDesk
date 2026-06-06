@@ -171,8 +171,73 @@ export function activeProgrammerValues(programmer: Programmer) {
   return buffer.parts.flatMap((part) => part.values).filter((value) => value.active);
 }
 
+export function storeGroupSlot(slots: GroupSlot[], id: number, selection: FixtureSelection) {
+  if (selection.fixtureIds.length === 0) return null;
+  const existing = slots.find((slot) => slot.id === id);
+  const slot: GroupSlot = {
+    id,
+    appearance: normalizeNamedAppearance(existing?.appearance, `Group ${id}`),
+    fixtureIds: selection.fixtureIds,
+    primaryFixtureId: selection.primaryFixtureId,
+  };
+  return upsertById(slots, slot);
+}
+
+export function deleteGroupSlot(slots: GroupSlot[], id: number) {
+  return slots.filter((slot) => slot.id !== id);
+}
+
+export function copyOrMoveGroupSlot(slots: GroupSlot[], sourceId: number, targetId: number, mode: "copy" | "move") {
+  const source = slots.find((slot) => slot.id === sourceId);
+  if (!source) return null;
+  const nextSlot: GroupSlot = {
+    ...source,
+    id: targetId,
+    appearance: normalizeNamedAppearance(source.appearance, `Group ${targetId}`),
+  };
+  const withoutTarget = slots.filter((slot) => slot.id !== targetId);
+  const base = mode === "move" ? withoutTarget.filter((slot) => slot.id !== sourceId) : withoutTarget;
+  return upsertById(base, nextSlot);
+}
+
+export function storePresetSlot(slots: PresetSlot[], id: number, category: PresetCategoryId, values: ProgrammerValue[]) {
+  const activeValues = values.filter((value) => value.active);
+  if (activeValues.length === 0) return null;
+  const existing = slots.find((slot) => slot.id === id && slot.category === category);
+  const slot: PresetSlot = {
+    id,
+    category,
+    values: activeValues,
+    appearance: normalizeNamedAppearance(existing?.appearance, `${presetCategoryLabel(category)} ${id}`),
+  };
+  return upsertPreset(slots, slot);
+}
+
+export function deletePresetSlot(slots: PresetSlot[], id: number, category: PresetCategoryId) {
+  return slots.filter((slot) => !(slot.id === id && slot.category === category));
+}
+
+export function copyOrMovePresetSlot(
+  slots: PresetSlot[],
+  sourceId: number,
+  targetId: number,
+  category: PresetCategoryId,
+  mode: "copy" | "move",
+) {
+  const source = slots.find((slot) => slot.id === sourceId && slot.category === category);
+  if (!source) return null;
+  const nextSlot: PresetSlot = {
+    ...source,
+    id: targetId,
+    appearance: normalizeNamedAppearance(source.appearance, `${presetCategoryLabel(category)} ${targetId}`),
+  };
+  const withoutTarget = slots.filter((slot) => !(slot.id === targetId && slot.category === category));
+  const base = mode === "move" ? withoutTarget.filter((slot) => !(slot.id === sourceId && slot.category === category)) : withoutTarget;
+  return upsertPreset(base, nextSlot);
+}
+
 export function presetCategoryLabel(category: PresetCategoryId) {
-  if (category === "all") return "Preset";
+  if (category === "all") return "All";
   return category.charAt(0).toUpperCase() + category.slice(1);
 }
 

@@ -1,6 +1,5 @@
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { normalizeNamedAppearance } from "@limxdesk/naming";
 import {
   PanelLeftClose, PanelLeftOpen,
   Keyboard,
@@ -24,18 +23,20 @@ import {
 } from "./command/commandRuntime";
 import {
   activeProgrammerValues,
+  copyOrMoveGroupSlot,
+  copyOrMovePresetSlot,
+  deleteGroupSlot,
+  deletePresetSlot,
   GROUP_SLOT_COUNT,
   PRESET_SLOT_COUNT,
   ensurePoolWindow,
   normalizeGroupSlots,
   normalizePresetSlots,
   replaceWindowConfig,
+  storeGroupSlot,
+  storePresetSlot,
   type FixtureSelection,
-  type GroupSlot,
-  type PresetSlot,
   type Programmer,
-  upsertById,
-  upsertPreset,
 } from "./workspace/poolRuntime";
 import type { WorkspaceWindow } from "./workspace/types";
 
@@ -228,20 +229,15 @@ async function handleGlobalGroupCommand(
 
   if (command.mode === "store" || command.mode === "update") {
     const selection = await invoke<FixtureSelection>("fixture_selection_get");
-    if (selection.fixtureIds.length === 0) {
+    const nextSlots = storeGroupSlot(slots, id, selection);
+    if (!nextSlots) {
       return { handled: true, keepCommand: true, status: "Select fixtures before storing a group" };
     }
-    const nextSlot: GroupSlot = {
-      id,
-      appearance: normalizeNamedAppearance(slot?.appearance, `Group ${id}`),
-      fixtureIds: selection.fixtureIds,
-      primaryFixtureId: selection.primaryFixtureId,
-    };
     commitPoolWindows(
       workspaceRef,
       `${command.mode === "update" ? "Update" : "Store"} Group ${id}`,
       snapshot,
-      replaceWindowConfig(windows, window.id, { ...window.config, groups: upsertById(slots, nextSlot) }),
+      replaceWindowConfig(windows, window.id, { ...window.config, groups: nextSlots }),
     );
     return { handled: true, status: `${command.mode === "update" ? "Updated" : "Stored"} Group ${id}` };
   }
@@ -252,7 +248,7 @@ async function handleGlobalGroupCommand(
       workspaceRef,
       `Delete Group ${id}`,
       snapshot,
-      replaceWindowConfig(windows, window.id, { ...window.config, groups: slots.filter((item) => item.id !== id) }),
+      replaceWindowConfig(windows, window.id, { ...window.config, groups: deleteGroupSlot(slots, id) }),
     );
     return { handled: true, status: `Deleted Group ${id}` };
   }
@@ -260,20 +256,13 @@ async function handleGlobalGroupCommand(
   if (command.mode === "copy" || command.mode === "move") {
     const pair = commandSourceTargetSlotPair(command, "group");
     if (!pair) return { handled: true, keepCommand: true, status: `${command.mode.toUpperCase()} Group needs source At destination` };
-    const source = slots.find((item) => item.id === pair.source);
-    if (!source) return { handled: true, keepCommand: true, status: `Group ${pair.source} is empty` };
-    const nextSlot = {
-      ...source,
-      id: pair.target,
-      appearance: normalizeNamedAppearance(source.appearance, `Group ${pair.target}`),
-    };
-    const withoutTarget = slots.filter((item) => item.id !== pair.target);
-    const base = command.mode === "move" ? withoutTarget.filter((item) => item.id !== pair.source) : withoutTarget;
+    const nextSlots = copyOrMoveGroupSlot(slots, pair.source, pair.target, command.mode);
+    if (!nextSlots) return { handled: true, keepCommand: true, status: `Group ${pair.source} is empty` };
     commitPoolWindows(
       workspaceRef,
       `${command.mode === "copy" ? "Copy" : "Move"} Group ${pair.source} At ${pair.target}`,
       snapshot,
-      replaceWindowConfig(windows, window.id, { ...window.config, groups: upsertById(base, nextSlot) }),
+      replaceWindowConfig(windows, window.id, { ...window.config, groups: nextSlots }),
     );
     return { handled: true, status: `${command.mode === "copy" ? "Copied" : "Moved"} Group ${pair.source} At ${pair.target}` };
   }
@@ -326,20 +315,15 @@ async function handleGlobalPresetCommand(
   if (command.mode === "store" || command.mode === "update") {
     const programmer = await invoke<Programmer>("programmer_get");
     const values = activeProgrammerValues(programmer);
-    if (values.length === 0) {
+    const nextSlots = storePresetSlot(slots, id, "all", values);
+    if (!nextSlots) {
       return { handled: true, keepCommand: true, status: "No active programmer values to store" };
     }
-    const nextSlot: PresetSlot = {
-      id,
-      category: "all",
-      values,
-      appearance: normalizeNamedAppearance(slot?.appearance, `All ${id}`),
-    };
     commitPoolWindows(
       workspaceRef,
       `${command.mode === "update" ? "Update" : "Store"} Preset ${id}`,
       snapshot,
-      replaceWindowConfig(windows, window.id, { ...window.config, presets: upsertPreset(slots, nextSlot) }),
+      replaceWindowConfig(windows, window.id, { ...window.config, presets: nextSlots }),
     );
     return { handled: true, status: `${command.mode === "update" ? "Updated" : "Stored"} Preset ${id}` };
   }
@@ -352,7 +336,7 @@ async function handleGlobalPresetCommand(
       snapshot,
       replaceWindowConfig(windows, window.id, {
         ...window.config,
-        presets: slots.filter((item) => !(item.category === "all" && item.id === id)),
+        presets: deletePresetSlot(slots, id, "all"),
       }),
     );
     return { handled: true, status: `Deleted Preset ${id}` };
@@ -361,23 +345,13 @@ async function handleGlobalPresetCommand(
   if (command.mode === "copy" || command.mode === "move") {
     const pair = commandSourceTargetSlotPair(command, "preset");
     if (!pair) return { handled: true, keepCommand: true, status: `${command.mode.toUpperCase()} Preset needs source At destination` };
-    const source = slots.find((item) => item.category === "all" && item.id === pair.source);
-    if (!source) return { handled: true, keepCommand: true, status: `Preset ${pair.source} is empty` };
-    const nextSlot = {
-      ...source,
-      id: pair.target,
-      appearance: normalizeNamedAppearance(source.appearance, `All ${pair.target}`),
-    };
-    const withoutTarget = slots.filter((item) => !(item.category === "all" && item.id === pair.target));
-    const base =
-      command.mode === "move"
-        ? withoutTarget.filter((item) => !(item.category === "all" && item.id === pair.source))
-        : withoutTarget;
+    const nextSlots = copyOrMovePresetSlot(slots, pair.source, pair.target, "all", command.mode);
+    if (!nextSlots) return { handled: true, keepCommand: true, status: `Preset ${pair.source} is empty` };
     commitPoolWindows(
       workspaceRef,
       `${command.mode === "copy" ? "Copy" : "Move"} Preset ${pair.source} At ${pair.target}`,
       snapshot,
-      replaceWindowConfig(windows, window.id, { ...window.config, presets: upsertPreset(base, nextSlot) }),
+      replaceWindowConfig(windows, window.id, { ...window.config, presets: nextSlots }),
     );
     return { handled: true, status: `${command.mode === "copy" ? "Copied" : "Moved"} Preset ${pair.source} At ${pair.target}` };
   }
