@@ -277,10 +277,15 @@ export function PlaybackWindow() {
       await storeProgrammerOnExecutor(executor, "overwrite");
       return;
     }
+    await assignSequenceToExecutor(executor, selectedSequence, recordHistory);
+  }
+
+  async function assignSequenceToExecutor(executor: Executor, sequence: SequenceModel, recordHistory = true) {
+    if (!page) return;
     const previousAssignment = executor.assignment;
     const pageId = page.id;
     const executorId = executor.id;
-    const sequenceId = selectedSequence.id;
+    const sequenceId = sequence.id;
     try {
       const document = await invoke<PlaybackDocument>("playback_assign_executor", {
         pageId,
@@ -289,10 +294,11 @@ export function PlaybackWindow() {
       });
       setPlayback(document);
       setSelectedExecutorId(executorId);
-      setStatus(`Assigned ${selectedSequence.name} to executor ${executor.number}`);
+      setSelectedSequenceId(sequence.id);
+      setStatus(`Assigned ${sequence.name} to executor ${executor.number}`);
       if (recordHistory) {
         pushCommandHistory({
-          label: `Assign Executor ${executor.number}`,
+          label: `Assign ${sequence.name} At Executor ${executor.number}`,
           undo: async () => {
             if (previousAssignment?.kind === "sequence") {
               setPlayback(await invoke<PlaybackDocument>("playback_assign_executor", {
@@ -381,6 +387,19 @@ export function PlaybackWindow() {
   }
 
   function handleExecutorPrimary(executor: Executor) {
+    if (commandState.mode === "assign") {
+      const sourceSequence =
+        commandState.source?.pool === "sequence" && typeof commandState.source.id === "number"
+          ? sequences.find((sequence) => sequence.number === commandState.source?.id)
+          : selectedSequence;
+      if (sourceSequence) {
+        void assignSequenceToExecutor(executor, sourceSequence).then(() => clearCommandEntry());
+      } else {
+        setStatus("Assign needs a sequence source");
+      }
+      return;
+    }
+
     if (commandState.mode === "store" || commandState.mode === "update") {
       void storeProgrammerOnExecutor(executor, commandState.mode === "update" ? "overwrite" : "merge");
       clearCommandEntry();

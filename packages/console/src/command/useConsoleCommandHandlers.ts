@@ -147,6 +147,9 @@ export function useConsoleCommandHandlers() {
       if (!command.target && command.mode === "update" && inferredNumbers.length === 0) {
         return handleSequenceCommand({ ...command, target: "sequence" });
       }
+      if (command.mode === "assign") {
+        return handleAssignCommand(command);
+      }
       if (!command.target && inferredSlot && inferredSlot >= 100 && isExecutorMode(command.mode)) {
         return handleExecutorCommand({ ...command, target: "executor" });
       }
@@ -361,6 +364,7 @@ function isExecutorMode(mode: DeskCommandState["mode"]) {
     mode === "delete" ||
     mode === "copy" ||
     mode === "move" ||
+    mode === "assign" ||
     mode === "edit" ||
     mode === "on" ||
     mode === "off" ||
@@ -384,6 +388,19 @@ function commandSourceTargetNumberPair(command: DeskCommandState) {
   const target = firstNumber(command.tokens.slice(atIndex + 1));
   if (source === null || target === null) return null;
   return { source, target };
+}
+
+function commandAssignSequenceExecutorAddress(command: DeskCommandState) {
+  const atIndex = command.tokens.findIndex((token) => token.toLowerCase() === "at");
+  if (atIndex <= 0 || atIndex >= command.tokens.length - 1) return null;
+  const sequenceNumber = lastInteger(command.tokens.slice(0, atIndex));
+  const address = commandExecutorAddress({ ...command, tokens: command.tokens.slice(atIndex + 1) });
+  if (!sequenceNumber || !address.executorNumber) return null;
+  return {
+    sequenceNumber,
+    pageNumber: address.pageNumber,
+    executorNumber: address.executorNumber,
+  };
 }
 
 function firstNumber(tokens: string[]) {
@@ -515,6 +532,47 @@ async function handleCueCommand(command: DeskCommandState) {
   }
 
   return false;
+}
+
+async function handleAssignCommand(command: DeskCommandState) {
+  const address = commandAssignSequenceExecutorAddress(command);
+  if (!address) {
+    return { handled: true, keepCommand: true, status: "Assign needs Sequence source At Executor target" };
+  }
+
+  const [sequenceResult, playback] = await Promise.all([
+    invoke<SequenceLoadResult>("sequence_load_current_show"),
+    invoke<PlaybackDocument>("playback_load_current_show"),
+  ]);
+  const sequence = sequenceResult.document.sequences.find((item) => item.number === address.sequenceNumber);
+  if (!sequence) {
+    return { handled: true, keepCommand: true, status: `Sequence ${address.sequenceNumber} is empty` };
+  }
+
+  const page =
+    (address.pageNumber ? playback.pages.find((item) => item.number === address.pageNumber) : null) ??
+    playback.pages.find((item) => item.id === playback.selectedPageId) ??
+    playback.pages[0] ??
+    null;
+  const executor = page?.executors.find((item) => item.number === address.executorNumber) ?? null;
+  if (!page || !executor) {
+    return { handled: true, keepCommand: true, status: `Executor ${address.executorNumber} not found` };
+  }
+
+  const after = await invoke<PlaybackDocument>("playback_assign_executor", {
+    pageId: page.id,
+    executorId: executor.id,
+    sequenceId: sequence.id,
+  });
+  pushPlaybackHistory(
+    `Assign Sequence ${address.sequenceNumber} At Executor ${address.executorNumber}`,
+    playback,
+    after,
+  );
+  return {
+    handled: true,
+    status: `Assigned Sequence ${address.sequenceNumber} At Executor ${address.executorNumber}`,
+  };
 }
 
 async function handleExecutorCommand(command: DeskCommandState) {

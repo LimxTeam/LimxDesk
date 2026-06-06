@@ -714,6 +714,7 @@ function commandModeForButton(label: string): DeskCommandMode | null {
   if (label === "Delete") return "delete";
   if (label === "Copy") return "copy";
   if (label === "Move") return "move";
+  if (label === "Assign") return "assign";
   if (label === "Select") return "select";
   if (label === "On") return "on";
   if (label === "Off") return "off";
@@ -752,6 +753,7 @@ function commandButtonForKeyboardEvent(event: KeyboardEvent) {
   const key = event.key.toLowerCase();
   if (key === "t") return "Thru";
   if (key === "a") return "At";
+  if (key === "x") return "Assign";
   if (key === "i") return "If";
   if (key === "s") return "Store";
   if (key === "u") return "Update";

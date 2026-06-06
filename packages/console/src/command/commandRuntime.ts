@@ -8,6 +8,7 @@ export type DeskCommandMode =
   | "delete"
   | "copy"
   | "move"
+  | "assign"
   | "select"
   | "on"
   | "off"
@@ -411,6 +412,7 @@ function modeFromToken(token: string): DeskCommandMode | null {
   if (token === "delete") return "delete";
   if (token === "copy") return "copy";
   if (token === "move") return "move";
+  if (token === "assign") return "assign";
   if (token === "select") return "select";
   if (token === "on") return "on";
   if (token === "off") return "off";
@@ -437,6 +439,7 @@ function commandModeStatus(mode: DeskCommandMode) {
   if (mode === "delete") return "Delete: choose an object";
   if (mode === "copy") return "Copy: choose source, then destination";
   if (mode === "move") return "Move: choose source, then destination";
+  if (mode === "assign") return "Assign: choose source object, then executor";
   if (mode === "select") return "Select: choose fixtures or objects";
   return `${mode.toUpperCase()} command armed`;
 }

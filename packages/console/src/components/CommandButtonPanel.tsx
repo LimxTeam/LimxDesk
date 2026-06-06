@@ -30,8 +30,9 @@ const COMMAND_KEYS: KeyDef[] = [
   { label: "Redo", tone: "danger", span: 2 },
   { label: "Clear", tone: "danger", span: 4 },
   { label: "Store", span: 4 },
-  { label: "Update", span: 4 },
-  { label: "Edit", span: 4 },
+  { label: "Update", span: 3 },
+  { label: "Edit", span: 2 },
+  { label: "Assign", span: 3 },
 ];
 
 const NUMPAD_KEYS: KeyDef[] = [
@@ -244,6 +245,7 @@ function isKeyActive(label: string, mode: DeskCommandMode, target: DeskCommandTa
     Delete: "delete",
     Copy: "copy",
     Move: "move",
+    Assign: "assign",
     Select: "select",
     On: "on",
     Off: "off",

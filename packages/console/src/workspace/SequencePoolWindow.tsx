@@ -161,6 +161,16 @@ export function SequencePoolWindow() {
       return;
     }
 
+    if (commandState.mode === "assign") {
+      if (!sequence) {
+        setStatus(`Sequence ${number} is empty`);
+        return;
+      }
+      setCommandSource({ pool: "sequence", id: number, label: `Sequence ${number}` });
+      setStatus(`Assign source: Sequence ${number}`);
+      return;
+    }
+
     if (commandState.mode === "copy" || commandState.mode === "move") {
       await handleCopyMove(number, sequence);
       return;
@@ -358,6 +368,7 @@ function sequenceStatus(sequence: SequenceModel, state: SequenceRuntimeState | n
 
 function emptySlotLabel(mode: string) {
   if (mode === "store") return "store";
+  if (mode === "assign") return "source";
   if (mode === "copy" || mode === "move") return "target";
   return "";
 }
@@ -367,6 +378,7 @@ function poolModeLabel(mode: string) {
   if (mode === "store") return "click a slot to store programmer";
   if (mode === "update") return "click stored slot to overwrite";
   if (mode === "delete") return "click stored slot to delete";
+  if (mode === "assign") return "click sequence, then playback executor";
   if (mode === "copy") return "source, then destination";
   if (mode === "move") return "source, then destination";
   if (mode === "on") return "click stored slot to Go";
