@@ -13,9 +13,7 @@ import { FloatingDialog, NamedAppearanceEditor, NamedAppearanceTile } from "@lim
 import {
   activateCommandMode,
   clearCommandEntry,
-  commandSlotNumber,
   pushCommandHistory,
-  registerCommandHandler,
   setCommandSource,
   useCommandRuntimeSnapshot,
 } from "../command/commandRuntime";
@@ -222,6 +220,7 @@ export function GroupsWindow({ config, onConfigChange }: WindowToolProps) {
   const commandState = useCommandRuntimeSnapshot();
   const slots = useMemo(() => normalizeGroupSlots(config.groups), [config.groups]);
   const storeMode = commandState.mode === "store";
+  const requestedEditorId = typeof config.groupEditorId === "number" ? clampInt(config.groupEditorId, 1, GROUP_SLOT_COUNT) : null;
 
   useEffect(() => {
     void loadSelection();
@@ -241,40 +240,15 @@ export function GroupsWindow({ config, onConfigChange }: WindowToolProps) {
   }, []);
 
   useEffect(() => {
-    return registerCommandHandler("groups-window", async (command) => {
-      if (command.target !== "group") return false;
-      const id = commandSlotNumber(command);
-      if (!id || id < 1 || id > GROUP_SLOT_COUNT) {
-        return { handled: true, keepCommand: true, status: "Group command needs a slot number" };
-      }
-      const slot = slots.find((item) => item.id === id);
-      if (command.mode === "store" || command.mode === "update") {
-        if (!storeSlot(id)) {
-          return { handled: true, keepCommand: true, status: "Select fixtures before storing a group" };
-        }
-        return { handled: true, status: `${command.mode === "update" ? "Updated" : "Stored"} Group ${id}` };
-      }
-      if (command.mode === "delete") {
-        if (!clearSlot(id)) {
-          return { handled: true, keepCommand: true, status: `Group ${id} is empty` };
-        }
-        return { handled: true, status: `Deleted Group ${id}` };
-      }
-      if (command.mode === "edit") {
-        setEditor(slot ?? createEmptyGroupSlot(id));
-        return { handled: true, status: `Edit Group ${id}` };
-      }
-      if (command.mode === "select" || command.mode === "idle") {
-        if (slot) {
-          await recallSlot(slot);
-          return { handled: true, status: `Selected Group ${id}` };
-        } else {
-          return { handled: true, keepCommand: true, status: `Group ${id} is empty` };
-        }
-      }
-      return false;
-    });
-  }, [selection, slots, config]);
+    if (requestedEditorId === null) {
+      if (editor) setEditor(null);
+      return;
+    }
+    const next = slots.find((item) => item.id === requestedEditorId) ?? createEmptyGroupSlot(requestedEditorId);
+    if (editor?.id !== next.id || editor.appearance !== next.appearance) {
+      setEditor(next);
+    }
+  }, [editor, requestedEditorId, slots]);
 
   async function loadSelection() {
     try {
@@ -286,6 +260,16 @@ export function GroupsWindow({ config, onConfigChange }: WindowToolProps) {
 
   function updateSlots(nextSlots: GroupSlot[]) {
     onConfigChange({ ...config, groups: nextSlots });
+  }
+
+  function openGroupEditor(slot: GroupSlot) {
+    onConfigChange({ ...config, groupEditorId: slot.id });
+    setEditor(slot);
+  }
+
+  function closeGroupEditor() {
+    onConfigChange({ ...config, groupEditorId: null });
+    setEditor(null);
   }
 
   function commitSlots(label: string, previous: GroupSlot[], next: GroupSlot[]) {
@@ -362,7 +346,7 @@ export function GroupsWindow({ config, onConfigChange }: WindowToolProps) {
       return;
     }
     if (commandState.mode === "edit") {
-      setEditor(slot ?? createEmptyGroupSlot(id));
+      openGroupEditor(slot ?? createEmptyGroupSlot(id));
       clearCommandEntry();
       return;
     }
@@ -428,7 +412,7 @@ export function GroupsWindow({ config, onConfigChange }: WindowToolProps) {
               onClick={() => handleSlotClick(id, slot)}
               onContextMenu={(event) => {
                 event.preventDefault();
-                setEditor(slot ?? createEmptyGroupSlot(id));
+                openGroupEditor(slot ?? createEmptyGroupSlot(id));
               }}
             >
               <NamedAppearanceTile
@@ -454,16 +438,16 @@ export function GroupsWindow({ config, onConfigChange }: WindowToolProps) {
         title="Edit Group"
         open={Boolean(editor)}
         value={editor?.appearance}
-        onClose={() => setEditor(null)}
+        onClose={closeGroupEditor}
         onApply={(appearance) => {
           if (!editor) return;
           updateSlots(upsertSlot(slots, { ...editor, appearance }));
-          setEditor(null);
+          closeGroupEditor();
         }}
         onClear={() => {
           if (!editor) return;
           clearSlot(editor.id);
-          setEditor(null);
+          closeGroupEditor();
         }}
       />
     </ToolWindowShell>
@@ -787,47 +771,35 @@ export function PresetsWindow({ config, onConfigChange }: WindowToolProps) {
   const slots = useMemo(() => normalizePresetSlots(config.presets), [config.presets]);
   const categorySlots = slots.filter((slot) => slot.category === category);
   const storeMode = commandState.mode === "store";
+  const requestedEditorId = typeof config.presetEditorId === "number" ? clampInt(config.presetEditorId, 1, PRESET_SLOT_COUNT) : null;
+  const requestedEditorCategory = isPresetCategory(config.presetEditorCategory) ? config.presetEditorCategory : null;
 
   useEffect(() => {
-    return registerCommandHandler("presets-window", async (command) => {
-      if (command.target !== "preset") return false;
-      const id = commandSlotNumber(command);
-      if (!id || id < 1 || id > PRESET_SLOT_COUNT) {
-        return { handled: true, keepCommand: true, status: "Preset command needs a slot number" };
-      }
-      const slot = slots.find((item) => item.category === category && item.id === id);
-      if (command.mode === "store" || command.mode === "update") {
-        if (!(await storeSlot(id))) {
-          return { handled: true, keepCommand: true, status: "No active programmer values to store" };
-        }
-        return { handled: true, status: `${command.mode === "update" ? "Updated" : "Stored"} ${presetCategoryLabel(category)} Preset ${id}` };
-      }
-      if (command.mode === "delete") {
-        if (slot) {
-          clearSlot(slot);
-          return { handled: true, status: `Deleted ${presetCategoryLabel(category)} Preset ${id}` };
-        } else {
-          return { handled: true, keepCommand: true, status: `${presetCategoryLabel(category)} Preset ${id} is empty` };
-        }
-      }
-      if (command.mode === "edit") {
-        setEditor(slot ?? createEmptyPresetSlot(id, category));
-        return { handled: true, status: `Edit ${presetCategoryLabel(category)} Preset ${id}` };
-      }
-      if (command.mode === "select" || command.mode === "idle") {
-        if (slot) {
-          await recallSlot(slot);
-          return { handled: true, status: `Recalled ${presetCategoryLabel(category)} Preset ${id}` };
-        } else {
-          return { handled: true, keepCommand: true, status: `${presetCategoryLabel(category)} Preset ${id} is empty` };
-        }
-      }
-      return false;
-    });
-  }, [category, slots, config]);
+    if (requestedEditorId === null) {
+      if (editor) setEditor(null);
+      return;
+    }
+    const editorCategory = requestedEditorCategory ?? category;
+    const next =
+      slots.find((item) => item.category === editorCategory && item.id === requestedEditorId) ??
+      createEmptyPresetSlot(requestedEditorId, editorCategory);
+    if (editor?.id !== next.id || editor.category !== next.category || editor.appearance !== next.appearance) {
+      setEditor(next);
+    }
+  }, [category, editor, requestedEditorCategory, requestedEditorId, slots]);
 
   function updateSlots(nextSlots: PresetSlot[]) {
     onConfigChange({ ...config, presets: nextSlots });
+  }
+
+  function openPresetEditor(slot: PresetSlot) {
+    onConfigChange({ ...config, presetEditorId: slot.id, presetEditorCategory: slot.category });
+    setEditor(slot);
+  }
+
+  function closePresetEditor() {
+    onConfigChange({ ...config, presetEditorId: null, presetEditorCategory: null });
+    setEditor(null);
   }
 
   function commitSlots(label: string, previous: PresetSlot[], next: PresetSlot[]) {
@@ -913,7 +885,7 @@ export function PresetsWindow({ config, onConfigChange }: WindowToolProps) {
       return;
     }
     if (commandState.mode === "edit") {
-      setEditor(slot ?? createEmptyPresetSlot(id, category));
+      openPresetEditor(slot ?? createEmptyPresetSlot(id, category));
       clearCommandEntry();
       return;
     }
@@ -948,11 +920,11 @@ export function PresetsWindow({ config, onConfigChange }: WindowToolProps) {
               <PoolTileButton
                 key={`${category}-${id}`}
                 title={commandState.mode === "idle" ? (slot ? `Recall Preset ${id}` : `Empty Preset ${id}`) : `${commandState.mode} Preset ${id}`}
-                onClick={() => void handleSlotClick(id, slot)}
-                onContextMenu={(event) => {
-                  event.preventDefault();
-                  setEditor(slot ?? createEmptyPresetSlot(id, category));
-                }}
+              onClick={() => void handleSlotClick(id, slot)}
+              onContextMenu={(event) => {
+                event.preventDefault();
+                openPresetEditor(slot ?? createEmptyPresetSlot(id, category));
+              }}
               >
                 <NamedAppearanceTile
                   appearance={slot?.appearance ?? createDefaultNamedAppearance(`${presetCategoryLabel(category)} ${id}`)}
@@ -972,16 +944,16 @@ export function PresetsWindow({ config, onConfigChange }: WindowToolProps) {
         title="Edit Preset"
         open={Boolean(editor)}
         value={editor?.appearance}
-        onClose={() => setEditor(null)}
+        onClose={closePresetEditor}
         onApply={(appearance) => {
           if (!editor) return;
           updateSlots(upsertPresetSlot(slots, { ...editor, appearance }));
-          setEditor(null);
+          closePresetEditor();
         }}
         onClear={() => {
           if (!editor) return;
           clearSlot(editor);
-          setEditor(null);
+          closePresetEditor();
         }}
       />
     </ToolWindowShell>

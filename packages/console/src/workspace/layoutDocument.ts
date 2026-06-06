@@ -75,7 +75,7 @@ export function layoutWindowToWorkspaceWindow(window: LayoutWindow): WorkspaceWi
     y: window.y,
     w: window.w,
     h: window.h,
-    config: window.config ?? {},
+    config: sanitizeTransientWindowConfig(window.config ?? {}),
   };
 }
 
@@ -87,8 +87,17 @@ export function workspaceWindowToLayoutWindow(window: WorkspaceWindow): LayoutWi
     y: window.y,
     w: window.w,
     h: window.h,
-    config: window.config ?? {},
+    config: sanitizeTransientWindowConfig(window.config ?? {}),
   };
+}
+
+function sanitizeTransientWindowConfig(config: Record<string, unknown>) {
+  const result: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(config)) {
+    if (key === "groupEditorId" || key === "presetEditorId" || key === "presetEditorCategory") continue;
+    result[key] = value;
+  }
+  return result;
 }
 
 function clampSlotId(id: number): number {
