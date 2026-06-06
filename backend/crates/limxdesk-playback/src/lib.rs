@@ -165,6 +165,40 @@ pub fn clear_executor(
     Ok(normalize_document(document))
 }
 
+pub fn copy_executor(
+    mut document: PlaybackDocument,
+    page_id: &str,
+    source_executor_id: &str,
+    target_executor_id: &str,
+) -> PlaybackResult<PlaybackDocument> {
+    document = normalize_document(document);
+    if source_executor_id == target_executor_id {
+        return Ok(document);
+    }
+    let source = find_executor(&document, page_id, source_executor_id)?.clone();
+    let target = find_executor_mut(&mut document, page_id, target_executor_id)?;
+    target.label = source.label;
+    target.assignment = source.assignment;
+    target.fader = source.fader;
+    target.buttons = source.buttons;
+    target.appearance_color = source.appearance_color;
+    document.version = document.version.saturating_add(1);
+    Ok(normalize_document(document))
+}
+
+pub fn move_executor(
+    mut document: PlaybackDocument,
+    page_id: &str,
+    source_executor_id: &str,
+    target_executor_id: &str,
+) -> PlaybackResult<PlaybackDocument> {
+    document = copy_executor(document, page_id, source_executor_id, target_executor_id)?;
+    if source_executor_id != target_executor_id {
+        document = clear_executor(document, page_id, source_executor_id)?;
+    }
+    Ok(normalize_document(document))
+}
+
 pub fn set_executor_master(
     mut document: PlaybackDocument,
     page_id: &str,
@@ -342,5 +376,56 @@ mod tests {
             document.pages[0].executors[0].assignment.as_ref().unwrap().object_id,
             "seq-1"
         );
+    }
+
+    #[test]
+    fn copy_executor_replaces_destination_assignment() {
+        let document = normalize_document(PlaybackDocument::default());
+        let page_id = document.pages[0].id.clone();
+        let source_id = document.pages[0].executors[0].id.clone();
+        let target_id = document.pages[0].executors[1].id.clone();
+        let document = assign_executor(
+            document,
+            &page_id,
+            &source_id,
+            ExecutorAssignment {
+                kind: ExecutorAssignmentKind::Sequence,
+                object_id: "seq-1".to_string(),
+                object_name: "Look".to_string(),
+            },
+        )
+        .unwrap();
+
+        let document = copy_executor(document, &page_id, &source_id, &target_id).unwrap();
+        let target = find_executor(&document, &page_id, &target_id).unwrap();
+
+        assert_eq!(target.label, "Look");
+        assert_eq!(target.assignment.as_ref().unwrap().object_id, "seq-1");
+    }
+
+    #[test]
+    fn move_executor_clears_source() {
+        let document = normalize_document(PlaybackDocument::default());
+        let page_id = document.pages[0].id.clone();
+        let source_id = document.pages[0].executors[0].id.clone();
+        let target_id = document.pages[0].executors[1].id.clone();
+        let document = assign_executor(
+            document,
+            &page_id,
+            &source_id,
+            ExecutorAssignment {
+                kind: ExecutorAssignmentKind::Sequence,
+                object_id: "seq-1".to_string(),
+                object_name: "Look".to_string(),
+            },
+        )
+        .unwrap();
+
+        let document = move_executor(document, &page_id, &source_id, &target_id).unwrap();
+        let source = find_executor(&document, &page_id, &source_id).unwrap();
+        let target = find_executor(&document, &page_id, &target_id).unwrap();
+
+        assert!(source.assignment.is_none());
+        assert_eq!(target.assignment.as_ref().unwrap().object_id, "seq-1");
     }
 }

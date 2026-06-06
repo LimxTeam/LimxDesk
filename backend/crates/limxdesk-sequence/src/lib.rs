@@ -449,6 +449,64 @@ pub fn delete_sequence(
     Ok(normalize_document(document))
 }
 
+pub fn copy_sequence_to_number(
+    mut document: SequenceDocument,
+    source_number: u32,
+    target_number: u32,
+    now_ms: u64,
+) -> SequenceResult<SequenceDocument> {
+    document = normalize_document(document);
+    let source = document
+        .sequences
+        .iter()
+        .find(|sequence| sequence.number == source_number)
+        .cloned()
+        .ok_or_else(|| SequenceError::MissingSequence(source_number.to_string()))?;
+    document.sequences.retain(|sequence| sequence.number != target_number);
+
+    let mut copied = source;
+    copied.id = Uuid::new_v4().to_string();
+    copied.number = target_number.max(1);
+    copied.name = sanitize_sequence_name(copied.name, copied.number)?;
+    copied.updated_at_ms = now_ms;
+    for cue in &mut copied.cues {
+        cue.id = Uuid::new_v4().to_string();
+        cue.updated_at_ms = now_ms;
+    }
+
+    document.selected_sequence_id = Some(copied.id.clone());
+    document.sequences.push(copied);
+    document.version = document.version.saturating_add(1);
+    Ok(normalize_document(document))
+}
+
+pub fn move_sequence_to_number(
+    mut document: SequenceDocument,
+    source_number: u32,
+    target_number: u32,
+    now_ms: u64,
+) -> SequenceResult<SequenceDocument> {
+    document = normalize_document(document);
+    if source_number == target_number {
+        return Ok(document);
+    }
+
+    let index = document
+        .sequences
+        .iter()
+        .position(|sequence| sequence.number == source_number)
+        .ok_or_else(|| SequenceError::MissingSequence(source_number.to_string()))?;
+    let mut sequence = document.sequences.remove(index);
+    document.sequences.retain(|item| item.number != target_number);
+    sequence.number = target_number.max(1);
+    sequence.name = sanitize_sequence_name(sequence.name, sequence.number)?;
+    sequence.updated_at_ms = now_ms;
+    document.selected_sequence_id = Some(sequence.id.clone());
+    document.sequences.push(sequence);
+    document.version = document.version.saturating_add(1);
+    Ok(normalize_document(document))
+}
+
 pub fn select_sequence(
     mut document: SequenceDocument,
     sequence_id: &str,
@@ -760,6 +818,70 @@ mod tests {
 
         let values = sequence.active_cue_values(&state);
         assert_eq!(values.len(), 2);
+    }
+
+    #[test]
+    fn copy_sequence_rekeys_ids_and_replaces_target_number() {
+        let result = store_single_step_program(
+            SequenceDocument::default(),
+            SingleStepStoreRequest {
+                sequence_id: None,
+                sequence_number: Some(1),
+                name: Some("Look".to_string()),
+                store_mode: CueStoreMode::Overwrite,
+            },
+            vec![programmer_value("1", "Dimmer", 100.0)],
+            10,
+        )
+        .unwrap();
+        let source_id = result.sequence.id.clone();
+        let source_cue_id = result.sequence.cues[0].id.clone();
+
+        let document = copy_sequence_to_number(result.document, 1, 2, 11).unwrap();
+        let source = document.sequences.iter().find(|sequence| sequence.number == 1).unwrap();
+        let copied = document.sequences.iter().find(|sequence| sequence.number == 2).unwrap();
+
+        assert_eq!(document.sequences.len(), 2);
+        assert_eq!(source.id, source_id);
+        assert_ne!(copied.id, source_id);
+        assert_ne!(copied.cues[0].id, source_cue_id);
+        assert_eq!(document.selected_sequence_id.as_deref(), Some(copied.id.as_str()));
+    }
+
+    #[test]
+    fn move_sequence_replaces_target_number_without_rekeying() {
+        let first = store_single_step_program(
+            SequenceDocument::default(),
+            SingleStepStoreRequest {
+                sequence_id: None,
+                sequence_number: Some(1),
+                name: Some("Source".to_string()),
+                store_mode: CueStoreMode::Overwrite,
+            },
+            vec![programmer_value("1", "Dimmer", 100.0)],
+            10,
+        )
+        .unwrap();
+        let source_id = first.sequence.id.clone();
+        let second = store_single_step_program(
+            first.document,
+            SingleStepStoreRequest {
+                sequence_id: None,
+                sequence_number: Some(2),
+                name: Some("Target".to_string()),
+                store_mode: CueStoreMode::Overwrite,
+            },
+            vec![programmer_value("2", "Dimmer", 50.0)],
+            11,
+        )
+        .unwrap();
+
+        let document = move_sequence_to_number(second.document, 1, 2, 12).unwrap();
+
+        assert_eq!(document.sequences.len(), 1);
+        assert_eq!(document.sequences[0].number, 2);
+        assert_eq!(document.sequences[0].id, source_id);
+        assert_eq!(document.selected_sequence_id.as_deref(), Some(source_id.as_str()));
     }
 
     fn programmer_value(fixture_id: &str, attribute: &str, numeric: f64) -> ProgrammerValue {

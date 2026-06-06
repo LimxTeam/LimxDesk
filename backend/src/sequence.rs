@@ -7,9 +7,9 @@ use limxdesk_dmx::{DmxChannelSource, DmxOutputValue};
 use limxdesk_platform::current_timestamp_millis;
 use limxdesk_programmer::StoreUseSelection;
 use limxdesk_sequence::{
-    advance_state, cue_output_values, delete_cue, delete_sequence, goto_state, normalize_document,
-    off_state, select_sequence, set_master_state, store_programmer_values,
-    store_single_step_program, update_cue,
+    advance_state, copy_sequence_to_number, cue_output_values, delete_cue, delete_sequence,
+    goto_state, move_sequence_to_number, normalize_document, off_state, select_sequence,
+    set_master_state, store_programmer_values, store_single_step_program, update_cue,
     CuePatch, PlaybackDirection, SequenceCommandResult, SequenceDocument, SequenceRuntimeState,
     SequenceStoreRequest, SingleStepStoreRequest,
 };
@@ -148,6 +148,49 @@ pub fn sequence_delete(
     save_and_emit(&document, &show_state, &app)?;
     let snapshot = sequence_state.remove_state(&sequence_id)?;
     events::emit_sequence_state_changed(&app, &snapshot);
+    request_sequence_output(&app);
+    Ok(document)
+}
+
+#[tauri::command]
+pub fn sequence_copy(
+    source_number: u32,
+    target_number: u32,
+    show_state: State<'_, ShowRuntimeState>,
+    app: AppHandle,
+) -> Result<SequenceDocument, String> {
+    let document = copy_sequence_to_number(
+        load_sequence_document(&show_state)?,
+        source_number,
+        target_number,
+        now_ms()?,
+    )
+    .map_err(|error| error.to_string())?;
+    save_and_emit(&document, &show_state, &app)?;
+    Ok(document)
+}
+
+#[tauri::command]
+pub fn sequence_move(
+    source_number: u32,
+    target_number: u32,
+    show_state: State<'_, ShowRuntimeState>,
+    sequence_state: State<'_, SequenceState>,
+    app: AppHandle,
+) -> Result<SequenceDocument, String> {
+    let before = load_sequence_document(&show_state)?;
+    let source_id = before
+        .sequences
+        .iter()
+        .find(|sequence| sequence.number == source_number)
+        .map(|sequence| sequence.id.clone());
+    let document = move_sequence_to_number(before, source_number, target_number, now_ms()?)
+        .map_err(|error| error.to_string())?;
+    save_and_emit(&document, &show_state, &app)?;
+    if let Some(source_id) = source_id {
+        let snapshot = sequence_state.remove_state(&source_id)?;
+        events::emit_sequence_state_changed(&app, &snapshot);
+    }
     request_sequence_output(&app);
     Ok(document)
 }

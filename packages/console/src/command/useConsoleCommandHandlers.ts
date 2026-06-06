@@ -141,7 +141,7 @@ export function useConsoleCommandHandlers() {
       if (command.mode === "stomp") {
         return handleStompCommand(command);
       }
-      if (commandHasToken(command, "At")) {
+      if (commandHasToken(command, "At") && command.mode !== "copy" && command.mode !== "move") {
         return handleAtCommand(command);
       }
       if (command.target === "fixture") {
@@ -256,8 +256,31 @@ async function handleSequenceCommand(command: DeskCommandState) {
     return { handled: true, status: `Deleted Sequence ${number}` };
   }
 
-  if (command.mode === "copy" || command.mode === "move" || command.mode === "edit" || command.mode === "stomp") {
-    return { handled: true, keepCommand: true, status: `${command.mode.toUpperCase()} Sequence is not available` };
+  if (command.mode === "copy" || command.mode === "move") {
+    const pair = commandSourceTargetPair(command);
+    if (!pair) {
+      return { handled: true, keepCommand: true, status: `${command.mode.toUpperCase()} Sequence needs source At destination` };
+    }
+    await invoke(command.mode === "copy" ? "sequence_copy" : "sequence_move", {
+      sourceNumber: pair.source,
+      targetNumber: pair.target,
+    });
+    return {
+      handled: true,
+      status: `${command.mode === "copy" ? "Copied" : "Moved"} Sequence ${pair.source} At ${pair.target}`,
+    };
+  }
+
+  if (command.mode === "edit") {
+    if (!existing) {
+      return { handled: true, keepCommand: true, status: `Sequence ${number} is empty` };
+    }
+    await invoke("sequence_select", { sequenceId: existing.id });
+    return { handled: true, status: `Edit Sequence ${number}` };
+  }
+
+  if (command.mode === "stomp") {
+    return { handled: true, keepCommand: true, status: "STOMP Sequence is not available" };
   }
 
   if (command.mode === "select" || command.mode === "idle") {
@@ -272,7 +295,40 @@ async function handleSequenceCommand(command: DeskCommandState) {
 }
 
 function isExecutorMode(mode: DeskCommandState["mode"]) {
-  return mode === "store" || mode === "update" || mode === "delete" || mode === "on" || mode === "off" || mode === "select";
+  return (
+    mode === "store" ||
+    mode === "update" ||
+    mode === "delete" ||
+    mode === "copy" ||
+    mode === "move" ||
+    mode === "edit" ||
+    mode === "on" ||
+    mode === "off" ||
+    mode === "select"
+  );
+}
+
+function commandSourceTargetPair(command: DeskCommandState) {
+  const atIndex = command.tokens.findIndex((token) => token.toLowerCase() === "at");
+  if (atIndex <= 0 || atIndex >= command.tokens.length - 1) return null;
+  const source = lastInteger(command.tokens.slice(0, atIndex));
+  const target = firstInteger(command.tokens.slice(atIndex + 1));
+  if (!source || !target) return null;
+  return { source, target };
+}
+
+function firstInteger(tokens: string[]) {
+  for (const token of tokens) {
+    if (/^\d+$/.test(token)) return Number(token);
+  }
+  return null;
+}
+
+function lastInteger(tokens: string[]) {
+  for (let index = tokens.length - 1; index >= 0; index -= 1) {
+    if (/^\d+$/.test(tokens[index])) return Number(tokens[index]);
+  }
+  return null;
 }
 
 async function handleCueCommand(command: DeskCommandState) {
@@ -382,8 +438,33 @@ async function handleExecutorCommand(command: DeskCommandState) {
     return { handled: true, status: `Selected Executor ${number}` };
   }
 
-  if (command.mode === "copy" || command.mode === "move" || command.mode === "edit" || command.mode === "stomp") {
-    return { handled: true, keepCommand: true, status: `${command.mode.toUpperCase()} Executor is not available` };
+  if (command.mode === "copy" || command.mode === "move") {
+    const pair = commandSourceTargetPair(command);
+    if (!pair) {
+      return { handled: true, keepCommand: true, status: `${command.mode.toUpperCase()} Executor needs source At destination` };
+    }
+    const source = page.executors.find((item) => item.number === pair.source);
+    const target = page.executors.find((item) => item.number === pair.target);
+    if (!source || !target) {
+      return { handled: true, keepCommand: true, status: `Executor ${!source ? pair.source : pair.target} not found` };
+    }
+    await invoke(command.mode === "copy" ? "playback_copy_executor" : "playback_move_executor", {
+      pageId: page.id,
+      sourceExecutorId: source.id,
+      targetExecutorId: target.id,
+    });
+    return {
+      handled: true,
+      status: `${command.mode === "copy" ? "Copied" : "Moved"} Executor ${pair.source} At ${pair.target}`,
+    };
+  }
+
+  if (command.mode === "edit") {
+    return { handled: true, status: `Edit Executor ${number}` };
+  }
+
+  if (command.mode === "stomp") {
+    return { handled: true, keepCommand: true, status: "STOMP Executor is not available" };
   }
 
   return false;

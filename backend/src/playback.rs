@@ -9,8 +9,9 @@ use crate::{
 };
 use limxdesk_cue::CueStoreMode;
 use limxdesk_playback::{
-    assign_executor, clear_executor, find_executor, normalize_document, set_executor_master,
-    ExecutorAssignment, ExecutorAssignmentKind, PlaybackAction, PlaybackDocument,
+    assign_executor, clear_executor, copy_executor, find_executor, move_executor,
+    normalize_document, set_executor_master, ExecutorAssignment, ExecutorAssignmentKind,
+    PlaybackAction, PlaybackDocument,
 };
 use limxdesk_programmer::StoreUseSelection;
 use limxdesk_sequence::{store_single_step_program, SequenceCommandResult, SingleStepStoreRequest};
@@ -127,6 +128,45 @@ pub fn playback_clear_executor(
     let document = clear_executor(load_playback_document(&show_state)?, &page_id, &executor_id)
         .map_err(|error| error.to_string())?;
     save_and_emit(&document, &show_state, &app)?;
+    Ok(document)
+}
+
+#[tauri::command]
+pub fn playback_copy_executor(
+    page_id: String,
+    source_executor_id: String,
+    target_executor_id: String,
+    show_state: State<'_, ShowRuntimeState>,
+    app: AppHandle,
+) -> Result<PlaybackDocument, String> {
+    let document = copy_executor(
+        load_playback_document(&show_state)?,
+        &page_id,
+        &source_executor_id,
+        &target_executor_id,
+    )
+    .map_err(|error| error.to_string())?;
+    save_and_emit(&document, &show_state, &app)?;
+    Ok(document)
+}
+
+#[tauri::command]
+pub fn playback_move_executor(
+    page_id: String,
+    source_executor_id: String,
+    target_executor_id: String,
+    show_state: State<'_, ShowRuntimeState>,
+    app: AppHandle,
+) -> Result<PlaybackDocument, String> {
+    let document = move_executor(
+        load_playback_document(&show_state)?,
+        &page_id,
+        &source_executor_id,
+        &target_executor_id,
+    )
+    .map_err(|error| error.to_string())?;
+    save_and_emit(&document, &show_state, &app)?;
+    request_playback_output(&app);
     Ok(document)
 }
 
