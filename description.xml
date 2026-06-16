@@ -1,0 +1,704 @@
+<?xml version="1.0" encoding="utf-8"?>
+<GDTF DataVersion="1.2">
+	<FixtureType Name="TORNADO (TB 5 IP)" ShortName="TORNADO (TB 5 IP)" LongName="TORNADO (TB 5 IP)" Manufacturer="ACME">
+		<AttributeDefinitions>
+			<ActivationGroups />
+			<FeatureGroups>
+				<FeatureGroup Name="Position" Pretty="Position">
+					<Feature Name="Position" Pretty="Position" />
+				</FeatureGroup>
+				<FeatureGroup Name="Color" Pretty="Color">
+					<Feature Name="Color" Pretty="Color" />
+				</FeatureGroup>
+				<FeatureGroup Name="Focus" Pretty="Focus">
+					<Feature Name="Focus" Pretty="Focus" />
+				</FeatureGroup>
+				<FeatureGroup Name="Dimmer" Pretty="Dimmer">
+					<Feature Name="Dimmer" Pretty="Dimmer" />
+				</FeatureGroup>
+				<FeatureGroup Name="Strobe" Pretty="Strobe">
+					<Feature Name="Strobe" Pretty="Strobe" />
+				</FeatureGroup>
+				<FeatureGroup Name="Other" Pretty="Other">
+					<Feature Name="Other" Pretty="Other" />
+				</FeatureGroup>
+				<FeatureGroup Name="Control" Pretty="Control">
+					<Feature Name="Control" Pretty="Control" />
+				</FeatureGroup>
+			</FeatureGroups>
+			<Attributes>
+				<Attribute Name="Pan" Pretty="Pan" Feature="Position.Position" />
+				<Attribute Name="Tilt" Pretty="Tilt" Feature="Position.Position" />
+				<Attribute Name="ColorAdd_R" Pretty="ColorAdd_R" Feature="Color.Color" />
+				<Attribute Name="ColorAdd_G" Pretty="ColorAdd_G" Feature="Color.Color" />
+				<Attribute Name="ColorAdd_B" Pretty="ColorAdd_B" Feature="Color.Color" />
+				<Attribute Name="COLORRGB19" Pretty="COLORRGB19" Feature="Color.Color" />
+				<Attribute Name="Zoom" Pretty="Zoom" Feature="Focus.Focus" />
+				<Attribute Name="Dimmer" Pretty="Dimmer" Feature="Dimmer.Dimmer" />
+				<Attribute Name="RGBMACRO" Pretty="RGBMACRO" Feature="Color.Color" />
+				<Attribute Name="Shutter1" Pretty="Shutter1" Feature="Strobe.Strobe" />
+				<Attribute Name="Speed" Pretty="Speed" Feature="Other.Other" />
+				<Attribute Name="Function" Pretty="Function" Feature="Control.Control" />
+			</Attributes>
+		</AttributeDefinitions>
+		<Wheels />
+		<PhysicalDescriptions>
+			<Emitters />
+			<Filters />
+			<ColorSpaces />
+			<Gobos />
+			<Connectors />
+		</PhysicalDescriptions>
+		<Models>
+			<Model Name="Body" Length="0" Width="0" Height="0" PrimitiveType="Cube" />
+		</Models>
+		<Geometries>
+			<Geometry Name="Body" Model="Body" />
+		</Geometries>
+		<DMXModes>
+			<DMXMode Name="Default" Geometry="Body">
+				<DMXChannels>
+					<DMXChannel Name="Pan" Geometry="Body" Offset="1,2" DMXBreak="1" Default="32768/2">
+						<LogicalChannel Attribute="Pan">
+							<ChannelFunction Name="Pan" Attribute="Pan" OriginalAttribute="Pan" DMXFrom="0/2" PhysicalFrom="32.5" PhysicalTo="-32.5" />
+						</LogicalChannel>
+					</DMXChannel>
+					<DMXChannel Name="Tilt" Geometry="Body" Offset="3,4" DMXBreak="1" Default="32768/2">
+						<LogicalChannel Attribute="Tilt">
+							<ChannelFunction Name="Tilt" Attribute="Tilt" OriginalAttribute="Tilt" DMXFrom="0/2" PhysicalFrom="-115" PhysicalTo="115" />
+						</LogicalChannel>
+					</DMXChannel>
+					<DMXChannel Name="Red" Geometry="Body" Offset="5" DMXBreak="1" Default="255/1" Highlight="100/1">
+						<LogicalChannel Attribute="ColorAdd_R">
+							<ChannelFunction Name="R" Attribute="ColorAdd_R" OriginalAttribute="ColorAdd_R" DMXFrom="0/1" PhysicalFrom="0" PhysicalTo="1" />
+						</LogicalChannel>
+					</DMXChannel>
+					<DMXChannel Name="Green" Geometry="Body" Offset="6" DMXBreak="1" Default="255/1" Highlight="100/1">
+						<LogicalChannel Attribute="ColorAdd_G">
+							<ChannelFunction Name="G" Attribute="ColorAdd_G" OriginalAttribute="ColorAdd_G" DMXFrom="0/1" PhysicalFrom="0" PhysicalTo="1" />
+						</LogicalChannel>
+					</DMXChannel>
+					<DMXChannel Name="Blue" Geometry="Body" Offset="7" DMXBreak="1" Default="255/1" Highlight="100/1">
+						<LogicalChannel Attribute="ColorAdd_B">
+							<ChannelFunction Name="B" Attribute="ColorAdd_B" OriginalAttribute="ColorAdd_B" DMXFrom="0/1" PhysicalFrom="0" PhysicalTo="1" />
+						</LogicalChannel>
+					</DMXChannel>
+					<DMXChannel Name="COLORRGB19" Geometry="Body" Offset="8" DMXBreak="1" Highlight="0/1">
+						<LogicalChannel Attribute="COLORRGB19">
+							<ChannelFunction Name="Mint Green" Attribute="COLORRGB19" OriginalAttribute="COLORRGB19" DMXFrom="0/1" PhysicalFrom="0" PhysicalTo="1" />
+						</LogicalChannel>
+					</DMXChannel>
+					<DMXChannel Name="Zoom" Geometry="Body" Offset="9" DMXBreak="1" Default="128/1">
+						<LogicalChannel Attribute="Zoom">
+							<ChannelFunction Name="Zoom" Attribute="Zoom" OriginalAttribute="Zoom" DMXFrom="0/1" PhysicalFrom="40" PhysicalTo="3">
+								<ChannelSet Name="3" DMXFrom="0/1" />
+								<ChannelSet Name="40" DMXFrom="255/1" />
+							</ChannelFunction>
+						</LogicalChannel>
+					</DMXChannel>
+					<DMXChannel Name="Dimmer" Geometry="Body" DMXBreak="1" Highlight="100/1">
+						<LogicalChannel Attribute="Dimmer">
+							<ChannelFunction Name="Dim" Attribute="Dimmer" OriginalAttribute="Dimmer" DMXFrom="0/1" PhysicalFrom="0" PhysicalTo="1" />
+						</LogicalChannel>
+					</DMXChannel>
+					<DMXChannel Name="Dimmer" Geometry="Body" DMXBreak="1" Highlight="100/1">
+						<LogicalChannel Attribute="Dimmer">
+							<ChannelFunction Name="Dim" Attribute="Dimmer" OriginalAttribute="Dimmer" DMXFrom="0/1" PhysicalFrom="0" PhysicalTo="1" />
+						</LogicalChannel>
+					</DMXChannel>
+					<DMXChannel Name="Red" Geometry="Body" Offset="10" DMXBreak="1" Default="255/1" Highlight="100/1">
+						<LogicalChannel Attribute="ColorAdd_R">
+							<ChannelFunction Name="R" Attribute="ColorAdd_R" OriginalAttribute="ColorAdd_R" DMXFrom="0/1" PhysicalFrom="0" PhysicalTo="1" />
+						</LogicalChannel>
+					</DMXChannel>
+					<DMXChannel Name="Green" Geometry="Body" Offset="11" DMXBreak="1" Default="255/1" Highlight="100/1">
+						<LogicalChannel Attribute="ColorAdd_G">
+							<ChannelFunction Name="G" Attribute="ColorAdd_G" OriginalAttribute="ColorAdd_G" DMXFrom="0/1" PhysicalFrom="0" PhysicalTo="1" />
+						</LogicalChannel>
+					</DMXChannel>
+					<DMXChannel Name="Blue" Geometry="Body" Offset="12" DMXBreak="1" Default="255/1" Highlight="100/1">
+						<LogicalChannel Attribute="ColorAdd_B">
+							<ChannelFunction Name="B" Attribute="ColorAdd_B" OriginalAttribute="ColorAdd_B" DMXFrom="0/1" PhysicalFrom="0" PhysicalTo="1" />
+						</LogicalChannel>
+					</DMXChannel>
+					<DMXChannel Name="RGBMACRO" Geometry="Body" Offset="13" DMXBreak="1" Highlight="0/1">
+						<LogicalChannel Attribute="RGBMACRO">
+							<ChannelFunction Name="RGB Macro" Attribute="RGBMACRO" OriginalAttribute="RGBMACRO" DMXFrom="0/1" PhysicalFrom="0" PhysicalTo="1">
+								<ChannelSet Name="Null" DMXFrom="0/1" />
+								<ChannelSet Name="Macro 1" DMXFrom="10/1" />
+								<ChannelSet Name="Macro 2" DMXFrom="16/1" />
+								<ChannelSet Name="Macro 3" DMXFrom="24/1" />
+								<ChannelSet Name="Macro 4" DMXFrom="32/1" />
+								<ChannelSet Name="Macro 5" DMXFrom="40/1" />
+								<ChannelSet Name="Macro 6" DMXFrom="48/1" />
+								<ChannelSet Name="Macro 7" DMXFrom="56/1" />
+								<ChannelSet Name="Macro 8" DMXFrom="64/1" />
+								<ChannelSet Name="Macro 9" DMXFrom="72/1" />
+								<ChannelSet Name="Macro 10" DMXFrom="80/1" />
+								<ChannelSet Name="Macro 11" DMXFrom="88/1" />
+								<ChannelSet Name="Macro 12" DMXFrom="96/1" />
+								<ChannelSet Name="Macro 13" DMXFrom="104/1" />
+								<ChannelSet Name="Macro 14" DMXFrom="112/1" />
+								<ChannelSet Name="Macro 15" DMXFrom="120/1" />
+								<ChannelSet Name="Macro 16" DMXFrom="128/1" />
+								<ChannelSet Name="Macro 17" DMXFrom="136/1" />
+								<ChannelSet Name="Macro 18" DMXFrom="144/1" />
+								<ChannelSet Name="Macro 19" DMXFrom="152/1" />
+								<ChannelSet Name="Macro 20" DMXFrom="160/1" />
+								<ChannelSet Name="Macro 21" DMXFrom="168/1" />
+								<ChannelSet Name="Macro 22" DMXFrom="176/1" />
+								<ChannelSet Name="Macro 23" DMXFrom="184/1" />
+								<ChannelSet Name="Macro 24" DMXFrom="192/1" />
+								<ChannelSet Name="Macro 25" DMXFrom="200/1" />
+								<ChannelSet Name="Macro 26" DMXFrom="208/1" />
+								<ChannelSet Name="Macro 27" DMXFrom="216/1" />
+								<ChannelSet Name="Macro 28" DMXFrom="224/1" />
+								<ChannelSet Name="Macro 29" DMXFrom="232/1" />
+								<ChannelSet Name="Macro 30" DMXFrom="240/1" />
+								<ChannelSet Name="Macro 31" DMXFrom="248/1" />
+							</ChannelFunction>
+						</LogicalChannel>
+					</DMXChannel>
+					<DMXChannel Name="Pan" Geometry="Body" Offset="14,15" DMXBreak="1" Default="32768/2">
+						<LogicalChannel Attribute="Pan">
+							<ChannelFunction Name="Pan" Attribute="Pan" OriginalAttribute="Pan" DMXFrom="0/2" PhysicalFrom="32.5" PhysicalTo="-32.5" />
+						</LogicalChannel>
+					</DMXChannel>
+					<DMXChannel Name="Tilt" Geometry="Body" Offset="16,17" DMXBreak="1" Default="32768/2">
+						<LogicalChannel Attribute="Tilt">
+							<ChannelFunction Name="Tilt" Attribute="Tilt" OriginalAttribute="Tilt" DMXFrom="0/2" PhysicalFrom="-115" PhysicalTo="115" />
+						</LogicalChannel>
+					</DMXChannel>
+					<DMXChannel Name="Red" Geometry="Body" Offset="18" DMXBreak="1" Default="255/1" Highlight="100/1">
+						<LogicalChannel Attribute="ColorAdd_R">
+							<ChannelFunction Name="R" Attribute="ColorAdd_R" OriginalAttribute="ColorAdd_R" DMXFrom="0/1" PhysicalFrom="0" PhysicalTo="1" />
+						</LogicalChannel>
+					</DMXChannel>
+					<DMXChannel Name="Green" Geometry="Body" Offset="19" DMXBreak="1" Default="255/1" Highlight="100/1">
+						<LogicalChannel Attribute="ColorAdd_G">
+							<ChannelFunction Name="G" Attribute="ColorAdd_G" OriginalAttribute="ColorAdd_G" DMXFrom="0/1" PhysicalFrom="0" PhysicalTo="1" />
+						</LogicalChannel>
+					</DMXChannel>
+					<DMXChannel Name="Blue" Geometry="Body" Offset="20" DMXBreak="1" Default="255/1" Highlight="100/1">
+						<LogicalChannel Attribute="ColorAdd_B">
+							<ChannelFunction Name="B" Attribute="ColorAdd_B" OriginalAttribute="ColorAdd_B" DMXFrom="0/1" PhysicalFrom="0" PhysicalTo="1" />
+						</LogicalChannel>
+					</DMXChannel>
+					<DMXChannel Name="COLORRGB19" Geometry="Body" Offset="21" DMXBreak="1" Highlight="0/1">
+						<LogicalChannel Attribute="COLORRGB19">
+							<ChannelFunction Name="Mint Green" Attribute="COLORRGB19" OriginalAttribute="COLORRGB19" DMXFrom="0/1" PhysicalFrom="0" PhysicalTo="1" />
+						</LogicalChannel>
+					</DMXChannel>
+					<DMXChannel Name="Zoom" Geometry="Body" Offset="22" DMXBreak="1" Default="128/1">
+						<LogicalChannel Attribute="Zoom">
+							<ChannelFunction Name="Zoom" Attribute="Zoom" OriginalAttribute="Zoom" DMXFrom="0/1" PhysicalFrom="40" PhysicalTo="3">
+								<ChannelSet Name="3" DMXFrom="0/1" />
+								<ChannelSet Name="40" DMXFrom="255/1" />
+							</ChannelFunction>
+						</LogicalChannel>
+					</DMXChannel>
+					<DMXChannel Name="Dimmer" Geometry="Body" DMXBreak="1" Highlight="100/1">
+						<LogicalChannel Attribute="Dimmer">
+							<ChannelFunction Name="Dim" Attribute="Dimmer" OriginalAttribute="Dimmer" DMXFrom="0/1" PhysicalFrom="0" PhysicalTo="1" />
+						</LogicalChannel>
+					</DMXChannel>
+					<DMXChannel Name="Dimmer" Geometry="Body" DMXBreak="1" Highlight="100/1">
+						<LogicalChannel Attribute="Dimmer">
+							<ChannelFunction Name="Dim" Attribute="Dimmer" OriginalAttribute="Dimmer" DMXFrom="0/1" PhysicalFrom="0" PhysicalTo="1" />
+						</LogicalChannel>
+					</DMXChannel>
+					<DMXChannel Name="Red" Geometry="Body" Offset="23" DMXBreak="1" Default="255/1" Highlight="100/1">
+						<LogicalChannel Attribute="ColorAdd_R">
+							<ChannelFunction Name="R" Attribute="ColorAdd_R" OriginalAttribute="ColorAdd_R" DMXFrom="0/1" PhysicalFrom="0" PhysicalTo="1" />
+						</LogicalChannel>
+					</DMXChannel>
+					<DMXChannel Name="Green" Geometry="Body" Offset="24" DMXBreak="1" Default="255/1" Highlight="100/1">
+						<LogicalChannel Attribute="ColorAdd_G">
+							<ChannelFunction Name="G" Attribute="ColorAdd_G" OriginalAttribute="ColorAdd_G" DMXFrom="0/1" PhysicalFrom="0" PhysicalTo="1" />
+						</LogicalChannel>
+					</DMXChannel>
+					<DMXChannel Name="Blue" Geometry="Body" Offset="25" DMXBreak="1" Default="255/1" Highlight="100/1">
+						<LogicalChannel Attribute="ColorAdd_B">
+							<ChannelFunction Name="B" Attribute="ColorAdd_B" OriginalAttribute="ColorAdd_B" DMXFrom="0/1" PhysicalFrom="0" PhysicalTo="1" />
+						</LogicalChannel>
+					</DMXChannel>
+					<DMXChannel Name="RGBMACRO" Geometry="Body" Offset="26" DMXBreak="1" Highlight="0/1">
+						<LogicalChannel Attribute="RGBMACRO">
+							<ChannelFunction Name="RGB Macro" Attribute="RGBMACRO" OriginalAttribute="RGBMACRO" DMXFrom="0/1" PhysicalFrom="0" PhysicalTo="1">
+								<ChannelSet Name="Null" DMXFrom="0/1" />
+								<ChannelSet Name="Macro 1" DMXFrom="10/1" />
+								<ChannelSet Name="Macro 2" DMXFrom="16/1" />
+								<ChannelSet Name="Macro 3" DMXFrom="24/1" />
+								<ChannelSet Name="Macro 4" DMXFrom="32/1" />
+								<ChannelSet Name="Macro 5" DMXFrom="40/1" />
+								<ChannelSet Name="Macro 6" DMXFrom="48/1" />
+								<ChannelSet Name="Macro 7" DMXFrom="56/1" />
+								<ChannelSet Name="Macro 8" DMXFrom="64/1" />
+								<ChannelSet Name="Macro 9" DMXFrom="72/1" />
+								<ChannelSet Name="Macro 10" DMXFrom="80/1" />
+								<ChannelSet Name="Macro 11" DMXFrom="88/1" />
+								<ChannelSet Name="Macro 12" DMXFrom="96/1" />
+								<ChannelSet Name="Macro 13" DMXFrom="104/1" />
+								<ChannelSet Name="Macro 14" DMXFrom="112/1" />
+								<ChannelSet Name="Macro 15" DMXFrom="120/1" />
+								<ChannelSet Name="Macro 16" DMXFrom="128/1" />
+								<ChannelSet Name="Macro 17" DMXFrom="136/1" />
+								<ChannelSet Name="Macro 18" DMXFrom="144/1" />
+								<ChannelSet Name="Macro 19" DMXFrom="152/1" />
+								<ChannelSet Name="Macro 20" DMXFrom="160/1" />
+								<ChannelSet Name="Macro 21" DMXFrom="168/1" />
+								<ChannelSet Name="Macro 22" DMXFrom="176/1" />
+								<ChannelSet Name="Macro 23" DMXFrom="184/1" />
+								<ChannelSet Name="Macro 24" DMXFrom="192/1" />
+								<ChannelSet Name="Macro 25" DMXFrom="200/1" />
+								<ChannelSet Name="Macro 26" DMXFrom="208/1" />
+								<ChannelSet Name="Macro 27" DMXFrom="216/1" />
+								<ChannelSet Name="Macro 28" DMXFrom="224/1" />
+								<ChannelSet Name="Macro 29" DMXFrom="232/1" />
+								<ChannelSet Name="Macro 30" DMXFrom="240/1" />
+								<ChannelSet Name="Macro 31" DMXFrom="248/1" />
+							</ChannelFunction>
+						</LogicalChannel>
+					</DMXChannel>
+					<DMXChannel Name="Pan" Geometry="Body" Offset="27,28" DMXBreak="1" Default="32768/2">
+						<LogicalChannel Attribute="Pan">
+							<ChannelFunction Name="Pan" Attribute="Pan" OriginalAttribute="Pan" DMXFrom="0/2" PhysicalFrom="32.5" PhysicalTo="-32.5" />
+						</LogicalChannel>
+					</DMXChannel>
+					<DMXChannel Name="Tilt" Geometry="Body" Offset="29,30" DMXBreak="1" Default="32768/2">
+						<LogicalChannel Attribute="Tilt">
+							<ChannelFunction Name="Tilt" Attribute="Tilt" OriginalAttribute="Tilt" DMXFrom="0/2" PhysicalFrom="-115" PhysicalTo="115" />
+						</LogicalChannel>
+					</DMXChannel>
+					<DMXChannel Name="Red" Geometry="Body" Offset="31" DMXBreak="1" Default="255/1" Highlight="100/1">
+						<LogicalChannel Attribute="ColorAdd_R">
+							<ChannelFunction Name="R" Attribute="ColorAdd_R" OriginalAttribute="ColorAdd_R" DMXFrom="0/1" PhysicalFrom="0" PhysicalTo="1" />
+						</LogicalChannel>
+					</DMXChannel>
+					<DMXChannel Name="Green" Geometry="Body" Offset="32" DMXBreak="1" Default="255/1" Highlight="100/1">
+						<LogicalChannel Attribute="ColorAdd_G">
+							<ChannelFunction Name="G" Attribute="ColorAdd_G" OriginalAttribute="ColorAdd_G" DMXFrom="0/1" PhysicalFrom="0" PhysicalTo="1" />
+						</LogicalChannel>
+					</DMXChannel>
+					<DMXChannel Name="Blue" Geometry="Body" Offset="33" DMXBreak="1" Default="255/1" Highlight="100/1">
+						<LogicalChannel Attribute="ColorAdd_B">
+							<ChannelFunction Name="B" Attribute="ColorAdd_B" OriginalAttribute="ColorAdd_B" DMXFrom="0/1" PhysicalFrom="0" PhysicalTo="1" />
+						</LogicalChannel>
+					</DMXChannel>
+					<DMXChannel Name="COLORRGB19" Geometry="Body" Offset="34" DMXBreak="1" Highlight="0/1">
+						<LogicalChannel Attribute="COLORRGB19">
+							<ChannelFunction Name="Mint Green" Attribute="COLORRGB19" OriginalAttribute="COLORRGB19" DMXFrom="0/1" PhysicalFrom="0" PhysicalTo="1" />
+						</LogicalChannel>
+					</DMXChannel>
+					<DMXChannel Name="Zoom" Geometry="Body" Offset="35" DMXBreak="1" Default="128/1">
+						<LogicalChannel Attribute="Zoom">
+							<ChannelFunction Name="Zoom" Attribute="Zoom" OriginalAttribute="Zoom" DMXFrom="0/1" PhysicalFrom="40" PhysicalTo="3">
+								<ChannelSet Name="3" DMXFrom="0/1" />
+								<ChannelSet Name="40" DMXFrom="255/1" />
+							</ChannelFunction>
+						</LogicalChannel>
+					</DMXChannel>
+					<DMXChannel Name="Dimmer" Geometry="Body" DMXBreak="1" Highlight="100/1">
+						<LogicalChannel Attribute="Dimmer">
+							<ChannelFunction Name="Dim" Attribute="Dimmer" OriginalAttribute="Dimmer" DMXFrom="0/1" PhysicalFrom="0" PhysicalTo="1" />
+						</LogicalChannel>
+					</DMXChannel>
+					<DMXChannel Name="Dimmer" Geometry="Body" DMXBreak="1" Highlight="100/1">
+						<LogicalChannel Attribute="Dimmer">
+							<ChannelFunction Name="Dim" Attribute="Dimmer" OriginalAttribute="Dimmer" DMXFrom="0/1" PhysicalFrom="0" PhysicalTo="1" />
+						</LogicalChannel>
+					</DMXChannel>
+					<DMXChannel Name="Red" Geometry="Body" Offset="36" DMXBreak="1" Default="255/1" Highlight="100/1">
+						<LogicalChannel Attribute="ColorAdd_R">
+							<ChannelFunction Name="R" Attribute="ColorAdd_R" OriginalAttribute="ColorAdd_R" DMXFrom="0/1" PhysicalFrom="0" PhysicalTo="1" />
+						</LogicalChannel>
+					</DMXChannel>
+					<DMXChannel Name="Green" Geometry="Body" Offset="37" DMXBreak="1" Default="255/1" Highlight="100/1">
+						<LogicalChannel Attribute="ColorAdd_G">
+							<ChannelFunction Name="G" Attribute="ColorAdd_G" OriginalAttribute="ColorAdd_G" DMXFrom="0/1" PhysicalFrom="0" PhysicalTo="1" />
+						</LogicalChannel>
+					</DMXChannel>
+					<DMXChannel Name="Blue" Geometry="Body" Offset="38" DMXBreak="1" Default="255/1" Highlight="100/1">
+						<LogicalChannel Attribute="ColorAdd_B">
+							<ChannelFunction Name="B" Attribute="ColorAdd_B" OriginalAttribute="ColorAdd_B" DMXFrom="0/1" PhysicalFrom="0" PhysicalTo="1" />
+						</LogicalChannel>
+					</DMXChannel>
+					<DMXChannel Name="RGBMACRO" Geometry="Body" Offset="39" DMXBreak="1" Highlight="0/1">
+						<LogicalChannel Attribute="RGBMACRO">
+							<ChannelFunction Name="RGB Macro" Attribute="RGBMACRO" OriginalAttribute="RGBMACRO" DMXFrom="0/1" PhysicalFrom="0" PhysicalTo="1">
+								<ChannelSet Name="Null" DMXFrom="0/1" />
+								<ChannelSet Name="Macro 1" DMXFrom="10/1" />
+								<ChannelSet Name="Macro 2" DMXFrom="16/1" />
+								<ChannelSet Name="Macro 3" DMXFrom="24/1" />
+								<ChannelSet Name="Macro 4" DMXFrom="32/1" />
+								<ChannelSet Name="Macro 5" DMXFrom="40/1" />
+								<ChannelSet Name="Macro 6" DMXFrom="48/1" />
+								<ChannelSet Name="Macro 7" DMXFrom="56/1" />
+								<ChannelSet Name="Macro 8" DMXFrom="64/1" />
+								<ChannelSet Name="Macro 9" DMXFrom="72/1" />
+								<ChannelSet Name="Macro 10" DMXFrom="80/1" />
+								<ChannelSet Name="Macro 11" DMXFrom="88/1" />
+								<ChannelSet Name="Macro 12" DMXFrom="96/1" />
+								<ChannelSet Name="Macro 13" DMXFrom="104/1" />
+								<ChannelSet Name="Macro 14" DMXFrom="112/1" />
+								<ChannelSet Name="Macro 15" DMXFrom="120/1" />
+								<ChannelSet Name="Macro 16" DMXFrom="128/1" />
+								<ChannelSet Name="Macro 17" DMXFrom="136/1" />
+								<ChannelSet Name="Macro 18" DMXFrom="144/1" />
+								<ChannelSet Name="Macro 19" DMXFrom="152/1" />
+								<ChannelSet Name="Macro 20" DMXFrom="160/1" />
+								<ChannelSet Name="Macro 21" DMXFrom="168/1" />
+								<ChannelSet Name="Macro 22" DMXFrom="176/1" />
+								<ChannelSet Name="Macro 23" DMXFrom="184/1" />
+								<ChannelSet Name="Macro 24" DMXFrom="192/1" />
+								<ChannelSet Name="Macro 25" DMXFrom="200/1" />
+								<ChannelSet Name="Macro 26" DMXFrom="208/1" />
+								<ChannelSet Name="Macro 27" DMXFrom="216/1" />
+								<ChannelSet Name="Macro 28" DMXFrom="224/1" />
+								<ChannelSet Name="Macro 29" DMXFrom="232/1" />
+								<ChannelSet Name="Macro 30" DMXFrom="240/1" />
+								<ChannelSet Name="Macro 31" DMXFrom="248/1" />
+							</ChannelFunction>
+						</LogicalChannel>
+					</DMXChannel>
+					<DMXChannel Name="Pan" Geometry="Body" Offset="40,41" DMXBreak="1" Default="32768/2">
+						<LogicalChannel Attribute="Pan">
+							<ChannelFunction Name="Pan" Attribute="Pan" OriginalAttribute="Pan" DMXFrom="0/2" PhysicalFrom="32.5" PhysicalTo="-32.5" />
+						</LogicalChannel>
+					</DMXChannel>
+					<DMXChannel Name="Tilt" Geometry="Body" Offset="42,43" DMXBreak="1" Default="32768/2">
+						<LogicalChannel Attribute="Tilt">
+							<ChannelFunction Name="Tilt" Attribute="Tilt" OriginalAttribute="Tilt" DMXFrom="0/2" PhysicalFrom="-115" PhysicalTo="115" />
+						</LogicalChannel>
+					</DMXChannel>
+					<DMXChannel Name="Red" Geometry="Body" Offset="44" DMXBreak="1" Default="255/1" Highlight="100/1">
+						<LogicalChannel Attribute="ColorAdd_R">
+							<ChannelFunction Name="R" Attribute="ColorAdd_R" OriginalAttribute="ColorAdd_R" DMXFrom="0/1" PhysicalFrom="0" PhysicalTo="1" />
+						</LogicalChannel>
+					</DMXChannel>
+					<DMXChannel Name="Green" Geometry="Body" Offset="45" DMXBreak="1" Default="255/1" Highlight="100/1">
+						<LogicalChannel Attribute="ColorAdd_G">
+							<ChannelFunction Name="G" Attribute="ColorAdd_G" OriginalAttribute="ColorAdd_G" DMXFrom="0/1" PhysicalFrom="0" PhysicalTo="1" />
+						</LogicalChannel>
+					</DMXChannel>
+					<DMXChannel Name="Blue" Geometry="Body" Offset="46" DMXBreak="1" Default="255/1" Highlight="100/1">
+						<LogicalChannel Attribute="ColorAdd_B">
+							<ChannelFunction Name="B" Attribute="ColorAdd_B" OriginalAttribute="ColorAdd_B" DMXFrom="0/1" PhysicalFrom="0" PhysicalTo="1" />
+						</LogicalChannel>
+					</DMXChannel>
+					<DMXChannel Name="COLORRGB19" Geometry="Body" Offset="47" DMXBreak="1" Highlight="0/1">
+						<LogicalChannel Attribute="COLORRGB19">
+							<ChannelFunction Name="Mint Green" Attribute="COLORRGB19" OriginalAttribute="COLORRGB19" DMXFrom="0/1" PhysicalFrom="0" PhysicalTo="1" />
+						</LogicalChannel>
+					</DMXChannel>
+					<DMXChannel Name="Zoom" Geometry="Body" Offset="48" DMXBreak="1" Default="128/1">
+						<LogicalChannel Attribute="Zoom">
+							<ChannelFunction Name="Zoom" Attribute="Zoom" OriginalAttribute="Zoom" DMXFrom="0/1" PhysicalFrom="40" PhysicalTo="3">
+								<ChannelSet Name="3" DMXFrom="0/1" />
+								<ChannelSet Name="40" DMXFrom="255/1" />
+							</ChannelFunction>
+						</LogicalChannel>
+					</DMXChannel>
+					<DMXChannel Name="Dimmer" Geometry="Body" DMXBreak="1" Highlight="100/1">
+						<LogicalChannel Attribute="Dimmer">
+							<ChannelFunction Name="Dim" Attribute="Dimmer" OriginalAttribute="Dimmer" DMXFrom="0/1" PhysicalFrom="0" PhysicalTo="1" />
+						</LogicalChannel>
+					</DMXChannel>
+					<DMXChannel Name="Dimmer" Geometry="Body" DMXBreak="1" Highlight="100/1">
+						<LogicalChannel Attribute="Dimmer">
+							<ChannelFunction Name="Dim" Attribute="Dimmer" OriginalAttribute="Dimmer" DMXFrom="0/1" PhysicalFrom="0" PhysicalTo="1" />
+						</LogicalChannel>
+					</DMXChannel>
+					<DMXChannel Name="Red" Geometry="Body" Offset="49" DMXBreak="1" Default="255/1" Highlight="100/1">
+						<LogicalChannel Attribute="ColorAdd_R">
+							<ChannelFunction Name="R" Attribute="ColorAdd_R" OriginalAttribute="ColorAdd_R" DMXFrom="0/1" PhysicalFrom="0" PhysicalTo="1" />
+						</LogicalChannel>
+					</DMXChannel>
+					<DMXChannel Name="Green" Geometry="Body" Offset="50" DMXBreak="1" Default="255/1" Highlight="100/1">
+						<LogicalChannel Attribute="ColorAdd_G">
+							<ChannelFunction Name="G" Attribute="ColorAdd_G" OriginalAttribute="ColorAdd_G" DMXFrom="0/1" PhysicalFrom="0" PhysicalTo="1" />
+						</LogicalChannel>
+					</DMXChannel>
+					<DMXChannel Name="Blue" Geometry="Body" Offset="51" DMXBreak="1" Default="255/1" Highlight="100/1">
+						<LogicalChannel Attribute="ColorAdd_B">
+							<ChannelFunction Name="B" Attribute="ColorAdd_B" OriginalAttribute="ColorAdd_B" DMXFrom="0/1" PhysicalFrom="0" PhysicalTo="1" />
+						</LogicalChannel>
+					</DMXChannel>
+					<DMXChannel Name="RGBMACRO" Geometry="Body" Offset="52" DMXBreak="1" Highlight="0/1">
+						<LogicalChannel Attribute="RGBMACRO">
+							<ChannelFunction Name="RGB Macro" Attribute="RGBMACRO" OriginalAttribute="RGBMACRO" DMXFrom="0/1" PhysicalFrom="0" PhysicalTo="1">
+								<ChannelSet Name="Null" DMXFrom="0/1" />
+								<ChannelSet Name="Macro 1" DMXFrom="10/1" />
+								<ChannelSet Name="Macro 2" DMXFrom="16/1" />
+								<ChannelSet Name="Macro 3" DMXFrom="24/1" />
+								<ChannelSet Name="Macro 4" DMXFrom="32/1" />
+								<ChannelSet Name="Macro 5" DMXFrom="40/1" />
+								<ChannelSet Name="Macro 6" DMXFrom="48/1" />
+								<ChannelSet Name="Macro 7" DMXFrom="56/1" />
+								<ChannelSet Name="Macro 8" DMXFrom="64/1" />
+								<ChannelSet Name="Macro 9" DMXFrom="72/1" />
+								<ChannelSet Name="Macro 10" DMXFrom="80/1" />
+								<ChannelSet Name="Macro 11" DMXFrom="88/1" />
+								<ChannelSet Name="Macro 12" DMXFrom="96/1" />
+								<ChannelSet Name="Macro 13" DMXFrom="104/1" />
+								<ChannelSet Name="Macro 14" DMXFrom="112/1" />
+								<ChannelSet Name="Macro 15" DMXFrom="120/1" />
+								<ChannelSet Name="Macro 16" DMXFrom="128/1" />
+								<ChannelSet Name="Macro 17" DMXFrom="136/1" />
+								<ChannelSet Name="Macro 18" DMXFrom="144/1" />
+								<ChannelSet Name="Macro 19" DMXFrom="152/1" />
+								<ChannelSet Name="Macro 20" DMXFrom="160/1" />
+								<ChannelSet Name="Macro 21" DMXFrom="168/1" />
+								<ChannelSet Name="Macro 22" DMXFrom="176/1" />
+								<ChannelSet Name="Macro 23" DMXFrom="184/1" />
+								<ChannelSet Name="Macro 24" DMXFrom="192/1" />
+								<ChannelSet Name="Macro 25" DMXFrom="200/1" />
+								<ChannelSet Name="Macro 26" DMXFrom="208/1" />
+								<ChannelSet Name="Macro 27" DMXFrom="216/1" />
+								<ChannelSet Name="Macro 28" DMXFrom="224/1" />
+								<ChannelSet Name="Macro 29" DMXFrom="232/1" />
+								<ChannelSet Name="Macro 30" DMXFrom="240/1" />
+								<ChannelSet Name="Macro 31" DMXFrom="248/1" />
+							</ChannelFunction>
+						</LogicalChannel>
+					</DMXChannel>
+					<DMXChannel Name="Pan" Geometry="Body" Offset="53,54" DMXBreak="1" Default="32768/2">
+						<LogicalChannel Attribute="Pan">
+							<ChannelFunction Name="Pan" Attribute="Pan" OriginalAttribute="Pan" DMXFrom="0/2" PhysicalFrom="32.5" PhysicalTo="-32.5" />
+						</LogicalChannel>
+					</DMXChannel>
+					<DMXChannel Name="Tilt" Geometry="Body" Offset="55,56" DMXBreak="1" Default="32768/2">
+						<LogicalChannel Attribute="Tilt">
+							<ChannelFunction Name="Tilt" Attribute="Tilt" OriginalAttribute="Tilt" DMXFrom="0/2" PhysicalFrom="-115" PhysicalTo="115" />
+						</LogicalChannel>
+					</DMXChannel>
+					<DMXChannel Name="Red" Geometry="Body" Offset="57" DMXBreak="1" Default="255/1" Highlight="100/1">
+						<LogicalChannel Attribute="ColorAdd_R">
+							<ChannelFunction Name="R" Attribute="ColorAdd_R" OriginalAttribute="ColorAdd_R" DMXFrom="0/1" PhysicalFrom="0" PhysicalTo="1" />
+						</LogicalChannel>
+					</DMXChannel>
+					<DMXChannel Name="Green" Geometry="Body" Offset="58" DMXBreak="1" Default="255/1" Highlight="100/1">
+						<LogicalChannel Attribute="ColorAdd_G">
+							<ChannelFunction Name="G" Attribute="ColorAdd_G" OriginalAttribute="ColorAdd_G" DMXFrom="0/1" PhysicalFrom="0" PhysicalTo="1" />
+						</LogicalChannel>
+					</DMXChannel>
+					<DMXChannel Name="Blue" Geometry="Body" Offset="59" DMXBreak="1" Default="255/1" Highlight="100/1">
+						<LogicalChannel Attribute="ColorAdd_B">
+							<ChannelFunction Name="B" Attribute="ColorAdd_B" OriginalAttribute="ColorAdd_B" DMXFrom="0/1" PhysicalFrom="0" PhysicalTo="1" />
+						</LogicalChannel>
+					</DMXChannel>
+					<DMXChannel Name="COLORRGB19" Geometry="Body" Offset="60" DMXBreak="1" Highlight="0/1">
+						<LogicalChannel Attribute="COLORRGB19">
+							<ChannelFunction Name="Mint Green" Attribute="COLORRGB19" OriginalAttribute="COLORRGB19" DMXFrom="0/1" PhysicalFrom="0" PhysicalTo="1" />
+						</LogicalChannel>
+					</DMXChannel>
+					<DMXChannel Name="Zoom" Geometry="Body" Offset="61" DMXBreak="1" Default="128/1">
+						<LogicalChannel Attribute="Zoom">
+							<ChannelFunction Name="Zoom" Attribute="Zoom" OriginalAttribute="Zoom" DMXFrom="0/1" PhysicalFrom="40" PhysicalTo="3">
+								<ChannelSet Name="3" DMXFrom="0/1" />
+								<ChannelSet Name="40" DMXFrom="255/1" />
+							</ChannelFunction>
+						</LogicalChannel>
+					</DMXChannel>
+					<DMXChannel Name="Dimmer" Geometry="Body" DMXBreak="1" Highlight="100/1">
+						<LogicalChannel Attribute="Dimmer">
+							<ChannelFunction Name="Dim" Attribute="Dimmer" OriginalAttribute="Dimmer" DMXFrom="0/1" PhysicalFrom="0" PhysicalTo="1" />
+						</LogicalChannel>
+					</DMXChannel>
+					<DMXChannel Name="Dimmer" Geometry="Body" DMXBreak="1" Highlight="100/1">
+						<LogicalChannel Attribute="Dimmer">
+							<ChannelFunction Name="Dim" Attribute="Dimmer" OriginalAttribute="Dimmer" DMXFrom="0/1" PhysicalFrom="0" PhysicalTo="1" />
+						</LogicalChannel>
+					</DMXChannel>
+					<DMXChannel Name="Red" Geometry="Body" Offset="62" DMXBreak="1" Default="255/1" Highlight="100/1">
+						<LogicalChannel Attribute="ColorAdd_R">
+							<ChannelFunction Name="R" Attribute="ColorAdd_R" OriginalAttribute="ColorAdd_R" DMXFrom="0/1" PhysicalFrom="0" PhysicalTo="1" />
+						</LogicalChannel>
+					</DMXChannel>
+					<DMXChannel Name="Green" Geometry="Body" Offset="63" DMXBreak="1" Default="255/1" Highlight="100/1">
+						<LogicalChannel Attribute="ColorAdd_G">
+							<ChannelFunction Name="G" Attribute="ColorAdd_G" OriginalAttribute="ColorAdd_G" DMXFrom="0/1" PhysicalFrom="0" PhysicalTo="1" />
+						</LogicalChannel>
+					</DMXChannel>
+					<DMXChannel Name="Blue" Geometry="Body" Offset="64" DMXBreak="1" Default="255/1" Highlight="100/1">
+						<LogicalChannel Attribute="ColorAdd_B">
+							<ChannelFunction Name="B" Attribute="ColorAdd_B" OriginalAttribute="ColorAdd_B" DMXFrom="0/1" PhysicalFrom="0" PhysicalTo="1" />
+						</LogicalChannel>
+					</DMXChannel>
+					<DMXChannel Name="RGBMACRO" Geometry="Body" Offset="65" DMXBreak="1" Highlight="0/1">
+						<LogicalChannel Attribute="RGBMACRO">
+							<ChannelFunction Name="RGB Macro" Attribute="RGBMACRO" OriginalAttribute="RGBMACRO" DMXFrom="0/1" PhysicalFrom="0" PhysicalTo="1">
+								<ChannelSet Name="Null" DMXFrom="0/1" />
+								<ChannelSet Name="Macro 1" DMXFrom="10/1" />
+								<ChannelSet Name="Macro 2" DMXFrom="16/1" />
+								<ChannelSet Name="Macro 3" DMXFrom="24/1" />
+								<ChannelSet Name="Macro 4" DMXFrom="32/1" />
+								<ChannelSet Name="Macro 5" DMXFrom="40/1" />
+								<ChannelSet Name="Macro 6" DMXFrom="48/1" />
+								<ChannelSet Name="Macro 7" DMXFrom="56/1" />
+								<ChannelSet Name="Macro 8" DMXFrom="64/1" />
+								<ChannelSet Name="Macro 9" DMXFrom="72/1" />
+								<ChannelSet Name="Macro 10" DMXFrom="80/1" />
+								<ChannelSet Name="Macro 11" DMXFrom="88/1" />
+								<ChannelSet Name="Macro 12" DMXFrom="96/1" />
+								<ChannelSet Name="Macro 13" DMXFrom="104/1" />
+								<ChannelSet Name="Macro 14" DMXFrom="112/1" />
+								<ChannelSet Name="Macro 15" DMXFrom="120/1" />
+								<ChannelSet Name="Macro 16" DMXFrom="128/1" />
+								<ChannelSet Name="Macro 17" DMXFrom="136/1" />
+								<ChannelSet Name="Macro 18" DMXFrom="144/1" />
+								<ChannelSet Name="Macro 19" DMXFrom="152/1" />
+								<ChannelSet Name="Macro 20" DMXFrom="160/1" />
+								<ChannelSet Name="Macro 21" DMXFrom="168/1" />
+								<ChannelSet Name="Macro 22" DMXFrom="176/1" />
+								<ChannelSet Name="Macro 23" DMXFrom="184/1" />
+								<ChannelSet Name="Macro 24" DMXFrom="192/1" />
+								<ChannelSet Name="Macro 25" DMXFrom="200/1" />
+								<ChannelSet Name="Macro 26" DMXFrom="208/1" />
+								<ChannelSet Name="Macro 27" DMXFrom="216/1" />
+								<ChannelSet Name="Macro 28" DMXFrom="224/1" />
+								<ChannelSet Name="Macro 29" DMXFrom="232/1" />
+								<ChannelSet Name="Macro 30" DMXFrom="240/1" />
+								<ChannelSet Name="Macro 31" DMXFrom="248/1" />
+							</ChannelFunction>
+						</LogicalChannel>
+					</DMXChannel>
+					<DMXChannel Name="Dimmer" Geometry="Body" Offset="66,67" DMXBreak="1" Default="0/2" Highlight="100/2">
+						<LogicalChannel Attribute="Dimmer">
+							<ChannelFunction Name="Dim" Attribute="Dimmer" OriginalAttribute="Dimmer" DMXFrom="0/2" PhysicalFrom="0" PhysicalTo="1" />
+						</LogicalChannel>
+					</DMXChannel>
+					<DMXChannel Name="Shutter" Geometry="Body" Offset="68" DMXBreak="1" Default="8/1" Highlight="3/1">
+						<LogicalChannel Attribute="Shutter1">
+							<ChannelFunction Name="Shutter" Attribute="Shutter1" OriginalAttribute="Shutter1" DMXFrom="0/1" PhysicalFrom="1" PhysicalTo="1">
+								<ChannelSet Name="OFF" DMXFrom="0/1" />
+								<ChannelSet Name="Open" DMXFrom="8/1" />
+							</ChannelFunction>
+							<ChannelFunction Name="Strobe" Attribute="Shutter1" OriginalAttribute="Shutter1" DMXFrom="16/1" PhysicalFrom="1" PhysicalTo="20">
+								<ChannelSet Name="min Strobe" DMXFrom="16/1" />
+								<ChannelSet Name="max Strobe" DMXFrom="131/1" />
+							</ChannelFunction>
+							<ChannelFunction Name="Open2" Attribute="Shutter1" OriginalAttribute="Shutter1" DMXFrom="132/1" PhysicalFrom="1" PhysicalTo="1">
+								<ChannelSet Name="Open2" DMXFrom="132/1" />
+							</ChannelFunction>
+							<ChannelFunction Name="Pulse Open" Attribute="Shutter1" OriginalAttribute="Shutter1" DMXFrom="140/1" PhysicalFrom="0.1" PhysicalTo="3">
+								<ChannelSet Name="min Pulse Open" DMXFrom="140/1" />
+								<ChannelSet Name="max Pulse Open" DMXFrom="181/1" />
+							</ChannelFunction>
+							<ChannelFunction Name="Open3" Attribute="Shutter1" OriginalAttribute="Shutter1" DMXFrom="182/1" PhysicalFrom="1" PhysicalTo="1">
+								<ChannelSet Name="Open3" DMXFrom="182/1" />
+							</ChannelFunction>
+							<ChannelFunction Name="Pulse Close" Attribute="Shutter1" OriginalAttribute="Shutter1" DMXFrom="190/1" PhysicalFrom="0.1" PhysicalTo="3">
+								<ChannelSet Name="min Pulse Close" DMXFrom="190/1" />
+								<ChannelSet Name="max Pulse Close" DMXFrom="231/1" />
+							</ChannelFunction>
+							<ChannelFunction Name="Open4" Attribute="Shutter1" OriginalAttribute="Shutter1" DMXFrom="232/1" PhysicalFrom="1" PhysicalTo="1">
+								<ChannelSet Name="Open4" DMXFrom="232/1" />
+							</ChannelFunction>
+							<ChannelFunction Name="Rnd" Attribute="Shutter1" OriginalAttribute="Shutter1" DMXFrom="240/1" PhysicalFrom="12" PhysicalTo="20">
+								<ChannelSet Name="min Rnd Strobe" DMXFrom="240/1" />
+								<ChannelSet Name="max Rnd Strobe" DMXFrom="247/1" />
+							</ChannelFunction>
+							<ChannelFunction Name="Open5" Attribute="Shutter1" OriginalAttribute="Shutter1" DMXFrom="248/1" PhysicalFrom="1" PhysicalTo="1">
+								<ChannelSet Name="Open5" DMXFrom="248/1" />
+							</ChannelFunction>
+						</LogicalChannel>
+					</DMXChannel>
+					<DMXChannel Name="Shutter" Geometry="Body" Offset="69" DMXBreak="1" Default="8/1" Highlight="3/1">
+						<LogicalChannel Attribute="Shutter1">
+							<ChannelFunction Name="Shutter2" Attribute="Shutter1" OriginalAttribute="Shutter1" DMXFrom="0/1" PhysicalFrom="1" PhysicalTo="1">
+								<ChannelSet Name="OFF" DMXFrom="0/1" />
+								<ChannelSet Name="Open" DMXFrom="8/1" />
+							</ChannelFunction>
+							<ChannelFunction Name="Strobe2" Attribute="Shutter1" OriginalAttribute="Shutter1" DMXFrom="16/1" PhysicalFrom="1" PhysicalTo="20">
+								<ChannelSet Name="min Strobe2" DMXFrom="16/1" />
+								<ChannelSet Name="max Strobe2" DMXFrom="131/1" />
+							</ChannelFunction>
+							<ChannelFunction Name="Open2" Attribute="Shutter1" OriginalAttribute="Shutter1" DMXFrom="132/1" PhysicalFrom="1" PhysicalTo="1">
+								<ChannelSet Name="Open2" DMXFrom="132/1" />
+							</ChannelFunction>
+							<ChannelFunction Name="Pulse Open2" Attribute="Shutter1" OriginalAttribute="Shutter1" DMXFrom="140/1" PhysicalFrom="0.1" PhysicalTo="3">
+								<ChannelSet Name="min Pulse Open2" DMXFrom="140/1" />
+								<ChannelSet Name="max Pulse Open2" DMXFrom="181/1" />
+							</ChannelFunction>
+							<ChannelFunction Name="Open3" Attribute="Shutter1" OriginalAttribute="Shutter1" DMXFrom="182/1" PhysicalFrom="1" PhysicalTo="1">
+								<ChannelSet Name="Open3" DMXFrom="182/1" />
+							</ChannelFunction>
+							<ChannelFunction Name="Pulse Close2" Attribute="Shutter1" OriginalAttribute="Shutter1" DMXFrom="190/1" PhysicalFrom="0.1" PhysicalTo="3">
+								<ChannelSet Name="min Pulse Close2" DMXFrom="190/1" />
+								<ChannelSet Name="max Pulse Close2" DMXFrom="231/1" />
+							</ChannelFunction>
+							<ChannelFunction Name="Open4" Attribute="Shutter1" OriginalAttribute="Shutter1" DMXFrom="232/1" PhysicalFrom="1" PhysicalTo="1">
+								<ChannelSet Name="Open4" DMXFrom="232/1" />
+							</ChannelFunction>
+							<ChannelFunction Name="Rnd2" Attribute="Shutter1" OriginalAttribute="Shutter1" DMXFrom="240/1" PhysicalFrom="12" PhysicalTo="20">
+								<ChannelSet Name="min Rnd Strobe2" DMXFrom="240/1" />
+								<ChannelSet Name="max Rnd Strobe2" DMXFrom="247/1" />
+							</ChannelFunction>
+							<ChannelFunction Name="Open5" Attribute="Shutter1" OriginalAttribute="Shutter1" DMXFrom="248/1" PhysicalFrom="1" PhysicalTo="1">
+								<ChannelSet Name="Open5" DMXFrom="248/1" />
+							</ChannelFunction>
+						</LogicalChannel>
+					</DMXChannel>
+					<DMXChannel Name="Speed" Geometry="Body" Offset="70" DMXBreak="1">
+						<LogicalChannel Attribute="Speed">
+							<ChannelFunction Name="P/TSPEED" Attribute="Speed" OriginalAttribute="Speed" DMXFrom="0/1" />
+						</LogicalChannel>
+					</DMXChannel>
+					<DMXChannel Name="Function" Geometry="Body" Offset="71" DMXBreak="1">
+						<LogicalChannel Attribute="Function">
+							<ChannelFunction Name="Function" Attribute="Function" OriginalAttribute="Function" DMXFrom="0/1">
+								<ChannelSet Name="No Function" DMXFrom="0/1" />
+								<ChannelSet Name="Dim Linear" DMXFrom="30/1" />
+								<ChannelSet Name="Square Law" DMXFrom="40/1" />
+								<ChannelSet Name="Dim Inv SQ Law" DMXFrom="50/1" />
+								<ChannelSet Name="Dim S Curve" DMXFrom="60/1" />
+								<ChannelSet Name="Fan Mode Standard" DMXFrom="70/1" />
+								<ChannelSet Name="Fan Mode Quiet" DMXFrom="80/1" />
+								<ChannelSet Name="No Function2" DMXFrom="90/1" />
+								<ChannelSet Name="Frequency Enable" DMXFrom="100/1" />
+								<ChannelSet Name="Frequency Disable" DMXFrom="110/1" />
+								<ChannelSet Name="No Function3" DMXFrom="120/1" />
+								<ChannelSet Name="900Hz" DMXFrom="123/1" />
+								<ChannelSet Name="1000Hz" DMXFrom="124/1" />
+								<ChannelSet Name="1100Hz" DMXFrom="125/1" />
+								<ChannelSet Name="1200Hz" DMXFrom="126/1" />
+								<ChannelSet Name="1300Hz" DMXFrom="127/1" />
+								<ChannelSet Name="1400Hz" DMXFrom="128/1" />
+								<ChannelSet Name="1500Hz" DMXFrom="129/1" />
+								<ChannelSet Name="2500Hz" DMXFrom="130/1" />
+								<ChannelSet Name="4000Hz" DMXFrom="131/1" />
+								<ChannelSet Name="5000Hz" DMXFrom="132/1" />
+								<ChannelSet Name="6000Hz" DMXFrom="133/1" />
+								<ChannelSet Name="10kHz" DMXFrom="134/1" />
+								<ChannelSet Name="15kHz" DMXFrom="135/1" />
+								<ChannelSet Name="20kHz" DMXFrom="136/1" />
+								<ChannelSet Name="25kHz" DMXFrom="137/1" />
+								<ChannelSet Name="No Function4" DMXFrom="138/1" />
+								<ChannelSet Name="Reset PT" DMXFrom="140/1" />
+								<ChannelSet Name="Reset Eff" DMXFrom="150/1" />
+								<ChannelSet Name="Head Invert Yes" DMXFrom="160/1" />
+								<ChannelSet Name="Head Invert No" DMXFrom="170/1" />
+								<ChannelSet Name="CCT CARL.On" DMXFrom="180/1" />
+								<ChannelSet Name="CCT CARL.OFF" DMXFrom="190/1" />
+								<ChannelSet Name="Reset All" DMXFrom="200/1" />
+								<ChannelSet Name="Dim Speed Fast" DMXFrom="210/1" />
+								<ChannelSet Name="Dim Speed Smooth" DMXFrom="220/1" />
+								<ChannelSet Name="Dim Start Mode High" DMXFrom="230/1" />
+								<ChannelSet Name="Dim Start Mode Low" DMXFrom="231/1" />
+								<ChannelSet Name="Invert Pixel Order Yes" DMXFrom="232/1" />
+								<ChannelSet Name="Invert Pixel Order No" DMXFrom="234/1" />
+								<ChannelSet Name="Pan Invert Yes" DMXFrom="236/1" />
+								<ChannelSet Name="Pan Invert No" DMXFrom="238/1" />
+								<ChannelSet Name="Tilt Invert Yes" DMXFrom="240/1" />
+								<ChannelSet Name="Tilt Invert No" DMXFrom="242/1" />
+								<ChannelSet Name="No Function5" DMXFrom="244/1" />
+							</ChannelFunction>
+						</LogicalChannel>
+					</DMXChannel>
+				</DMXChannels>
+			</DMXMode>
+		</DMXModes>
+		<Protocols />
+	</FixtureType>
+</GDTF>
