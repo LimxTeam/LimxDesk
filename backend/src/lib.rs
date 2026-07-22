@@ -31,6 +31,7 @@ mod engine;
 mod events;
 mod fixture_selection;
 mod fixture_types;
+mod keyframe;
 mod layout;
 mod output;
 mod patch;
@@ -51,6 +52,7 @@ pub fn run() {
         .manage(fixture_selection::FixtureSelectionState::default())
         .manage(output::OutputState::default())
         .manage(engine::EngineState::default())
+        .manage(keyframe::KeyframeState::default())
         .manage(programmer::ProgrammerState::default())
         .manage(show::ShowRuntimeState::default())
         .plugin(tauri_plugin_shell::init())
@@ -58,6 +60,7 @@ pub fn run() {
         .plugin(tauri_plugin_fs::init())
         .setup(|app| {
             tray::setup_tray(app.handle())?;
+            register_recipe_engines(app.handle());
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -150,9 +153,33 @@ pub fn run() {
             layout::layout_save_current_show,
             layout::layout_save_view_slot,
             layout::layout_clear_view_slot,
+            keyframe::keyframe_load_current_show,
+            keyframe::keyframe_create_effect,
+            keyframe::keyframe_update_effect,
+            keyframe::keyframe_delete_effect,
+            keyframe::keyframe_select_effect,
+            keyframe::keyframe_duplicate_effect,
+            keyframe::keyframe_assign_to_sequence,
+            keyframe::keyframe_remove_from_sequence,
         ])
         .run(tauri::generate_context!())
         .expect("启动 Tauri 应用失败");
+}
+
+/// 把各类效果引擎注册进回放引擎。
+///
+/// 引擎在这里装配而不是由回放引擎自己知道有哪些效果种类 —— 关键帧只是
+/// 其中一种，后续的效果类型同样在这里挂上。
+fn register_recipe_engines(app: &tauri::AppHandle) {
+    use tauri::Manager;
+
+    let library = app.state::<keyframe::KeyframeState>().handle();
+    let engine_state = app.state::<engine::EngineState>();
+    if let Err(error) = engine_state.register_recipe(std::sync::Arc::new(
+        keyframe::KeyframeRecipeEngine::new(library),
+    )) {
+        tracing::error!("failed to register keyframe engine: {error}");
+    }
 }
 
 /// 初始化 tracing 日志

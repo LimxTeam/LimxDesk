@@ -1,4 +1,5 @@
 import { FixtureSheetWindow } from "./FixtureSheetWindow";
+import { KeyframeEditorWindow } from "./KeyframeEditorWindow";
 import { DmxSheetWindow } from "./DmxSheetWindow";
 import { PlaybackWindow } from "./PlaybackWindow";
 import { SequencePoolWindow } from "./SequencePoolWindow";
@@ -38,6 +39,10 @@ export function WindowSurface({ window, onConfigChange }: WindowSurfaceProps) {
 
   if (window.type === "playback") {
     return <PlaybackWindow />;
+  }
+
+  if (window.type === "keyframe-editor") {
+    return <KeyframeEditorWindow />;
   }
 
   if (window.type === "groups") {

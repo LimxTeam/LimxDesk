@@ -16,6 +16,7 @@ members = [
     "crates/limxdesk-fixture-selection",
     "crates/limxdesk-fixture-types",
     "crates/limxdesk-gdtf",
+    "crates/limxdesk-keyframe",
     "crates/limxdesk-artnet",
     "crates/limxdesk-dmx",
     "crates/limxdesk-engine",
@@ -68,6 +69,7 @@ limxdesk-sequence = { path = "crates/limxdesk-sequence" }
 limxdesk-playback = { path = "crates/limxdesk-playback" }
 limxdesk-dmx = { path = "crates/limxdesk-dmx" }
 limxdesk-engine = { path = "crates/limxdesk-engine" }
+limxdesk-keyframe = { path = "crates/limxdesk-keyframe" }
 limxdesk-network = { path = "crates/limxdesk-network" }
 limxdesk-artnet = { path = "crates/limxdesk-artnet" }
 
@@ -80,6 +82,7 @@ tauri-plugin-fs = "2"
 # ── 2. 序列化 ────────────────────────────────────────────
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+uuid = { version = "1", features = ["v4"] }
 
 # ── 3. 日志 ──────────────────────────────────────────────
 tracing = "0.1"

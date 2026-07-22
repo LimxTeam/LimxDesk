@@ -47,6 +47,15 @@ export const WORKSPACE_WINDOW_CATALOG: WorkspaceWindowCatalogItem[] = [
     metrics: ["Pages", "Executors", "Flash"],
   },
   {
+    type: "keyframe-editor",
+    title: "Keyframe FX",
+    icon: "KF",
+    accent: "#E868A2",
+    blurb: "Keyframe effect editor: a 360° cycle curve with playback modes, cycle time, and phase spread.",
+    defaultSize: { w: 10, h: 6 },
+    metrics: ["Curve", "Cycle", "Phase"],
+  },
+  {
     type: "timecode",
     title: "Timecode",
     icon: "TC",

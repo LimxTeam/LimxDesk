@@ -60,11 +60,20 @@ pub struct Sequence {
     pub updated_at_ms: u64,
 }
 
+/// sequence 上的一个配方槽。
+///
+/// 槽本身不携带效果参数，只按 id 引用效果库里的对象 —— 同一个效果因此
+/// 可以挂在多处，改一次处处生效；渲染路径也只需一次哈希查找，不必在
+/// 每帧反序列化内联配置。
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct SequenceRecipeSlot {
     pub id: String,
+    /// 由哪种引擎处理，对应 RecipeEngine::kind()。
     pub engine_kind: String,
+    /// 引用的效果对象 id。
+    #[serde(default)]
+    pub effect_id: String,
     pub label: String,
     pub enabled: bool,
 }

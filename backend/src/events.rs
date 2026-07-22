@@ -17,6 +17,7 @@ pub const PLAYBACK_CHANGED: &str = "playback:changed";
 pub const PLAYBACK_STATE_CHANGED: &str = "playback:state-changed";
 pub const OUTPUT_CHANGED: &str = "output:changed";
 pub const OUTPUT_SENT: &str = "output:sent";
+pub const KEYFRAME_CHANGED: &str = "keyframe:changed";
 
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -90,6 +91,11 @@ where
     T: Serialize + Clone,
 {
     let _ = app.emit(PROGRAMMER_CHANGED, programmer.clone());
+}
+
+pub fn emit_keyframe_changed(app: &AppHandle, show: &LoadedShow) {
+    emit_show(app, KEYFRAME_CHANGED, show);
+    emit_show(app, SHOW_CHANGED, show);
 }
 
 pub fn emit_sequence_changed(app: &AppHandle, show: &LoadedShow) {

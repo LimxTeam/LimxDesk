@@ -25,6 +25,17 @@ impl EngineState {
             .map_err(|_| "playback engine state lock poisoned".to_string())
     }
 
+    /// 注册一种效果引擎。
+    ///
+    /// 引擎种类由装配层决定，回放引擎自身不认识任何具体效果。
+    pub(crate) fn register_recipe(
+        &self,
+        engine: std::sync::Arc<dyn limxdesk_engine::RecipeEngine>,
+    ) -> Result<(), String> {
+        self.lock()?.recipes_mut().register(engine);
+        Ok(())
+    }
+
     /// sequence 文档写入后重新编译。
     pub(crate) fn reload_sequences(&self, document: &SequenceDocument) -> Result<(), String> {
         self.lock()?.reload_document(document);

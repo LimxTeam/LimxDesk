@@ -4,6 +4,7 @@ export type WorkspaceWindowType =
   | "sequence-sheet"
   | "dmx-sheet"
   | "playback"
+  | "keyframe-editor"
   | "timecode"
   | "color-picker"
   | "groups"

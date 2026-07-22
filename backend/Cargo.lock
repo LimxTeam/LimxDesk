@@ -12,6 +12,7 @@ dependencies = [
  "limxdesk-engine",
  "limxdesk-fixture-selection",
  "limxdesk-fixture-types",
+ "limxdesk-keyframe",
  "limxdesk-network",
  "limxdesk-patch",
  "limxdesk-platform",
@@ -28,6 +29,7 @@ dependencies = [
  "tauri-plugin-shell",
  "tracing",
  "tracing-subscriber",
+ "uuid",
 ]
 
 [[package]]
@@ -1916,6 +1918,14 @@ dependencies = [
  "serde",
  "uuid",
  "zip",
+]
+
+[[package]]
+name = "limxdesk-keyframe"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "uuid",
 ]
 
 [[package]]

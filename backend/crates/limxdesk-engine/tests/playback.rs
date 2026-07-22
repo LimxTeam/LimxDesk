@@ -696,6 +696,7 @@ fn sequence_with_slot(kind: &str) -> (SequenceDocument, String) {
     document.sequences[0].recipe_slots = vec![SequenceRecipeSlot {
         id: "slot-1".to_string(),
         engine_kind: kind.to_string(),
+        effect_id: "effect-1".to_string(),
         label: "Probe".to_string(),
         enabled: true,
     }];

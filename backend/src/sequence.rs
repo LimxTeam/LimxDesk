@@ -464,6 +464,18 @@ pub(crate) fn save_and_emit_sequence_document(
     save_and_emit(document, show_state, engine_state, app)
 }
 
+/// 供效果模块写回 sequence 文档（指派 / 解除配方槽）。
+pub(crate) fn save_sequence_from_keyframe(
+    document: &SequenceDocument,
+    show_state: &State<'_, ShowRuntimeState>,
+    engine_state: &State<'_, EngineState>,
+    app: &AppHandle,
+) -> Result<(), String> {
+    save_and_emit(document, show_state, engine_state, app)?;
+    request_sequence_output(app);
+    Ok(())
+}
+
 pub(crate) fn now_ms() -> Result<u64, String> {
     current_timestamp_millis().map_err(|error| error.to_string())
 }
