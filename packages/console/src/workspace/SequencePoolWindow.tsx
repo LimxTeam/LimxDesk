@@ -18,21 +18,27 @@ import { clearWorkspaceRuntimeCache } from "./workspaceRuntime";
 
 interface SequencePoolLoadResult {
   document: SequenceDocument;
-  runtime: SequenceRuntimeSnapshot;
+  runtime: EngineSnapshot;
 }
 
-interface SequenceRuntimeSnapshot {
-  states: SequenceRuntimeState[];
+interface EngineSnapshot {
+  executors: ExecutorRuntimeState[];
 }
 
-interface SequenceRuntimeState {
+/**
+ * 回放状态按 executor 索引。sequence 本身不再持有播放头 —— 一个 sequence
+ * 是否"在跑"，取决于是否有 executor 正在跑它。
+ */
+interface ExecutorRuntimeState {
+  pageId: string;
+  executorId: string;
   sequenceId: string;
-  active: boolean;
-  paused: boolean;
+  state: "idle" | "running" | "paused" | "releasing";
   currentCueId: string | null;
   nextCueId: string | null;
   master: number;
   rate: number;
+  flash: boolean;
 }
 
 const SEQUENCE_POOL_SLOT_COUNT = 120;
@@ -43,7 +49,7 @@ export function SequencePoolWindow() {
     selectedSequenceId: null,
     version: 0,
   });
-  const [runtime, setRuntime] = useState<SequenceRuntimeSnapshot>({ states: [] });
+  const [runtime, setRuntime] = useState<EngineSnapshot>({ executors: [] });
   const [status, setStatus] = useState("No show loaded");
   const [busySlot, setBusySlot] = useState<number | null>(null);
   const commandState = useCommandRuntimeSnapshot();
@@ -57,10 +63,15 @@ export function SequencePoolWindow() {
   }, [document.sequences]);
 
   const totals = useMemo(() => {
-    const running = runtime.states.filter((state) => state.active).length;
+    // 一个 sequence 只要有任一 executor 在跑就算运行中。
+    const running = new Set(
+      runtime.executors
+        .filter((state) => state.state !== "idle")
+        .map((state) => state.sequenceId),
+    ).size;
     const cues = document.sequences.reduce((total, sequence) => total + sequence.cues.length, 0);
     return { sequences: document.sequences.length, running, cues };
-  }, [document.sequences, runtime.states]);
+  }, [document.sequences, runtime.executors]);
 
   useEffect(() => {
     void loadSequences();
@@ -75,7 +86,7 @@ export function SequencePoolWindow() {
         clearWorkspaceRuntimeCache(["frames"]);
         void loadSequences();
       });
-      const stateChanged = await listen<SequenceRuntimeSnapshot>("sequence:state-changed", (event) => {
+      const stateChanged = await listen<EngineSnapshot>("sequence:state-changed", (event) => {
         clearWorkspaceRuntimeCache(["frames"]);
         setRuntime(event.payload);
       });
@@ -85,7 +96,7 @@ export function SequencePoolWindow() {
       });
       const showDeleted = await listen("show:deleted", () => {
         setDocument({ sequences: [], selectedSequenceId: null, version: 0 });
-        setRuntime({ states: [] });
+        setRuntime({ executors: [] });
         setStatus("No show loaded");
       });
 
@@ -114,7 +125,7 @@ export function SequencePoolWindow() {
       setStatus(`${result.document.sequences.length} sequences`);
     } catch (error) {
       setDocument({ sequences: [], selectedSequenceId: null, version: 0 });
-      setRuntime({ states: [] });
+      setRuntime({ executors: [] });
       setStatus(String(error));
     }
   }
@@ -259,7 +270,7 @@ export function SequencePoolWindow() {
 
   async function fireSequence(sequence: SequenceModel, action: "go" | "off") {
     try {
-      const next = await invoke<SequenceRuntimeSnapshot>(action === "go" ? "sequence_go" : "sequence_off", {
+      const next = await invoke<EngineSnapshot>(action === "go" ? "sequence_go" : "sequence_off", {
         sequenceId: sequence.id,
       });
       setRuntime(next);
@@ -286,7 +297,7 @@ export function SequencePoolWindow() {
         {Array.from({ length: SEQUENCE_POOL_SLOT_COUNT }, (_, index) => {
           const number = index + 1;
           const sequence = sequencesByNumber.get(number);
-          const state = runtime.states.find((item) => item.sequenceId === sequence?.id) ?? null;
+          const state = runtime.executors.find((item) => item.sequenceId === sequence?.id) ?? null;
           const selected = document.selectedSequenceId === sequence?.id;
           const source = commandState.source?.pool === "sequence" && commandState.source.id === number;
           return (
@@ -297,7 +308,7 @@ export function SequencePoolWindow() {
               style={slotStyle({
                 stored: Boolean(sequence),
                 selected,
-                running: Boolean(state?.active),
+                running: state !== null && state.state !== "idle",
                 source,
                 armed: commandState.mode !== "idle",
                 busy: busySlot === number,
@@ -317,8 +328,10 @@ export function SequencePoolWindow() {
   );
 }
 
-function sequenceStatus(sequence: SequenceModel, state: SequenceRuntimeState | null) {
-  if (state?.active) return `Run ${Math.round(state.master * 100)}%`;
+function sequenceStatus(sequence: SequenceModel, state: ExecutorRuntimeState | null) {
+  if (state !== null && state.state !== "idle") {
+    return `Run ${Math.round(state.master * 100)}%`;
+  }
   if (sequence.cues.length === 1) return "1 cue";
   return `${sequence.cues.length} cues`;
 }

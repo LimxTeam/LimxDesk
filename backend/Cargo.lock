@@ -9,6 +9,7 @@ dependencies = [
  "limxdesk-artnet",
  "limxdesk-cue",
  "limxdesk-dmx",
+ "limxdesk-engine",
  "limxdesk-fixture-selection",
  "limxdesk-fixture-types",
  "limxdesk-network",
@@ -1876,6 +1877,17 @@ dependencies = [
 name = "limxdesk-dmx"
 version = "0.1.0"
 dependencies = [
+ "serde",
+]
+
+[[package]]
+name = "limxdesk-engine"
+version = "0.1.0"
+dependencies = [
+ "limxdesk-cue",
+ "limxdesk-dmx",
+ "limxdesk-playback",
+ "limxdesk-sequence",
  "serde",
 ]
 

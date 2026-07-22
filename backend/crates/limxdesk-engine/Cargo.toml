@@ -1,0 +1,11 @@
+[package]
+name = "limxdesk-engine"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+limxdesk-cue = { path = "../limxdesk-cue" }
+limxdesk-dmx = { path = "../limxdesk-dmx" }
+limxdesk-playback = { path = "../limxdesk-playback" }
+limxdesk-sequence = { path = "../limxdesk-sequence" }
+serde = { version = "1", features = ["derive"] }

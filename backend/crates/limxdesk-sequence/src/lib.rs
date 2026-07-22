@@ -3,7 +3,7 @@ use limxdesk_cue::{
 };
 use limxdesk_programmer::{ProgrammerLayer, ProgrammerValue};
 use serde::{Deserialize, Serialize};
-use std::{collections::HashMap, fmt};
+use std::fmt;
 use uuid::Uuid;
 
 #[derive(Debug)]
@@ -69,20 +69,6 @@ pub struct SequenceRecipeSlot {
     pub enabled: bool,
 }
 
-#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq)]
-#[serde(rename_all = "camelCase")]
-pub struct SequenceRuntimeState {
-    pub sequence_id: String,
-    pub active: bool,
-    pub paused: bool,
-    pub current_cue_id: Option<String>,
-    pub previous_cue_id: Option<String>,
-    pub next_cue_id: Option<String>,
-    pub master: f64,
-    pub rate: f64,
-    pub updated_at_ms: u64,
-}
-
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SequenceStoreRequest {
@@ -138,36 +124,6 @@ impl Sequence {
             cues: Vec::new(),
             updated_at_ms: now_ms,
         })
-    }
-
-    pub fn active_cue_values(&self, state: &SequenceRuntimeState) -> Vec<CueValue> {
-        if !state.active {
-            return Vec::new();
-        }
-
-        let Some(current_cue_id) = state.current_cue_id.as_deref() else {
-            return Vec::new();
-        };
-
-        if !self.tracking {
-            return self
-                .cues
-                .iter()
-                .find(|cue| cue.id == current_cue_id)
-                .map(Cue::output_values)
-                .unwrap_or_default();
-        }
-
-        let mut values = HashMap::<String, CueValue>::new();
-        for cue in &self.cues {
-            for value in cue.output_values() {
-                values.insert(value_key(&value), value);
-            }
-            if cue.id == current_cue_id {
-                break;
-            }
-        }
-        values.into_values().collect()
     }
 }
 
@@ -610,132 +566,6 @@ pub fn select_sequence(
     Ok(document)
 }
 
-pub fn cue_output_values(sequence: &Sequence, state: &SequenceRuntimeState) -> Vec<CueValue> {
-    let master = state.master.clamp(0.0, 1.0);
-    sequence
-        .active_cue_values(state)
-        .into_iter()
-        .map(|mut value| {
-            if let Some(numeric) = value.numeric.as_mut() {
-                *numeric *= master;
-            }
-            value
-        })
-        .collect()
-}
-
-pub fn advance_state(
-    sequence: &Sequence,
-    current: Option<SequenceRuntimeState>,
-    direction: PlaybackDirection,
-    now_ms: u64,
-) -> SequenceRuntimeState {
-    let mut state = current.unwrap_or_else(|| SequenceRuntimeState {
-        sequence_id: sequence.id.clone(),
-        active: false,
-        paused: false,
-        current_cue_id: None,
-        previous_cue_id: None,
-        next_cue_id: sequence.cues.first().map(|cue| cue.id.clone()),
-        master: 1.0,
-        rate: 1.0,
-        updated_at_ms: now_ms,
-    });
-
-    let cue_ids = sequence
-        .cues
-        .iter()
-        .filter(|cue| cue.enabled)
-        .map(|cue| cue.id.clone())
-        .collect::<Vec<_>>();
-    if cue_ids.is_empty() {
-        state.active = false;
-        state.current_cue_id = None;
-        state.next_cue_id = None;
-        state.updated_at_ms = now_ms;
-        return state;
-    }
-
-    let current_index = state
-        .current_cue_id
-        .as_ref()
-        .and_then(|id| cue_ids.iter().position(|cue_id| cue_id == id));
-    let next_index = match direction {
-        PlaybackDirection::Go => current_index.map_or(0, |index| (index + 1).min(cue_ids.len() - 1)),
-        PlaybackDirection::Back => current_index.map_or(0, |index| index.saturating_sub(1)),
-    };
-    state.previous_cue_id = state.current_cue_id.clone();
-    state.current_cue_id = cue_ids.get(next_index).cloned();
-    state.next_cue_id = cue_ids.get(next_index + 1).cloned();
-    state.active = state.current_cue_id.is_some();
-    state.paused = false;
-    state.updated_at_ms = now_ms;
-    state
-}
-
-pub fn goto_state(
-    sequence: &Sequence,
-    current: Option<SequenceRuntimeState>,
-    cue_id: &str,
-    now_ms: u64,
-) -> SequenceResult<SequenceRuntimeState> {
-    if !sequence.cues.iter().any(|cue| cue.id == cue_id) {
-        return Err(SequenceError::MissingCue(cue_id.to_string()));
-    }
-    let mut state = current.unwrap_or_else(|| SequenceRuntimeState {
-        sequence_id: sequence.id.clone(),
-        ..SequenceRuntimeState::default()
-    });
-    let index = sequence
-        .cues
-        .iter()
-        .position(|cue| cue.id == cue_id)
-        .unwrap_or_default();
-    state.previous_cue_id = state.current_cue_id.clone();
-    state.current_cue_id = Some(cue_id.to_string());
-    state.next_cue_id = sequence.cues.get(index + 1).map(|cue| cue.id.clone());
-    state.active = true;
-    state.paused = false;
-    state.updated_at_ms = now_ms;
-    Ok(state)
-}
-
-pub fn off_state(sequence_id: &str, current: Option<SequenceRuntimeState>, now_ms: u64) -> SequenceRuntimeState {
-    let mut state = current.unwrap_or_else(|| SequenceRuntimeState {
-        sequence_id: sequence_id.to_string(),
-        ..SequenceRuntimeState::default()
-    });
-    state.active = false;
-    state.paused = false;
-    state.current_cue_id = None;
-    state.next_cue_id = None;
-    state.updated_at_ms = now_ms;
-    state
-}
-
-pub fn set_master_state(
-    sequence_id: &str,
-    current: Option<SequenceRuntimeState>,
-    master: f64,
-    now_ms: u64,
-) -> SequenceRuntimeState {
-    let mut state = current.unwrap_or_else(|| SequenceRuntimeState {
-        sequence_id: sequence_id.to_string(),
-        master: 1.0,
-        rate: 1.0,
-        ..SequenceRuntimeState::default()
-    });
-    state.master = if master.is_finite() { master.clamp(0.0, 1.0) } else { 1.0 };
-    state.updated_at_ms = now_ms;
-    state
-}
-
-#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub enum PlaybackDirection {
-    Go,
-    Back,
-}
 
 fn normalize_sequence(mut sequence: Sequence) -> Sequence {
     if sequence.name.trim().is_empty() {
@@ -802,10 +632,6 @@ fn programmer_values_to_cue_values(values: Vec<ProgrammerValue>) -> Vec<CueValue
             source: CueValueSource::Programmer,
         })
         .collect()
-}
-
-fn value_key(value: &CueValue) -> String {
-    format!("{}:{}:{:?}", value.fixture_id, value.attribute, value.layer)
 }
 
 fn clamp_time(value: f64) -> f64 {
@@ -890,24 +716,6 @@ mod tests {
         assert_eq!(result.sequence.cues[0].number, 1.0);
         assert_eq!(result.sequence.cues[0].parts[0].values.len(), 1);
         assert_eq!(result.sequence.cues[0].parts[0].values[0].attribute, "ColorRGB_R");
-    }
-
-    #[test]
-    fn tracking_cue_outputs_prior_values() {
-        let mut sequence = Sequence::new(1, "", 0).unwrap();
-        sequence.cues.push(limxdesk_cue::Cue::new(1.0, "", vec![cue_value("1", "Dimmer", 40.0)], 0).unwrap());
-        sequence.cues.push(limxdesk_cue::Cue::new(2.0, "", vec![cue_value("1", "Pan", 20.0)], 0).unwrap());
-        let state = SequenceRuntimeState {
-            sequence_id: sequence.id.clone(),
-            active: true,
-            current_cue_id: Some(sequence.cues[1].id.clone()),
-            master: 1.0,
-            rate: 1.0,
-            ..SequenceRuntimeState::default()
-        };
-
-        let values = sequence.active_cue_values(&state);
-        assert_eq!(values.len(), 2);
     }
 
     #[test]
@@ -1053,16 +861,4 @@ mod tests {
         }
     }
 
-    fn cue_value(fixture_id: &str, attribute: &str, numeric: f64) -> CueValue {
-        CueValue {
-            fixture_id: fixture_id.to_string(),
-            attribute: attribute.to_string(),
-            feature_group: "Dimmer".to_string(),
-            layer: CueValueLayer::Absolute,
-            numeric: Some(numeric),
-            text: None,
-            active: true,
-            source: CueValueSource::Programmer,
-        }
-    }
 }

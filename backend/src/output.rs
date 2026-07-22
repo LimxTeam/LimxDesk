@@ -1,21 +1,24 @@
 use crate::{
-    events, fixture_types, patch, programmer::ProgrammerState, sequence,
-    sequence::SequenceState, show::ShowRuntimeState,
+    engine::EngineState, events, fixture_types, patch, programmer::ProgrammerState,
+    show::ShowRuntimeState,
 };
 use limxdesk_artnet::{
     encode_artdmx, encode_sacn_dmp_with_priority, DmxUniverseFrame as ProtocolUniverseFrame,
     ARTNET_PORT, SACN_PORT,
 };
 use limxdesk_dmx::{
-    render_dmx, DmxAttributeProfile, DmxAttributeSlot, DmxChannelSource, DmxFixturePatch,
-    DmxFixtureTypeProfile, DmxModeProfile, DmxOutputValue, DmxRenderInput, DmxUniverseFrame,
+    merge_mode_for_feature_group, render_dmx, DmxAttributeProfile, DmxAttributeSlot,
+    DmxChannelSource, DmxFixturePatch, DmxFixtureTypeProfile, DmxModeProfile, DmxOutputValue,
+    DmxRenderInput, DmxUniverseFrame,
 };
 use limxdesk_fixture_types::FixtureTypeEntry;
 use limxdesk_network::{
     enumerate_network_interfaces, send_packets, NetworkInterfaceInfo, NetworkOutputMode,
     NetworkOutputTarget, NetworkPacket, NetworkProtocol, UdpPacketTransport,
 };
+use limxdesk_engine::Motion;
 use limxdesk_patch::PatchDocument;
+use limxdesk_platform::current_timestamp_millis;
 use limxdesk_programmer::{Programmer, ProgrammerMode};
 use serde::{Deserialize, Serialize};
 use std::net::Ipv4Addr;
@@ -128,21 +131,21 @@ pub fn output_set_targets(
 pub fn output_render_dmx(
     show_state: State<'_, ShowRuntimeState>,
     programmer_state: State<'_, ProgrammerState>,
-    sequence_state: State<'_, SequenceState>,
+    engine_state: State<'_, EngineState>,
     output_state: State<'_, OutputState>,
 ) -> Result<Vec<DmxUniverseFrame>, String> {
-    render_current_dmx(&show_state, &programmer_state, &sequence_state, &output_state)
+    render_current_dmx(&show_state, &programmer_state, &engine_state, &output_state)
 }
 
 #[tauri::command]
 pub fn output_send_current(
     show_state: State<'_, ShowRuntimeState>,
     programmer_state: State<'_, ProgrammerState>,
-    sequence_state: State<'_, SequenceState>,
+    engine_state: State<'_, EngineState>,
     output_state: State<'_, OutputState>,
     app: AppHandle,
 ) -> Result<OutputSendReport, String> {
-    let report = send_current_output(&show_state, &programmer_state, &sequence_state, &output_state)?;
+    let report = send_current_output(&show_state, &programmer_state, &engine_state, &output_state)?;
     events::emit_output_sent(&app, &report);
     Ok(report)
 }
@@ -150,10 +153,10 @@ pub fn output_send_current(
 pub(crate) fn send_current_output(
     show_state: &State<'_, ShowRuntimeState>,
     programmer_state: &State<'_, ProgrammerState>,
-    sequence_state: &State<'_, SequenceState>,
+    engine_state: &State<'_, EngineState>,
     output_state: &State<'_, OutputState>,
 ) -> Result<OutputSendReport, String> {
-    let frames = render_current_dmx(show_state, programmer_state, sequence_state, output_state)?;
+    let frames = render_current_dmx(show_state, programmer_state, engine_state, output_state)?;
     let sequence = next_sequence(output_state)?;
     let targets = runtime_targets(show_state, output_state)?;
     let packets = build_network_packets(&frames, &targets, sequence)?;
@@ -198,15 +201,32 @@ pub(crate) fn request_output_send(app: &AppHandle) -> Result<(), String> {
 
         let show_state = app.state::<ShowRuntimeState>();
         let programmer_state = app.state::<ProgrammerState>();
-        let sequence_state = app.state::<SequenceState>();
+        let engine_state = app.state::<EngineState>();
         let output_state = app.state::<OutputState>();
-        match send_current_output(&show_state, &programmer_state, &sequence_state, &output_state) {
+
+        // 推进回放时钟。淡变、多步链都是在这里往前走的 —— 引擎回报是否
+        // 还有东西在动，决定这个线程接下来是继续转还是停下。
+        let motion = match current_timestamp_millis()
+            .map_err(|error| error.to_string())
+            .and_then(|now| engine_state.tick(now))
+        {
+            Ok(motion) => motion,
+            Err(error) => {
+                tracing::warn!("failed to advance playback clock: {error}");
+                Motion::Settled
+            }
+        };
+
+        match send_current_output(&show_state, &programmer_state, &engine_state, &output_state) {
             Ok(report) => events::emit_output_sent(&app, &report),
             Err(error) => tracing::warn!("failed to send programmer output: {error}"),
         }
 
         // 先取出是否需要继续，并在进入限速休眠前释放锁，避免持锁 sleep 阻塞
         // 其他线程调用 request_output_send。
+        //
+        // 有淡变或多步链在跑时保持转动；全都静止且没有新的变更时收工。
+        // 灯光稳定后没有必要继续占着一个线程按 40 Hz 空转。
         let keep_running = {
             let output_state = app.state::<OutputState>();
             let mut worker = match output_state.worker.lock() {
@@ -216,7 +236,7 @@ pub(crate) fn request_output_send(app: &AppHandle) -> Result<(), String> {
                     return;
                 }
             };
-            if worker.dirty {
+            if worker.dirty || motion == Motion::Moving {
                 true
             } else {
                 worker.running = false;
@@ -239,24 +259,28 @@ pub(crate) fn request_output_send(app: &AppHandle) -> Result<(), String> {
 fn render_current_dmx(
     show_state: &State<'_, ShowRuntimeState>,
     programmer_state: &State<'_, ProgrammerState>,
-    sequence_state: &State<'_, SequenceState>,
+    engine_state: &State<'_, EngineState>,
     output_state: &State<'_, OutputState>,
 ) -> Result<Vec<DmxUniverseFrame>, String> {
     let Some(cache) = runtime_cache(show_state, output_state)? else {
         return Ok(Vec::new());
     };
     let programmer = programmer_state.current()?;
-    let input = render_input_from_cache(&cache, &programmer, show_state, sequence_state)?;
+    let input = render_input_from_cache(&cache, &programmer, engine_state)?;
     render_dmx(&input).map_err(|error| error.to_string())
 }
 
+/// 组装一帧的渲染输入。
+///
+/// 回放的值直接从引擎取 —— 它持有已编译的内容和每个 executor 的当前进度。
+/// 这条路径不再触碰 show 文档：过去每帧都要把整份 SequenceDocument
+/// 反序列化并重新展开 tracking，那部分开销与帧率无关，现在只在文档写入时发生一次。
 fn render_input_from_cache(
     cache: &OutputRuntimeCache,
     programmer: &Programmer,
-    show_state: &State<'_, ShowRuntimeState>,
-    sequence_state: &State<'_, SequenceState>,
+    engine_state: &State<'_, EngineState>,
 ) -> Result<DmxRenderInput, String> {
-    let mut output_values = sequence::active_sequence_output_values(show_state, sequence_state)?;
+    let mut output_values = engine_state.collect_output()?;
     output_values.extend(active_output_values(programmer));
     Ok(DmxRenderInput {
         fixtures: cache.fixtures.clone(),
@@ -280,6 +304,9 @@ fn active_output_values(programmer: &Programmer) -> Vec<DmxOutputValue> {
             numeric: value.value.numeric,
             active: value.active,
             source: DmxChannelSource::Programmer,
+            priority: 0,
+            merge: merge_mode_for_feature_group(&value.feature_group),
+            order: 0,
         })
         .collect()
 }

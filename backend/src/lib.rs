@@ -27,6 +27,7 @@
 // │ titlebar_is_maximized             │ titlebar                │
 // ============================================================
 
+mod engine;
 mod events;
 mod fixture_selection;
 mod fixture_types;
@@ -49,7 +50,7 @@ pub fn run() {
     tauri::Builder::default()
         .manage(fixture_selection::FixtureSelectionState::default())
         .manage(output::OutputState::default())
-        .manage(sequence::SequenceState::default())
+        .manage(engine::EngineState::default())
         .manage(programmer::ProgrammerState::default())
         .manage(show::ShowRuntimeState::default())
         .plugin(tauri_plugin_shell::init())
@@ -128,7 +129,11 @@ pub fn run() {
             playback::playback_copy_executor,
             playback::playback_move_executor,
             playback::playback_fire_executor,
+            playback::playback_goto_cue,
             playback::playback_set_executor_master,
+            playback::playback_set_executor_rate,
+            playback::playback_persist_executor_master,
+            playback::playback_runtime_snapshot,
             output::output_get_targets,
             output::output_network_interfaces,
             output::output_set_targets,

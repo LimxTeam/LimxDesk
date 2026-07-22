@@ -18,6 +18,7 @@ members = [
     "crates/limxdesk-gdtf",
     "crates/limxdesk-artnet",
     "crates/limxdesk-dmx",
+    "crates/limxdesk-engine",
     "crates/limxdesk-network",
     "crates/limxdesk-patch",
     "crates/limxdesk-playback",
@@ -59,6 +60,7 @@ limxdesk-cue = { path = "crates/limxdesk-cue" }
 limxdesk-sequence = { path = "crates/limxdesk-sequence" }
 limxdesk-playback = { path = "crates/limxdesk-playback" }
 limxdesk-dmx = { path = "crates/limxdesk-dmx" }
+limxdesk-engine = { path = "crates/limxdesk-engine" }
 limxdesk-network = { path = "crates/limxdesk-network" }
 limxdesk-artnet = { path = "crates/limxdesk-artnet" }
 

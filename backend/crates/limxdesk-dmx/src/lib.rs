@@ -86,6 +86,62 @@ pub struct DmxOutputValue {
     pub numeric: Option<f64>,
     pub active: bool,
     pub source: DmxChannelSource,
+    /// 同一 source 层内的相对优先级，直接来自 Sequence.priority。
+    #[serde(default)]
+    pub priority: u8,
+    /// 该属性的合并方式。由属性的 feature group 决定，不由取值决定 ——
+    /// 同一属性的所有贡献者必须给出一致的模式，否则合并结果不可预测。
+    #[serde(default)]
+    pub merge: DmxMergeMode,
+    /// 优先级相同时的确定性排序依据（executor 编号等）。存在的意义是
+    /// 让"谁覆盖谁"可复现，而不是取决于哈希表的遍历顺序。
+    #[serde(default)]
+    pub order: u32,
+}
+
+impl DmxOutputValue {
+    /// 构造一个 LTP、零优先级的值。programmer 一类的单一来源用这个。
+    pub fn simple(
+        fixture_id: impl Into<String>,
+        attribute: impl Into<String>,
+        numeric: Option<f64>,
+        active: bool,
+        source: DmxChannelSource,
+    ) -> Self {
+        Self {
+            fixture_id: fixture_id.into(),
+            attribute: attribute.into(),
+            numeric,
+            active,
+            source,
+            priority: 0,
+            merge: DmxMergeMode::Ltp,
+            order: 0,
+        }
+    }
+}
+
+/// 合并方式。
+///
+/// `Htp`（Highest Takes Precedence）用于强度类属性：多个回放同时驱动同一个
+/// 调光通道时取最大值，这样压下一个推子不会把另一个回放的光也带走。
+/// `Ltp`（Latest Takes Precedence）用于位置、颜色一类属性：由优先级最高的
+/// 贡献者独占，取最大值在这些属性上没有物理意义。
+#[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub enum DmxMergeMode {
+    Htp,
+    #[default]
+    Ltp,
+}
+
+/// 按 feature group 判定属性的合并方式。
+pub fn merge_mode_for_feature_group(feature_group: &str) -> DmxMergeMode {
+    if feature_group.eq_ignore_ascii_case("Dimmer") {
+        DmxMergeMode::Htp
+    } else {
+        DmxMergeMode::Ltp
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -115,13 +171,7 @@ pub fn render_dmx(input: &DmxRenderInput) -> DmxResult<Vec<DmxUniverseFrame>> {
         render_fixture_defaults(input, fixture, &mut universes, &mut sources)?;
     }
 
-    let mut output_values = input
-        .output_values
-        .iter()
-        .filter(|value| value.active)
-        .collect::<Vec<_>>();
-    output_values.sort_by_key(|value| source_priority(value.source));
-    for value in output_values {
+    for value in merge_output_values(&input.output_values) {
         render_output_value(input, value, &mut universes, &mut sources)?;
     }
 
@@ -138,6 +188,60 @@ pub fn render_dmx(input: &DmxRenderInput) -> DmxResult<Vec<DmxUniverseFrame>> {
             }
         })
         .collect())
+}
+
+/// 在值层归约到"每个 (fixture, attribute) 一个胜出值"，再交给编码。
+///
+/// 旧实现是把所有值按 source 排序后逐个写进 DMX 字节数组，靠后写覆盖决定胜负。
+/// 那样做有两个问题：取最大值（HTP）无法表达，因为比较必须发生在编码之前；
+/// 而同优先级的先后完全取决于调用方的收集顺序。这里先决出胜者再编码，
+/// 每个属性只编码一次。
+fn merge_output_values(values: &[DmxOutputValue]) -> Vec<&DmxOutputValue> {
+    let mut groups: BTreeMap<(&str, &str), Vec<&DmxOutputValue>> = BTreeMap::new();
+    for value in values.iter().filter(|value| value.active) {
+        groups
+            .entry((value.fixture_id.as_str(), value.attribute.as_str()))
+            .or_default()
+            .push(value);
+    }
+
+    groups
+        .into_values()
+        .filter_map(|group| resolve_group(&group))
+        .collect()
+}
+
+/// 决出一个 (fixture, attribute) 上的胜出值。
+///
+/// 先取 source 优先级最高的一层 —— programmer 抓住某个属性时就该独占它，
+/// 不与回放混合。层内再看合并方式：HTP 取最大值，LTP 交给
+/// (priority, order) 最大的贡献者。
+fn resolve_group<'a>(group: &[&'a DmxOutputValue]) -> Option<&'a DmxOutputValue> {
+    let top = group
+        .iter()
+        .map(|value| source_priority(value.source))
+        .max()?;
+    let layer = group
+        .iter()
+        .filter(|value| source_priority(value.source) == top);
+
+    if group
+        .iter()
+        .any(|value| source_priority(value.source) == top && value.merge == DmxMergeMode::Htp)
+    {
+        layer
+            .max_by(|left, right| {
+                left.numeric
+                    .unwrap_or(f64::NEG_INFINITY)
+                    .total_cmp(&right.numeric.unwrap_or(f64::NEG_INFINITY))
+                    .then_with(|| (left.priority, left.order).cmp(&(right.priority, right.order)))
+            })
+            .copied()
+    } else {
+        layer
+            .max_by_key(|value| (value.priority, value.order))
+            .copied()
+    }
 }
 
 fn render_output_value(
@@ -444,33 +548,105 @@ mod tests {
     fn higher_priority_output_sources_override_lower_priority_sources() {
         let mut input = input("fix-1");
         input.output_values = vec![
-            DmxOutputValue {
-                fixture_id: "fix-1".to_string(),
-                attribute: "Dimmer".to_string(),
-                numeric: Some(30.0),
-                active: true,
-                source: DmxChannelSource::Sequence,
-            },
-            DmxOutputValue {
-                fixture_id: "fix-1".to_string(),
-                attribute: "Dimmer".to_string(),
-                numeric: Some(60.0),
-                active: true,
-                source: DmxChannelSource::Effect,
-            },
-            DmxOutputValue {
-                fixture_id: "fix-1".to_string(),
-                attribute: "Dimmer".to_string(),
-                numeric: Some(90.0),
-                active: true,
-                source: DmxChannelSource::Programmer,
-            },
+            DmxOutputValue::simple("fix-1", "Dimmer", Some(30.0), true, DmxChannelSource::Sequence),
+            DmxOutputValue::simple("fix-1", "Dimmer", Some(60.0), true, DmxChannelSource::Effect),
+            DmxOutputValue::simple(
+                "fix-1",
+                "Dimmer",
+                Some(90.0),
+                true,
+                DmxChannelSource::Programmer,
+            ),
         ];
 
         let frames = render_dmx(&input).unwrap();
 
         assert_eq!(frames[0].data[0], 230);
         assert_eq!(frames[0].sources[0], DmxChannelSource::Programmer);
+    }
+
+    #[test]
+    fn htp_merges_take_the_highest_value_within_a_layer() {
+        let mut input = input("fix-1");
+        input.output_values = vec![
+            htp_sequence_value(30.0, 10, 1),
+            htp_sequence_value(90.0, 5, 2),
+            htp_sequence_value(60.0, 90, 3),
+        ];
+
+        let frames = render_dmx(&input).unwrap();
+
+        // 优先级最高的贡献者只给到 60，但 HTP 下强度取全层最大值。
+        assert_eq!(frames[0].data[0], 230);
+    }
+
+    #[test]
+    fn ltp_merges_follow_priority_then_order() {
+        let mut input = input("fix-1");
+        input.output_values = vec![
+            ltp_sequence_value(30.0, 10, 1),
+            ltp_sequence_value(90.0, 5, 2),
+            ltp_sequence_value(60.0, 10, 2),
+        ];
+
+        let frames = render_dmx(&input).unwrap();
+
+        // priority 10 有两个贡献者，order 大的胜出 —— 与收集顺序无关。
+        assert_eq!(frames[0].data[0], 153);
+    }
+
+    #[test]
+    fn programmer_layer_excludes_lower_sources_from_htp() {
+        let mut input = input("fix-1");
+        input.output_values = vec![
+            htp_sequence_value(100.0, 90, 1),
+            DmxOutputValue {
+                merge: DmxMergeMode::Htp,
+                ..DmxOutputValue::simple(
+                    "fix-1",
+                    "Dimmer",
+                    Some(20.0),
+                    true,
+                    DmxChannelSource::Programmer,
+                )
+            },
+        ];
+
+        let frames = render_dmx(&input).unwrap();
+
+        // programmer 抓住该属性后独占，不与回放层取最大值。
+        assert_eq!(frames[0].data[0], 51);
+        assert_eq!(frames[0].sources[0], DmxChannelSource::Programmer);
+    }
+
+    fn htp_sequence_value(numeric: f64, priority: u8, order: u32) -> DmxOutputValue {
+        DmxOutputValue {
+            priority,
+            order,
+            merge: DmxMergeMode::Htp,
+            ..DmxOutputValue::simple(
+                "fix-1",
+                "Dimmer",
+                Some(numeric),
+                true,
+                DmxChannelSource::Sequence,
+            )
+        }
+    }
+
+    fn ltp_sequence_value(numeric: f64, priority: u8, order: u32) -> DmxOutputValue {
+        DmxOutputValue {
+            priority,
+            order,
+            merge: DmxMergeMode::Ltp,
+            ..DmxOutputValue::simple(
+                "fix-1",
+                "Dimmer",
+                Some(numeric),
+                true,
+                DmxChannelSource::Sequence,
+            )
+        }
     }
 
     fn input(fixture_id: &str) -> DmxRenderInput {
@@ -516,13 +692,13 @@ mod tests {
                     }],
                 }],
             }],
-            output_values: vec![DmxOutputValue {
-                fixture_id: fixture_id.to_string(),
-                attribute: "Dimmer".to_string(),
-                numeric: Some(100.0),
-                active: true,
-                source: DmxChannelSource::Programmer,
-            }],
+            output_values: vec![DmxOutputValue::simple(
+                fixture_id,
+                "Dimmer",
+                Some(100.0),
+                true,
+                DmxChannelSource::Programmer,
+            )],
         }
     }
 }

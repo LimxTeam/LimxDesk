@@ -15,8 +15,10 @@ import {
   assignSequenceToExecutorAction,
   clearExecutorAction,
   copyOrMoveExecutorAction,
-  pushPlaybackHistory,
+  currentExecutorMaster,
+  pushExecutorMasterHistory,
   storeProgrammerOnExecutorAction,
+  type EngineSnapshot,
   type PlaybackDocument,
 } from "./playbackActions";
 import {
@@ -742,12 +744,19 @@ async function handleExecutorAtCommand(command: DeskCommandState, value: number)
   }
 
   const master = clamp(value, 0, 100) / 100;
-  const after = await invoke<PlaybackDocument>("playback_set_executor_master", {
+  const previousMaster = await currentExecutorMaster(page.id, executor.id, executor.fader.master);
+  await invoke<EngineSnapshot>("playback_set_executor_master", {
     pageId: page.id,
     executorId: executor.id,
     master,
   });
-  pushPlaybackHistory(`Executor ${number} At ${Math.round(master * 100)}`, before, after);
+  pushExecutorMasterHistory(
+    `Executor ${number} At ${Math.round(master * 100)}`,
+    page.id,
+    executor.id,
+    previousMaster,
+    master,
+  );
   return { handled: true, status: `Executor ${number} At ${Math.round(master * 100)}` };
 }
 

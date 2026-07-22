@@ -50,6 +50,65 @@ export interface PlaybackStoreExecutorResult {
   sequence: SequenceCommandResult;
 }
 
+/** 引擎的回放状态快照，按 executor 索引。 */
+export interface EngineSnapshot {
+  executors: ExecutorRuntimeState[];
+}
+
+export interface ExecutorRuntimeState {
+  pageId: string;
+  executorId: string;
+  sequenceId: string;
+  state: "idle" | "running" | "paused" | "releasing";
+  currentCueId: string | null;
+  nextCueId: string | null;
+  master: number;
+  rate: number;
+  flash: boolean;
+}
+
+/**
+ * 推子改动的撤销记录。
+ *
+ * 推子是纯运行时值，不写 show 文件，所以撤销要把推子推回去，
+ * 而不是像文档类操作那样整份替换回去 —— 那会把其他无关改动一起回滚。
+ */
+export function pushExecutorMasterHistory(
+  label: string,
+  pageId: string,
+  executorId: string,
+  before: number,
+  after: number,
+) {
+  pushCommandHistory({
+    label,
+    undo: async () => {
+      await invoke("playback_set_executor_master", { pageId, executorId, master: before });
+    },
+    redo: async () => {
+      await invoke("playback_set_executor_master", { pageId, executorId, master: after });
+    },
+  });
+}
+
+/** 取某个 executor 当前的运行时推子值。没有运行实例时回落到文档里的初值。 */
+export async function currentExecutorMaster(
+  pageId: string,
+  executorId: string,
+  fallback: number,
+): Promise<number> {
+  try {
+    const snapshot = await invoke<EngineSnapshot>("playback_runtime_snapshot");
+    return (
+      snapshot.executors.find(
+        (state) => state.pageId === pageId && state.executorId === executorId,
+      )?.master ?? fallback
+    );
+  } catch {
+    return fallback;
+  }
+}
+
 export function pushPlaybackHistory(label: string, before: PlaybackDocument, after: PlaybackDocument) {
   pushCommandHistory({
     label,

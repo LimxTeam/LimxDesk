@@ -63,21 +63,24 @@ interface ExecutorButtons {
 
 interface SequenceLoadResult {
   document: SequenceDocument;
-  runtime: SequenceRuntimeSnapshot;
+  runtime: EngineSnapshot;
 }
 
-interface SequenceRuntimeSnapshot {
-  states: SequenceRuntimeState[];
+interface EngineSnapshot {
+  executors: ExecutorRuntimeState[];
 }
 
-interface SequenceRuntimeState {
+/** 回放状态按 executor 索引 —— 同一个 sequence 挂在多个 executor 上时各有各的播放头。 */
+interface ExecutorRuntimeState {
+  pageId: string;
+  executorId: string;
   sequenceId: string;
-  active: boolean;
-  paused: boolean;
+  state: "idle" | "running" | "paused" | "releasing";
   currentCueId: string | null;
   nextCueId: string | null;
   master: number;
   rate: number;
+  flash: boolean;
 }
 
 export function PlaybackWindow() {
@@ -92,7 +95,7 @@ export function PlaybackWindow() {
     version: 0,
   });
   const [sequences, setSequences] = useState<SequenceModel[]>([]);
-  const [runtime, setRuntime] = useState<SequenceRuntimeSnapshot>({ states: [] });
+  const [runtime, setRuntime] = useState<EngineSnapshot>({ executors: [] });
   const [selectedPageId, setSelectedPageId] = useState("");
   const [selectedSequenceId, setSelectedSequenceId] = useState("");
   const [selectedExecutorId, setSelectedExecutorId] = useState("");
@@ -140,7 +143,7 @@ export function PlaybackWindow() {
         clearWorkspaceRuntimeCache(["frames"]);
         void loadSequences();
       });
-      const sequenceStateChanged = await listen<SequenceRuntimeSnapshot>(
+      const sequenceStateChanged = await listen<EngineSnapshot>(
         "sequence:state-changed",
         (event) => {
           clearWorkspaceRuntimeCache(["frames"]);
@@ -155,7 +158,7 @@ export function PlaybackWindow() {
         setPlayback({ pages: [], selectedPageId: null, version: 0 });
         setSequenceDocument({ sequences: [], selectedSequenceId: null, version: 0 });
         setSequences([]);
-        setRuntime({ states: [] });
+        setRuntime({ executors: [] });
         setStatus("No show loaded");
       });
 
@@ -252,7 +255,7 @@ export function PlaybackWindow() {
     } catch {
       setSequenceDocument({ sequences: [], selectedSequenceId: null, version: 0 });
       setSequences([]);
-      setRuntime({ states: [] });
+      setRuntime({ executors: [] });
     }
   }
 
@@ -409,7 +412,7 @@ export function PlaybackWindow() {
   async function fireExecutor(executor: Executor, action: "go" | "back" | "pause" | "off" | "flashOn" | "flashOff" | "toggle") {
     if (!page) return;
     try {
-      const snapshot = await invoke<SequenceRuntimeSnapshot>("playback_fire_executor", {
+      const snapshot = await invoke<EngineSnapshot>("playback_fire_executor", {
         pageId: page.id,
         executorId: executor.id,
         action,
@@ -423,13 +426,16 @@ export function PlaybackWindow() {
   async function setExecutorMaster(executor: Executor, master: number) {
     if (!page) return;
     const next = Number.isFinite(master) ? Math.min(1, Math.max(0, master)) : 1;
+    // 推子是纯运行时值：本地先动，后端只更新引擎，不落盘。
     setPlayback((current) => updateExecutorMasterLocal(current, page.id, executor.id, next));
     try {
-      setPlayback(await invoke<PlaybackDocument>("playback_set_executor_master", {
-        pageId: page.id,
-        executorId: executor.id,
-        master: next,
-      }));
+      setRuntime(
+        await invoke<EngineSnapshot>("playback_set_executor_master", {
+          pageId: page.id,
+          executorId: executor.id,
+          master: next,
+        }),
+      );
     } catch (error) {
       setStatus(String(error));
     }
@@ -477,7 +483,7 @@ export function PlaybackWindow() {
             <div key={row} style={rowStyle}>
               <div style={rowLabelStyle}>{row * 100}</div>
               {executors.map((executor) => {
-                const state = stateForExecutor(executor, runtime);
+                const state = stateForExecutor(executor, page.id, runtime);
                 const sequence = sequenceForExecutor(executor, sequences);
                 const selected = selectedExecutorId === executor.id;
                 return (
@@ -516,7 +522,7 @@ function ExecutorCell({
 }: {
   executor: Executor;
   sequence: SequenceModel | null;
-  state: SequenceRuntimeState | null;
+  state: ExecutorRuntimeState | null;
   selected: boolean;
   onSelect: () => void;
   onAssign: () => void;
@@ -536,7 +542,7 @@ function ExecutorCell({
         minHeight: 132,
         border: selected
           ? "1px solid var(--lx-accent-bright)"
-          : state?.active
+          : isRunning(state)
             ? "1px solid rgba(120,217,120,0.55)"
             : "1px solid var(--lx-stroke)",
         borderRadius: "var(--lx-radius-sm)",
@@ -544,13 +550,13 @@ function ExecutorCell({
           ? "linear-gradient(180deg, rgba(44,49,60,0.98), rgba(18,20,26,0.98))"
           : "rgba(0,0,0,0.22)",
         overflow: "hidden",
-        boxShadow: state?.active ? "0 0 0 1px rgba(120,217,120,0.24) inset" : undefined,
+        boxShadow: isRunning(state) ? "0 0 0 1px rgba(120,217,120,0.24) inset" : undefined,
       }}
     >
       <div style={executorHeaderStyle}>
         <span className="lx-code">{executor.number}</span>
-        <span style={{ color: state?.active ? "var(--lx-action-bright)" : "var(--lx-fg-tertiary)" }}>
-          {state?.active ? "RUN" : "OFF"}
+        <span style={{ color: isRunning(state) ? "var(--lx-action-bright)" : "var(--lx-fg-tertiary)" }}>
+          {executorStateLabel(state)}
         </span>
       </div>
       <div style={executorBodyStyle}>
@@ -608,10 +614,37 @@ function updateExecutorMasterLocal(document: PlaybackDocument, pageId: string, e
   };
 }
 
-function stateForExecutor(executor: Executor, runtime: SequenceRuntimeSnapshot) {
-  const sequenceId = executor.assignment?.objectId;
-  if (!sequenceId) return null;
-  return runtime.states.find((state) => state.sequenceId === sequenceId) ?? null;
+function stateForExecutor(executor: Executor, pageId: string, runtime: EngineSnapshot) {
+  return (
+    runtime.executors.find(
+      (state) => state.executorId === executor.id && state.pageId === pageId,
+    ) ?? null
+  );
+}
+
+/**
+ * 是否处于运行中。
+ *
+ * 注意不能写成 `state?.state !== "idle"` —— state 为 null 时那个表达式
+ * 会得到 true。
+ */
+function isRunning(state: ExecutorRuntimeState | null) {
+  return state !== null && state.state !== "idle";
+}
+
+function executorStateLabel(state: ExecutorRuntimeState | null) {
+  if (state === null) return "OFF";
+  if (state.flash) return "FLASH";
+  switch (state.state) {
+    case "running":
+      return "RUN";
+    case "paused":
+      return "PAUSE";
+    case "releasing":
+      return "REL";
+    default:
+      return "OFF";
+  }
 }
 
 function sequenceForExecutor(executor: Executor, sequences: SequenceModel[]) {

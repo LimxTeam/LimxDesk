@@ -1,110 +1,61 @@
+// ============================================================
+// 文件名称：sequence.rs
+// 功能描述：sequence 文档的 invoke 命令
+//
+// 这一层只负责文档的增删改查与落盘。回放状态属于 engine —— sequence 是
+// 内容容器，播放头挂在 executor 上。文档每次写入后主动通知引擎重编译，
+// 渲染路径因此完全不需要读文档。
+//
+// sequence_go / back / off 这类命令保留下来给命令行用（"Go Sequence 3"）：
+// 它们作用在所有指派了该 sequence 的 executor 上。
+// ============================================================
+
 use crate::{
-    events, fixture_selection::FixtureSelectionState, output, programmer::ProgrammerState,
-    show::ShowRuntimeState,
+    engine::EngineState, events, fixture_selection::FixtureSelectionState, output,
+    programmer::ProgrammerState, show::ShowRuntimeState,
 };
-use limxdesk_cue::{CueStoreMode, CueValueLayer};
-use limxdesk_dmx::{DmxChannelSource, DmxOutputValue};
+use limxdesk_cue::CueStoreMode;
+use limxdesk_engine::EngineSnapshot;
 use limxdesk_platform::current_timestamp_millis;
+use limxdesk_playback::PlaybackAction;
 use limxdesk_programmer::StoreUseSelection;
 use limxdesk_sequence::{
-    advance_state, copy_cue_to_number, copy_sequence_to_number, cue_output_values, delete_cue,
-    delete_sequence, goto_state, move_cue_to_number, move_sequence_to_number, normalize_document,
-    off_state, select_sequence, set_master_state, store_programmer_values,
-    store_single_step_program, update_cue, CuePatch, PlaybackDirection, SequenceCommandResult,
-    SequenceDocument, SequenceRuntimeState, SequenceStoreRequest, SingleStepStoreRequest,
+    copy_cue_to_number, copy_sequence_to_number, delete_cue, delete_sequence, move_cue_to_number,
+    move_sequence_to_number, normalize_document, select_sequence, store_programmer_values,
+    store_single_step_program, update_cue, CuePatch, SequenceCommandResult, SequenceDocument,
+    SequenceStoreRequest, SingleStepStoreRequest,
 };
 use limxdesk_showfile::LoadedShow;
 use serde::{Deserialize, Serialize};
-use std::{collections::HashMap, sync::Mutex};
 use tauri::{AppHandle, State};
 
 const SEQUENCE_SECTION_KEY: &str = "sequence.v1";
 const SEQUENCE_SECTION_VERSION: u16 = 1;
 
-#[derive(Default)]
-pub struct SequenceState {
-    runtime: Mutex<HashMap<String, SequenceRuntimeState>>,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct SequenceRuntimeSnapshot {
-    pub states: Vec<SequenceRuntimeState>,
-}
-
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SequenceLoadResult {
     pub document: SequenceDocument,
-    pub runtime: SequenceRuntimeSnapshot,
-}
-
-impl SequenceState {
-    pub(crate) fn clear(&self) -> Result<(), String> {
-        let mut runtime = self
-            .runtime
-            .lock()
-            .map_err(|_| "sequence runtime state lock poisoned".to_string())?;
-        runtime.clear();
-        Ok(())
-    }
-
-    pub(crate) fn snapshot(&self) -> Result<SequenceRuntimeSnapshot, String> {
-        let runtime = self
-            .runtime
-            .lock()
-            .map_err(|_| "sequence runtime state lock poisoned".to_string())?;
-        let mut states = runtime.values().cloned().collect::<Vec<_>>();
-        states.sort_by(|left, right| left.sequence_id.cmp(&right.sequence_id));
-        Ok(SequenceRuntimeSnapshot { states })
-    }
-
-    fn state_for(&self, sequence_id: &str) -> Result<Option<SequenceRuntimeState>, String> {
-        let runtime = self
-            .runtime
-            .lock()
-            .map_err(|_| "sequence runtime state lock poisoned".to_string())?;
-        Ok(runtime.get(sequence_id).cloned())
-    }
-
-    fn set_state(&self, state: SequenceRuntimeState) -> Result<SequenceRuntimeSnapshot, String> {
-        let mut runtime = self
-            .runtime
-            .lock()
-            .map_err(|_| "sequence runtime state lock poisoned".to_string())?;
-        runtime.insert(state.sequence_id.clone(), state);
-        let mut states = runtime.values().cloned().collect::<Vec<_>>();
-        states.sort_by(|left, right| left.sequence_id.cmp(&right.sequence_id));
-        Ok(SequenceRuntimeSnapshot { states })
-    }
-
-    fn remove_state(&self, sequence_id: &str) -> Result<SequenceRuntimeSnapshot, String> {
-        let mut runtime = self
-            .runtime
-            .lock()
-            .map_err(|_| "sequence runtime state lock poisoned".to_string())?;
-        runtime.remove(sequence_id);
-        let mut states = runtime.values().cloned().collect::<Vec<_>>();
-        states.sort_by(|left, right| left.sequence_id.cmp(&right.sequence_id));
-        Ok(SequenceRuntimeSnapshot { states })
-    }
+    pub runtime: EngineSnapshot,
 }
 
 #[tauri::command]
 pub fn sequence_load_current_show(
     show_state: State<'_, ShowRuntimeState>,
-    sequence_state: State<'_, SequenceState>,
+    engine_state: State<'_, EngineState>,
 ) -> Result<SequenceLoadResult, String> {
     let Some(_show) = show_state.current()? else {
         return Ok(SequenceLoadResult {
             document: SequenceDocument::default(),
-            runtime: sequence_state.snapshot()?,
+            runtime: engine_state.snapshot()?,
         });
     };
 
+    let document = load_sequence_document(&show_state)?;
+    engine_state.reload_sequences(&document)?;
     Ok(SequenceLoadResult {
-        document: load_sequence_document(&show_state)?,
-        runtime: sequence_state.snapshot()?,
+        document,
+        runtime: engine_state.snapshot()?,
     })
 }
 
@@ -112,7 +63,7 @@ pub fn sequence_load_current_show(
 pub fn sequence_replace_current_show(
     document: SequenceDocument,
     show_state: State<'_, ShowRuntimeState>,
-    sequence_state: State<'_, SequenceState>,
+    engine_state: State<'_, EngineState>,
     app: AppHandle,
 ) -> Result<SequenceDocument, String> {
     let Some(_show) = show_state.current()? else {
@@ -121,9 +72,10 @@ pub fn sequence_replace_current_show(
         );
     };
     let document = normalize_document(document);
-    save_and_emit(&document, &show_state, &app)?;
-    sequence_state.clear()?;
-    let snapshot = sequence_state.snapshot()?;
+    save_and_emit(&document, &show_state, &engine_state, &app)?;
+    engine_state.clear()?;
+    engine_state.reload_sequences(&document)?;
+    let snapshot = engine_state.snapshot()?;
     events::emit_sequence_state_changed(&app, &snapshot);
     request_sequence_output(&app);
     Ok(document)
@@ -133,6 +85,7 @@ pub fn sequence_replace_current_show(
 pub fn sequence_create(
     name: Option<String>,
     show_state: State<'_, ShowRuntimeState>,
+    engine_state: State<'_, EngineState>,
     app: AppHandle,
 ) -> Result<SequenceCommandResult, String> {
     let Some(_show) = show_state.current()? else {
@@ -144,7 +97,7 @@ pub fn sequence_create(
     let result =
         limxdesk_sequence::create_sequence(load_sequence_document(&show_state)?, name, now)
             .map_err(|error| error.to_string())?;
-    save_and_emit(&result.document, &show_state, &app)?;
+    save_and_emit(&result.document, &show_state, &engine_state, &app)?;
     Ok(result)
 }
 
@@ -152,11 +105,12 @@ pub fn sequence_create(
 pub fn sequence_select(
     sequence_id: String,
     show_state: State<'_, ShowRuntimeState>,
+    engine_state: State<'_, EngineState>,
     app: AppHandle,
 ) -> Result<SequenceDocument, String> {
     let document = select_sequence(load_sequence_document(&show_state)?, &sequence_id)
         .map_err(|error| error.to_string())?;
-    save_and_emit(&document, &show_state, &app)?;
+    save_and_emit(&document, &show_state, &engine_state, &app)?;
     Ok(document)
 }
 
@@ -164,13 +118,14 @@ pub fn sequence_select(
 pub fn sequence_delete(
     sequence_id: String,
     show_state: State<'_, ShowRuntimeState>,
-    sequence_state: State<'_, SequenceState>,
+    engine_state: State<'_, EngineState>,
     app: AppHandle,
 ) -> Result<SequenceDocument, String> {
     let document = delete_sequence(load_sequence_document(&show_state)?, &sequence_id)
         .map_err(|error| error.to_string())?;
-    save_and_emit(&document, &show_state, &app)?;
-    let snapshot = sequence_state.remove_state(&sequence_id)?;
+    // reload 会把指向已删除 sequence 的 executor 实例一并清掉。
+    save_and_emit(&document, &show_state, &engine_state, &app)?;
+    let snapshot = engine_state.snapshot()?;
     events::emit_sequence_state_changed(&app, &snapshot);
     request_sequence_output(&app);
     Ok(document)
@@ -181,6 +136,7 @@ pub fn sequence_copy(
     source_number: u32,
     target_number: u32,
     show_state: State<'_, ShowRuntimeState>,
+    engine_state: State<'_, EngineState>,
     app: AppHandle,
 ) -> Result<SequenceDocument, String> {
     let document = copy_sequence_to_number(
@@ -190,7 +146,7 @@ pub fn sequence_copy(
         now_ms()?,
     )
     .map_err(|error| error.to_string())?;
-    save_and_emit(&document, &show_state, &app)?;
+    save_and_emit(&document, &show_state, &engine_state, &app)?;
     Ok(document)
 }
 
@@ -199,22 +155,19 @@ pub fn sequence_move(
     source_number: u32,
     target_number: u32,
     show_state: State<'_, ShowRuntimeState>,
-    sequence_state: State<'_, SequenceState>,
+    engine_state: State<'_, EngineState>,
     app: AppHandle,
 ) -> Result<SequenceDocument, String> {
-    let before = load_sequence_document(&show_state)?;
-    let source_id = before
-        .sequences
-        .iter()
-        .find(|sequence| sequence.number == source_number)
-        .map(|sequence| sequence.id.clone());
-    let document = move_sequence_to_number(before, source_number, target_number, now_ms()?)
-        .map_err(|error| error.to_string())?;
-    save_and_emit(&document, &show_state, &app)?;
-    if let Some(source_id) = source_id {
-        let snapshot = sequence_state.remove_state(&source_id)?;
-        events::emit_sequence_state_changed(&app, &snapshot);
-    }
+    let document = move_sequence_to_number(
+        load_sequence_document(&show_state)?,
+        source_number,
+        target_number,
+        now_ms()?,
+    )
+    .map_err(|error| error.to_string())?;
+    save_and_emit(&document, &show_state, &engine_state, &app)?;
+    let snapshot = engine_state.snapshot()?;
+    events::emit_sequence_state_changed(&app, &snapshot);
     request_sequence_output(&app);
     Ok(document)
 }
@@ -225,6 +178,7 @@ pub fn sequence_store_programmer(
     show_state: State<'_, ShowRuntimeState>,
     selection_state: State<'_, FixtureSelectionState>,
     programmer_state: State<'_, ProgrammerState>,
+    engine_state: State<'_, EngineState>,
     app: AppHandle,
 ) -> Result<SequenceCommandResult, String> {
     let Some(_show) = show_state.current()? else {
@@ -241,7 +195,8 @@ pub fn sequence_store_programmer(
         now_ms()?,
     )
     .map_err(|error| error.to_string())?;
-    save_and_emit(&result.document, &show_state, &app)?;
+    save_and_emit(&result.document, &show_state, &engine_state, &app)?;
+    request_sequence_output(&app);
     Ok(result)
 }
 
@@ -251,6 +206,7 @@ pub fn sequence_store_single_step_program(
     show_state: State<'_, ShowRuntimeState>,
     selection_state: State<'_, FixtureSelectionState>,
     programmer_state: State<'_, ProgrammerState>,
+    engine_state: State<'_, EngineState>,
     app: AppHandle,
 ) -> Result<SequenceCommandResult, String> {
     let Some(_show) = show_state.current()? else {
@@ -269,7 +225,8 @@ pub fn sequence_store_single_step_program(
         now_ms()?,
     )
     .map_err(|error| error.to_string())?;
-    save_and_emit(&result.document, &show_state, &app)?;
+    save_and_emit(&result.document, &show_state, &engine_state, &app)?;
+    request_sequence_output(&app);
     Ok(result)
 }
 
@@ -279,6 +236,7 @@ pub fn sequence_update_cue(
     cue_id: String,
     patch: CuePatch,
     show_state: State<'_, ShowRuntimeState>,
+    engine_state: State<'_, EngineState>,
     app: AppHandle,
 ) -> Result<SequenceCommandResult, String> {
     let result = update_cue(
@@ -289,7 +247,7 @@ pub fn sequence_update_cue(
         now_ms()?,
     )
     .map_err(|error| error.to_string())?;
-    save_and_emit(&result.document, &show_state, &app)?;
+    save_and_emit(&result.document, &show_state, &engine_state, &app)?;
     request_sequence_output(&app);
     Ok(result)
 }
@@ -299,6 +257,7 @@ pub fn sequence_delete_cue(
     sequence_id: String,
     cue_id: String,
     show_state: State<'_, ShowRuntimeState>,
+    engine_state: State<'_, EngineState>,
     app: AppHandle,
 ) -> Result<SequenceCommandResult, String> {
     let result = delete_cue(
@@ -308,7 +267,7 @@ pub fn sequence_delete_cue(
         now_ms()?,
     )
     .map_err(|error| error.to_string())?;
-    save_and_emit(&result.document, &show_state, &app)?;
+    save_and_emit(&result.document, &show_state, &engine_state, &app)?;
     request_sequence_output(&app);
     Ok(result)
 }
@@ -319,6 +278,7 @@ pub fn sequence_copy_cue(
     source_number: f64,
     target_number: f64,
     show_state: State<'_, ShowRuntimeState>,
+    engine_state: State<'_, EngineState>,
     app: AppHandle,
 ) -> Result<SequenceCommandResult, String> {
     let result = copy_cue_to_number(
@@ -329,7 +289,7 @@ pub fn sequence_copy_cue(
         now_ms()?,
     )
     .map_err(|error| error.to_string())?;
-    save_and_emit(&result.document, &show_state, &app)?;
+    save_and_emit(&result.document, &show_state, &engine_state, &app)?;
     request_sequence_output(&app);
     Ok(result)
 }
@@ -340,7 +300,7 @@ pub fn sequence_move_cue(
     source_number: f64,
     target_number: f64,
     show_state: State<'_, ShowRuntimeState>,
-    sequence_state: State<'_, SequenceState>,
+    engine_state: State<'_, EngineState>,
     app: AppHandle,
 ) -> Result<SequenceCommandResult, String> {
     let result = move_cue_to_number(
@@ -351,14 +311,9 @@ pub fn sequence_move_cue(
         now_ms()?,
     )
     .map_err(|error| error.to_string())?;
-    save_and_emit(&result.document, &show_state, &app)?;
-    let state = sequence_state.state_for(&sequence_id)?;
-    if let Some(mut state) = state {
-        state.current_cue_id = None;
-        state.next_cue_id = result.sequence.cues.first().map(|cue| cue.id.clone());
-        let snapshot = sequence_state.set_state(state)?;
-        events::emit_sequence_state_changed(&app, &snapshot);
-    }
+    save_and_emit(&result.document, &show_state, &engine_state, &app)?;
+    let snapshot = engine_state.snapshot()?;
+    events::emit_sequence_state_changed(&app, &snapshot);
     request_sequence_output(&app);
     Ok(result)
 }
@@ -367,31 +322,41 @@ pub fn sequence_move_cue(
 pub fn sequence_go(
     sequence_id: Option<String>,
     show_state: State<'_, ShowRuntimeState>,
-    sequence_state: State<'_, SequenceState>,
+    engine_state: State<'_, EngineState>,
     app: AppHandle,
-) -> Result<SequenceRuntimeSnapshot, String> {
-    run_sequence_direction(
-        sequence_id,
-        PlaybackDirection::Go,
-        show_state,
-        sequence_state,
-        app,
-    )
+) -> Result<EngineSnapshot, String> {
+    fire_by_sequence(sequence_id, PlaybackAction::Go, &show_state, &engine_state, &app)
 }
 
 #[tauri::command]
 pub fn sequence_back(
     sequence_id: Option<String>,
     show_state: State<'_, ShowRuntimeState>,
-    sequence_state: State<'_, SequenceState>,
+    engine_state: State<'_, EngineState>,
     app: AppHandle,
-) -> Result<SequenceRuntimeSnapshot, String> {
-    run_sequence_direction(
+) -> Result<EngineSnapshot, String> {
+    fire_by_sequence(
         sequence_id,
-        PlaybackDirection::Back,
-        show_state,
-        sequence_state,
-        app,
+        PlaybackAction::Back,
+        &show_state,
+        &engine_state,
+        &app,
+    )
+}
+
+#[tauri::command]
+pub fn sequence_off(
+    sequence_id: Option<String>,
+    show_state: State<'_, ShowRuntimeState>,
+    engine_state: State<'_, EngineState>,
+    app: AppHandle,
+) -> Result<EngineSnapshot, String> {
+    fire_by_sequence(
+        sequence_id,
+        PlaybackAction::Off,
+        &show_state,
+        &engine_state,
+        &app,
     )
 }
 
@@ -399,40 +364,11 @@ pub fn sequence_back(
 pub fn sequence_goto_cue(
     sequence_id: String,
     cue_id: String,
-    show_state: State<'_, ShowRuntimeState>,
-    sequence_state: State<'_, SequenceState>,
+    engine_state: State<'_, EngineState>,
     app: AppHandle,
-) -> Result<SequenceRuntimeSnapshot, String> {
-    let document = load_sequence_document(&show_state)?;
-    let sequence = resolve_sequence(&document, Some(sequence_id.clone()))?;
-    let state = goto_state(
-        sequence,
-        sequence_state.state_for(&sequence_id)?,
-        &cue_id,
-        now_ms()?,
-    )
-    .map_err(|error| error.to_string())?;
-    let snapshot = sequence_state.set_state(state)?;
-    events::emit_sequence_state_changed(&app, &snapshot);
-    request_sequence_output(&app);
-    Ok(snapshot)
-}
-
-#[tauri::command]
-pub fn sequence_off(
-    sequence_id: Option<String>,
-    show_state: State<'_, ShowRuntimeState>,
-    sequence_state: State<'_, SequenceState>,
-    app: AppHandle,
-) -> Result<SequenceRuntimeSnapshot, String> {
-    let document = load_sequence_document(&show_state)?;
-    let sequence = resolve_sequence(&document, sequence_id)?;
-    let state = off_state(
-        &sequence.id,
-        sequence_state.state_for(&sequence.id)?,
-        now_ms()?,
-    );
-    let snapshot = sequence_state.set_state(state)?;
+) -> Result<EngineSnapshot, String> {
+    engine_state.goto_cue_by_sequence(&sequence_id, &cue_id)?;
+    let snapshot = engine_state.snapshot()?;
     events::emit_sequence_state_changed(&app, &snapshot);
     request_sequence_output(&app);
     Ok(snapshot)
@@ -442,53 +378,43 @@ pub fn sequence_off(
 pub fn sequence_set_master(
     sequence_id: String,
     master: f64,
-    sequence_state: State<'_, SequenceState>,
+    engine_state: State<'_, EngineState>,
     app: AppHandle,
-) -> Result<SequenceRuntimeSnapshot, String> {
-    let state = set_master_state(
-        &sequence_id,
-        sequence_state.state_for(&sequence_id)?,
-        master,
-        now_ms()?,
-    );
-    let snapshot = sequence_state.set_state(state)?;
+) -> Result<EngineSnapshot, String> {
+    engine_state.set_master_by_sequence(&sequence_id, master)?;
+    let snapshot = engine_state.snapshot()?;
     events::emit_sequence_state_changed(&app, &snapshot);
     request_sequence_output(&app);
     Ok(snapshot)
 }
 
-pub(crate) fn active_sequence_output_values(
+/// 对所有指派了目标 sequence 的 executor 执行动作。
+///
+/// 不给 sequence_id 时落到文档里当前选中的那个 —— 命令行不带地址的
+/// `Go` 就是这个语义。
+fn fire_by_sequence(
+    sequence_id: Option<String>,
+    action: PlaybackAction,
     show_state: &State<'_, ShowRuntimeState>,
-    sequence_state: &State<'_, SequenceState>,
-) -> Result<Vec<DmxOutputValue>, String> {
-    let Some(_show) = show_state.current()? else {
-        return Ok(Vec::new());
-    };
+    engine_state: &State<'_, EngineState>,
+    app: &AppHandle,
+) -> Result<EngineSnapshot, String> {
     let document = load_sequence_document(show_state)?;
-    let states = sequence_state.snapshot()?.states;
-    let mut output_values = Vec::new();
-    for state in states {
-        let Some(sequence) = document
-            .sequences
-            .iter()
-            .find(|sequence| sequence.id == state.sequence_id)
-        else {
-            continue;
-        };
-        output_values.extend(
-            cue_output_values(sequence, &state)
-                .into_iter()
-                .filter(|value| matches!(value.layer, CueValueLayer::Absolute))
-                .map(|value| DmxOutputValue {
-                    fixture_id: value.fixture_id,
-                    attribute: value.attribute,
-                    numeric: value.numeric,
-                    active: value.active,
-                    source: DmxChannelSource::Sequence,
-                }),
-        );
-    }
-    Ok(output_values)
+    let target = sequence_id
+        .or(document.selected_sequence_id.clone())
+        .or_else(|| {
+            document
+                .sequences
+                .first()
+                .map(|sequence| sequence.id.clone())
+        })
+        .ok_or_else(|| "no sequence exists".to_string())?;
+
+    engine_state.fire_by_sequence(&target, action)?;
+    let snapshot = engine_state.snapshot()?;
+    events::emit_sequence_state_changed(app, &snapshot);
+    request_sequence_output(app);
+    Ok(snapshot)
 }
 
 pub(crate) fn load_sequence_document(
@@ -500,58 +426,23 @@ pub(crate) fn load_sequence_document(
     Ok(normalize_document(document))
 }
 
-fn run_sequence_direction(
-    sequence_id: Option<String>,
-    direction: PlaybackDirection,
-    show_state: State<'_, ShowRuntimeState>,
-    sequence_state: State<'_, SequenceState>,
-    app: AppHandle,
-) -> Result<SequenceRuntimeSnapshot, String> {
-    let document = load_sequence_document(&show_state)?;
-    let sequence = resolve_sequence(&document, sequence_id)?;
-    let state = advance_state(
-        sequence,
-        sequence_state.state_for(&sequence.id)?,
-        direction,
-        now_ms()?,
-    );
-    let snapshot = sequence_state.set_state(state)?;
-    events::emit_sequence_state_changed(&app, &snapshot);
-    request_sequence_output(&app);
-    Ok(snapshot)
-}
-
-fn resolve_sequence(
-    document: &SequenceDocument,
-    sequence_id: Option<String>,
-) -> Result<&limxdesk_sequence::Sequence, String> {
-    let id = sequence_id
-        .or(document.selected_sequence_id.clone())
-        .or_else(|| {
-            document
-                .sequences
-                .first()
-                .map(|sequence| sequence.id.clone())
-        })
-        .ok_or_else(|| "no sequence exists".to_string())?;
-    document
-        .sequences
-        .iter()
-        .find(|sequence| sequence.id == id)
-        .ok_or_else(|| format!("sequence not found: {id}"))
-}
-
+/// 写入 sequence section 并让引擎重新编译。
+///
+/// 重编译发生在这里而不是渲染路径上：内容变了才需要重新展开 tracking，
+/// 而内容只在这一处改变。
 fn save_and_emit(
     document: &SequenceDocument,
     show_state: &State<'_, ShowRuntimeState>,
+    engine_state: &State<'_, EngineState>,
     app: &AppHandle,
 ) -> Result<LoadedShow, String> {
-    let saved = save_sequence_document(document, show_state)?;
+    let saved = state_write(document, show_state)?;
+    engine_state.reload_sequences(document)?;
     events::emit_sequence_changed(app, &saved);
     Ok(saved)
 }
 
-fn save_sequence_document(
+fn state_write(
     document: &SequenceDocument,
     state: &State<'_, ShowRuntimeState>,
 ) -> Result<LoadedShow, String> {
@@ -567,9 +458,10 @@ fn request_sequence_output(app: &AppHandle) {
 pub(crate) fn save_and_emit_sequence_document(
     document: &SequenceDocument,
     show_state: &State<'_, ShowRuntimeState>,
+    engine_state: &State<'_, EngineState>,
     app: &AppHandle,
 ) -> Result<LoadedShow, String> {
-    save_and_emit(document, show_state, app)
+    save_and_emit(document, show_state, engine_state, app)
 }
 
 pub(crate) fn now_ms() -> Result<u64, String> {
