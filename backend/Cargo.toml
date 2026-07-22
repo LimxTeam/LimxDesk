@@ -76,6 +76,15 @@ serde_json = "1"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 
+# 开发构建：自身代码保持 opt-level=1（兼顾编译速度与可调试性），
+# 依赖库一律 opt-level=3。GDTF 解析、DMX 渲染、Art-Net 打包在 opt-level=0
+# 下比 release 慢一个数量级，是 tauri:dev 下操作卡顿的主要来源。
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 3
+
 [profile.release]
 lto = "fat"
 codegen-units = 1

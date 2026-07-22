@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
 import type { CSSProperties, ReactNode } from "react";
 import { listen } from "@tauri-apps/api/event";
 import {
@@ -87,6 +87,14 @@ type ReadoutMode = "decimal" | "percent";
 const ADDRESS_COLUMNS = 32;
 const ADDRESS_ROWS = 16;
 
+/**
+ * DMX 读数的最小刷新间隔（约 12 Hz）。
+ *
+ * 输出线程以约 40 Hz 广播 `output:sent`，但 512 格读数不需要那么快的视觉刷新。
+ * 没有这个下限时，每条事件都会触发一次 `output_render_dmx` 往返并重排整张栅格。
+ */
+const DMX_UI_REFRESH_MS = 80;
+
 export function DmxSheetWindow() {
   const [readout, setReadout] = useState<ReadoutMode>("decimal");
   const [onlySelection, setOnlySelection] = useState(false);
@@ -103,6 +111,11 @@ export function DmxSheetWindow() {
     version: 0,
   });
   const [status, setStatus] = useState("Ready");
+
+  const frameLoadInFlightRef = useRef(false);
+  const frameLoadPendingRef = useRef(false);
+  const frameLoadTimerRef = useRef<number | null>(null);
+  const lastFrameCommitRef = useRef(0);
 
   const frame = useMemo(() => {
     if (frames.length === 0) return null;
@@ -126,21 +139,21 @@ export function DmxSheetWindow() {
       const events = await Promise.all([
         listen("output:sent", () => {
           clearWorkspaceRuntimeCache(["frames"]);
-          void loadFrames();
+          requestFrameLoad();
         }),
         listen("programmer:changed", () => {
           clearWorkspaceRuntimeCache(["programmer", "frames"]);
-          void loadFrames();
+          requestFrameLoad();
         }),
         listen("patch:changed", () => {
           clearWorkspaceRuntimeCache(["patch", "frames"]);
           void loadPatch();
-          void loadFrames();
+          requestFrameLoad();
         }),
         listen("fixture-types:changed", () => {
           clearWorkspaceRuntimeCache(["fixtureTypes", "frames"]);
           void loadFixtureTypes();
-          void loadFrames();
+          requestFrameLoad();
         }),
         listen("fixture-selection:changed", (event) => {
           const payload = event.payload as FixtureSelection;
@@ -173,6 +186,10 @@ export function DmxSheetWindow() {
     return () => {
       active = false;
       unlisteners.forEach((unlisten) => unlisten());
+      if (frameLoadTimerRef.current !== null) {
+        window.clearTimeout(frameLoadTimerRef.current);
+        frameLoadTimerRef.current = null;
+      }
     };
   }, []);
 
@@ -223,6 +240,34 @@ export function DmxSheetWindow() {
       setFrames([]);
       setSelectedUniverse(null);
     }
+  }
+
+  /**
+   * 合并高频的 `output:sent`：同一时刻只允许一次渲染往返在途，
+   * 期间到达的事件折叠成一次补发，并保证两次提交至少相隔 DMX_UI_REFRESH_MS。
+   */
+  function requestFrameLoad() {
+    if (frameLoadInFlightRef.current) {
+      frameLoadPendingRef.current = true;
+      return;
+    }
+    if (frameLoadTimerRef.current !== null) return;
+
+    const elapsed = performance.now() - lastFrameCommitRef.current;
+    const wait = Math.max(0, DMX_UI_REFRESH_MS - elapsed);
+
+    frameLoadTimerRef.current = window.setTimeout(() => {
+      frameLoadTimerRef.current = null;
+      frameLoadInFlightRef.current = true;
+      void loadFrames().finally(() => {
+        frameLoadInFlightRef.current = false;
+        lastFrameCommitRef.current = performance.now();
+        if (frameLoadPendingRef.current) {
+          frameLoadPendingRef.current = false;
+          requestFrameLoad();
+        }
+      });
+    }, wait);
   }
 
   const activeChannels = frame?.data.filter((value) => value > 0).length ?? 0;
@@ -300,28 +345,6 @@ function AddressDmxView({
     return <EmptyState label="No rendered DMX frame" />;
   }
 
-  const cells = Array.from({ length: ADDRESS_ROWS * ADDRESS_COLUMNS }, (_, index) => {
-    if (index >= 512) {
-      return {
-        index,
-        valid: false,
-        owner: undefined,
-        value: 0,
-        displayValue: "",
-        source: "none" as DmxChannelSource,
-      };
-    }
-    const value = frame.data[index] ?? 0;
-    return {
-      index,
-      valid: true,
-      owner: owners.get(index),
-      value,
-      displayValue: readout === "percent" ? `${Math.round((value / 255) * 100)}` : `${value}`,
-      source: frame.sources?.[index] ?? "none",
-    };
-  });
-
   return (
     <div style={styles.addressViewport}>
       <div style={styles.addressGrid}>
@@ -331,20 +354,18 @@ function AddressDmxView({
             {column + 1}
           </div>
         ))}
-        {Array.from({ length: ADDRESS_ROWS }, (_, rowIndex) => {
-          const start = rowIndex * ADDRESS_COLUMNS;
-          return (
-            <AddressRow
-              key={`row-${rowIndex}`}
-              start={start}
-              universe={frame.universe}
-              cells={cells.slice(start, start + ADDRESS_COLUMNS)}
-              showValues={showValues}
-              showAttributes={showAttributes}
-              showIds={showIds}
-            />
-          );
-        })}
+        {Array.from({ length: ADDRESS_ROWS }, (_, rowIndex) => (
+          <AddressRow
+            key={`row-${rowIndex}`}
+            start={rowIndex * ADDRESS_COLUMNS}
+            frame={frame}
+            owners={owners}
+            readout={readout}
+            showValues={showValues}
+            showAttributes={showAttributes}
+            showIds={showIds}
+          />
+        ))}
       </div>
     </div>
   );
@@ -352,22 +373,17 @@ function AddressDmxView({
 
 function AddressRow({
   start,
-  universe,
-  cells,
+  frame,
+  owners,
+  readout,
   showValues,
   showAttributes,
   showIds,
 }: {
   start: number;
-  universe: number;
-  cells: Array<{
-    index: number;
-    valid: boolean;
-    owner: ChannelOwner | undefined;
-    value: number;
-    displayValue: string;
-    source: DmxChannelSource;
-  }>;
+  frame: DmxUniverseFrame;
+  owners: Map<number, ChannelOwner>;
+  readout: ReadoutMode;
   showValues: boolean;
   showAttributes: boolean;
   showIds: boolean;
@@ -376,38 +392,90 @@ function AddressRow({
     <>
       <div style={styles.addressRowLabel}>
         <span>Attrib.</span>
-        <strong>{`${universe}.${String(start + 1).padStart(3, "0")}`}</strong>
+        <strong>{`${frame.universe}.${String(start + 1).padStart(3, "0")}`}</strong>
       </div>
-      {cells.map((cell) => {
-        const detail = [showAttributes ? compactAttribute(cell.owner?.attribute ?? "") : "", showIds ? cell.owner?.fixtureLabel ?? "" : ""]
-          .filter(Boolean)
-          .join(" ");
+      {Array.from({ length: ADDRESS_COLUMNS }, (_, column) => {
+        const index = start + column;
+        const owner = index < 512 ? owners.get(index) : undefined;
         return (
-          <div
-            key={cell.index}
-            title={
-              cell.valid
-                ? `${universe}.${String(cell.index + 1).padStart(3, "0")} ${cell.owner?.fixtureLabel ?? ""} ${cell.owner?.attribute ?? ""}`
-                : ""
-            }
-            style={{
-              ...styles.addressCell,
-              ...sourceCellStyle(cell.source, cell.value > 0),
-              borderColor: cell.owner?.selected ? "rgba(245,184,77,0.95)" : "rgba(255,255,255,0.045)",
-              opacity: cell.valid ? 1 : 0.18,
-            }}
-          >
-            <div style={styles.addressCellTop}>
-              <span>{cell.valid ? cell.index + 1 : ""}</span>
-              <span style={{ color: sourceColor(cell.source) }}>{sourceLabel(cell.source)}</span>
-            </div>
-            <div style={styles.addressCellValue}>{showValues ? cell.displayValue : detail}</div>
-          </div>
+          <AddressCell
+            key={index}
+            index={index}
+            universe={frame.universe}
+            valid={index < 512}
+            value={index < 512 ? frame.data[index] ?? 0 : 0}
+            source={index < 512 ? frame.sources?.[index] ?? "none" : "none"}
+            ownerLabel={owner?.fixtureLabel ?? ""}
+            ownerAttribute={owner?.attribute ?? ""}
+            selected={owner?.selected ?? false}
+            readout={readout}
+            showValues={showValues}
+            showAttributes={showAttributes}
+            showIds={showIds}
+          />
         );
       })}
     </>
   );
 }
+
+/**
+ * 单个 DMX 通道格。
+ *
+ * 512 个格子每帧全量重算时，开销集中在为每格新建内联 style 对象和拼接
+ * title 字符串上。props 全部收敛为标量后 `memo` 的浅比较即可生效：
+ * 一帧里通常只有个位数通道在变，其余格子直接跳过。
+ */
+const AddressCell = memo(function AddressCell({
+  index,
+  universe,
+  valid,
+  value,
+  source,
+  ownerLabel,
+  ownerAttribute,
+  selected,
+  readout,
+  showValues,
+  showAttributes,
+  showIds,
+}: {
+  index: number;
+  universe: number;
+  valid: boolean;
+  value: number;
+  source: DmxChannelSource;
+  ownerLabel: string;
+  ownerAttribute: string;
+  selected: boolean;
+  readout: ReadoutMode;
+  showValues: boolean;
+  showAttributes: boolean;
+  showIds: boolean;
+}) {
+  const detail = [showAttributes ? compactAttribute(ownerAttribute) : "", showIds ? ownerLabel : ""]
+    .filter(Boolean)
+    .join(" ");
+  const displayValue = readout === "percent" ? `${Math.round((value / 255) * 100)}` : `${value}`;
+
+  return (
+    <div
+      title={valid ? `${universe}.${String(index + 1).padStart(3, "0")} ${ownerLabel} ${ownerAttribute}` : ""}
+      style={{
+        ...styles.addressCell,
+        ...sourceCellStyle(source, value > 0),
+        borderColor: selected ? "rgba(245,184,77,0.95)" : "rgba(255,255,255,0.045)",
+        opacity: valid ? 1 : 0.18,
+      }}
+    >
+      <div style={styles.addressCellTop}>
+        <span>{valid ? index + 1 : ""}</span>
+        <span style={{ color: sourceColor(source) }}>{sourceLabel(source)}</span>
+      </div>
+      <div style={styles.addressCellValue}>{showValues ? displayValue : detail}</div>
+    </div>
+  );
+});
 
 function ToolButton({
   active,
@@ -544,12 +612,21 @@ function sourceColor(source: DmxChannelSource) {
   return "var(--lx-fg-tertiary)";
 }
 
+/** 通道格底色，按来源预先固化，避免每格渲染都新建一次样式对象 */
+const SOURCE_CELL_STYLES = {
+  programmer: { background: "rgba(240,157,28,0.17)" },
+  default: { background: "rgba(120,217,120,0.14)" },
+  effect: { background: "rgba(240,157,28,0.10)" },
+  sequence: { background: "rgba(77,163,245,0.12)" },
+  none: { background: "rgba(0,0,0,0.18)" },
+  noneActive: { background: "rgba(255,255,255,0.055)" },
+} satisfies Record<string, CSSProperties>;
+
 function sourceCellStyle(source: DmxChannelSource, active: boolean): CSSProperties {
-  if (source === "programmer") return { background: "rgba(240,157,28,0.17)" };
-  if (source === "default") return { background: "rgba(120,217,120,0.14)" };
-  if (source === "effect") return { background: "rgba(240,157,28,0.10)" };
-  if (source === "sequence") return { background: "rgba(77,163,245,0.12)" };
-  return { background: active ? "rgba(255,255,255,0.055)" : "rgba(0,0,0,0.18)" };
+  if (source === "none") {
+    return active ? SOURCE_CELL_STYLES.noneActive : SOURCE_CELL_STYLES.none;
+  }
+  return SOURCE_CELL_STYLES[source];
 }
 
 function stepUniverse(frames: DmxUniverseFrame[], current: number | null, direction: number) {

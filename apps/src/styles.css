@@ -289,7 +289,13 @@ select,
 button {
   font-family: inherit;
   cursor: pointer;
-  transition: all var(--lx-duration-fast) var(--lx-ease-out);
+  /* 只过渡实际会变的属性。控台一屏有数百个按钮，`transition: all`
+     会让每个按钮对所有可动画属性建立过渡，放大 hover 时的重绘范围。 */
+  transition:
+    background-color var(--lx-duration-fast) var(--lx-ease-out),
+    border-color var(--lx-duration-fast) var(--lx-ease-out),
+    color var(--lx-duration-fast) var(--lx-ease-out),
+    opacity var(--lx-duration-fast) var(--lx-ease-out);
 }
 button:disabled {
   cursor: not-allowed;

@@ -20,10 +20,18 @@ use limxdesk_programmer::{Programmer, ProgrammerMode};
 use serde::{Deserialize, Serialize};
 use std::net::Ipv4Addr;
 use std::sync::Mutex;
+use std::time::{Duration, Instant};
 use tauri::{AppHandle, Manager, State};
 
 const OUTPUT_SECTION_KEY: &str = "output.v1";
 const OUTPUT_SECTION_VERSION: u16 = 1;
+
+/// 输出工作线程的最小循环间隔（约 40 Hz）。
+///
+/// DMX512 线速刷新率上限约 44 Hz，再快对灯具没有意义。没有这个下限时，
+/// 只要 `dirty` 持续为真（例如拖动编码器），工作线程就会满速空转：
+/// 占满一个 CPU 核，并以最高速度向前端广播 `output:sent`。
+const OUTPUT_MIN_INTERVAL: Duration = Duration::from_millis(25);
 
 #[derive(Debug)]
 pub struct OutputState {
@@ -174,6 +182,8 @@ pub(crate) fn request_output_send(app: &AppHandle) -> Result<(), String> {
 
     let app = app.clone();
     std::thread::spawn(move || loop {
+        let cycle_start = Instant::now();
+
         {
             let output_state = app.state::<OutputState>();
             let mut worker = match output_state.worker.lock() {
@@ -195,19 +205,32 @@ pub(crate) fn request_output_send(app: &AppHandle) -> Result<(), String> {
             Err(error) => tracing::warn!("failed to send programmer output: {error}"),
         }
 
-        let output_state = app.state::<OutputState>();
-        let mut worker = match output_state.worker.lock() {
-            Ok(worker) => worker,
-            Err(_) => {
-                tracing::warn!("output worker state lock poisoned");
-                return;
+        // 先取出是否需要继续，并在进入限速休眠前释放锁，避免持锁 sleep 阻塞
+        // 其他线程调用 request_output_send。
+        let keep_running = {
+            let output_state = app.state::<OutputState>();
+            let mut worker = match output_state.worker.lock() {
+                Ok(worker) => worker,
+                Err(_) => {
+                    tracing::warn!("output worker state lock poisoned");
+                    return;
+                }
+            };
+            if worker.dirty {
+                true
+            } else {
+                worker.running = false;
+                false
             }
         };
-        if worker.dirty {
-            continue;
+
+        if !keep_running {
+            return;
         }
-        worker.running = false;
-        return;
+
+        if let Some(remaining) = OUTPUT_MIN_INTERVAL.checked_sub(cycle_start.elapsed()) {
+            std::thread::sleep(remaining);
+        }
     });
 
     Ok(())
