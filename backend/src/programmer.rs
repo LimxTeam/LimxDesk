@@ -32,6 +32,18 @@ impl ProgrammerState {
     }
 }
 
+/// 当前选择上已激活的属性。
+///
+/// 效果的轨道从这里来 —— 你已经调过的属性就是你想让效果驱动的属性。
+#[tauri::command]
+pub fn programmer_active_attributes(
+    selection_state: State<'_, FixtureSelectionState>,
+    programmer_state: State<'_, ProgrammerState>,
+) -> Result<Vec<limxdesk_programmer::ActiveAttribute>, String> {
+    let selection = selection_state.current()?;
+    Ok(programmer_state.current()?.active_attributes(&selection))
+}
+
 #[tauri::command]
 pub fn programmer_get(state: State<'_, ProgrammerState>) -> Result<Programmer, String> {
     state.current()

@@ -1,4 +1,5 @@
 use limxdesk_effect::{normalize_effects, AppliedEffect};
+use std::collections::HashMap;
 use limxdesk_fixture_selection::FixtureSelection;
 use serde::{Deserialize, Serialize};
 use std::fmt;
@@ -72,6 +73,19 @@ pub struct ProgrammerPart {
     pub id: u16,
     pub label: Option<String>,
     pub values: Vec<ProgrammerValue>,
+}
+
+/// programmer 里一个已激活的属性。
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct ActiveAttribute {
+    pub attribute: String,
+    pub feature_group: String,
+    /// 当前值，作为效果曲线的基准。
+    pub value: Option<f64>,
+    /// 选择中有多少盏灯激活了它。
+    pub fixture_count: usize,
+    pub total_fixtures: usize,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
@@ -429,6 +443,63 @@ impl Programmer {
 
     pub fn effects(&self) -> &[AppliedEffect] {
         &self.active_buffer().effects
+    }
+
+    /// 当前选择上已经激活的属性，连同现值。
+    ///
+    /// "激活"就是你已经动过它 —— 推过的推子、调过的编码器。效果要作用在
+    /// 什么属性上，答案就在这里：手上正在编的东西，而不是这批灯理论上
+    /// 支持的全部属性。
+    ///
+    /// 现值取主灯（选择里的第一盏）上的值，作为曲线的基准。
+    pub fn active_attributes(&self, selection: &FixtureSelection) -> Vec<ActiveAttribute> {
+        let effective = self
+            .clone()
+            .sync_selection(selection)
+            .effective_fixture_selection();
+        if effective.fixture_ids.is_empty() {
+            return Vec::new();
+        }
+        let primary = effective.fixture_ids.first();
+
+        let mut order: Vec<String> = Vec::new();
+        let mut found: HashMap<String, ActiveAttribute> = HashMap::new();
+
+        for value in self.active_buffer().values() {
+            if !value.active || !matches!(value.layer, ProgrammerLayer::Absolute) {
+                continue;
+            }
+            if !effective.fixture_ids.contains(&value.fixture_id) {
+                continue;
+            }
+
+            let entry = found
+                .entry(value.attribute.clone())
+                .or_insert_with(|| {
+                    order.push(value.attribute.clone());
+                    ActiveAttribute {
+                        attribute: value.attribute.clone(),
+                        feature_group: value.feature_group.clone(),
+                        value: None,
+                        fixture_count: 0,
+                        total_fixtures: effective.fixture_ids.len(),
+                    }
+                });
+            entry.fixture_count += 1;
+            if primary == Some(&value.fixture_id) {
+                entry.value = value.value.numeric;
+            }
+            // 主灯没有该属性时退而取任意一盏的值，总比没有基准好。
+            if entry.value.is_none() {
+                entry.value = value.value.numeric;
+            }
+        }
+
+        // 保持 programmer 里的出现顺序 —— 那是用户实际的操作次序。
+        order
+            .into_iter()
+            .filter_map(|attribute| found.remove(&attribute))
+            .collect()
     }
 
     /// 收集要存进 cue 的效果实例。
@@ -931,6 +1002,147 @@ fn default_if_empty<'a>(value: &'a str, fallback: &'a str) -> &'a str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn selection_of(ids: &[&str]) -> FixtureSelection {
+        FixtureSelection {
+            fixture_ids: ids.iter().map(|id| id.to_string()).collect(),
+            primary_fixture_id: ids.first().map(|id| id.to_string()),
+            version: 0,
+        }
+    }
+
+    fn with_attribute(
+        programmer: Programmer,
+        selection: &FixtureSelection,
+        attribute: &str,
+        group: &str,
+        numeric: f64,
+    ) -> Programmer {
+        programmer
+            .set_attribute_for_selection(
+                selection,
+                ProgrammerSetAttributeRequest {
+                    attribute: attribute.to_string(),
+                    feature_group: group.to_string(),
+                    layer: ProgrammerLayer::Absolute,
+                    value: ProgrammerScalar {
+                        numeric: Some(numeric),
+                        text: None,
+                    },
+                    source: ProgrammerValueSource::Manual,
+                },
+            )
+            .expect("attribute applies")
+    }
+
+    #[test]
+    fn active_attributes_report_what_has_been_touched() {
+        let selection = selection_of(&["fix-1", "fix-2"]);
+        let programmer = with_attribute(Programmer::default(), &selection, "Dimmer", "Dimmer", 50.0);
+        let programmer = with_attribute(programmer, &selection, "Pan", "Position", 20.0);
+
+        let active = programmer.active_attributes(&selection);
+
+        assert_eq!(active.len(), 2);
+        // 顺序跟随实际的操作次序。
+        assert_eq!(active[0].attribute, "Dimmer");
+        assert_eq!(active[1].attribute, "Pan");
+        assert_eq!(active[0].value, Some(50.0));
+        assert_eq!(active[0].fixture_count, 2);
+        assert_eq!(active[0].total_fixtures, 2);
+    }
+
+    #[test]
+    fn an_untouched_programmer_reports_nothing() {
+        let selection = selection_of(&["fix-1"]);
+        assert!(Programmer::default().active_attributes(&selection).is_empty());
+    }
+
+    #[test]
+    fn deactivated_values_drop_out_of_the_active_set() {
+        let selection = selection_of(&["fix-1"]);
+        let programmer = with_attribute(Programmer::default(), &selection, "Dimmer", "Dimmer", 50.0);
+        assert_eq!(programmer.active_attributes(&selection).len(), 1);
+
+        // Clear 到 Active 级别只是停用，值还在，但不该再算作"手上正在调的"。
+        let result = programmer.clear(ProgrammerClearTarget::Active, false);
+        assert!(result.programmer.active_attributes(&selection).is_empty());
+    }
+
+    #[test]
+    fn attributes_outside_the_selection_are_ignored() {
+        let first = selection_of(&["fix-1"]);
+        let second = selection_of(&["fix-2"]);
+        let programmer = with_attribute(Programmer::default(), &first, "Dimmer", "Dimmer", 50.0);
+
+        assert_eq!(programmer.active_attributes(&first).len(), 1);
+        assert!(
+            programmer.active_attributes(&second).is_empty(),
+            "换一批灯就不该看到上一批的属性"
+        );
+    }
+
+    #[test]
+    fn the_value_comes_from_the_primary_fixture() {
+        let selection = selection_of(&["fix-1", "fix-2"]);
+        let mut programmer =
+            with_attribute(Programmer::default(), &selection, "Dimmer", "Dimmer", 50.0);
+
+        // 单独把第二盏改掉，主灯仍是 fix-1。
+        programmer = with_attribute(programmer, &selection_of(&["fix-2"]), "Dimmer", "Dimmer", 90.0);
+
+        let active = programmer.active_attributes(&selection);
+        assert_eq!(active[0].value, Some(50.0), "基准值应取主灯");
+    }
+
+    #[test]
+    fn clearing_everything_also_clears_the_effect_layer() {
+        let selection = selection_of(&["fix-1"]);
+        let programmer = with_attribute(Programmer::default(), &selection, "Dimmer", "Dimmer", 50.0)
+            .apply_effect(AppliedEffect::new(
+                "keyframe",
+                "effect-1",
+                vec!["fix-1".to_string()],
+            ));
+        assert_eq!(programmer.effects().len(), 1);
+
+        let result = programmer.clear(ProgrammerClearTarget::All, false);
+        assert!(
+            result.programmer.effects().is_empty(),
+            "Clear 不能只清掉属性值而把效果留下"
+        );
+    }
+
+    #[test]
+    fn store_effects_drops_fixtures_outside_the_selection() {
+        let programmer = Programmer::default().apply_effect(AppliedEffect::new(
+            "keyframe",
+            "effect-1",
+            vec!["fix-1".to_string(), "fix-2".to_string()],
+        ));
+
+        let stored = programmer.store_effects(
+            StoreUseSelection::ActiveForSelected,
+            &selection_of(&["fix-1"]),
+        );
+
+        assert_eq!(stored.len(), 1);
+        assert_eq!(stored[0].fixture_ids, vec!["fix-1".to_string()]);
+    }
+
+    #[test]
+    fn reapplying_the_same_effect_replaces_rather_than_stacks() {
+        let fixtures = vec!["fix-1".to_string()];
+        let programmer = Programmer::default()
+            .apply_effect(AppliedEffect::new("keyframe", "effect-1", fixtures.clone()))
+            .apply_effect(AppliedEffect::new("keyframe", "effect-1", fixtures));
+
+        assert_eq!(
+            programmer.effects().len(),
+            1,
+            "再点一次效果是重新应用，不是摞两份一样的上去"
+        );
+    }
 
     #[test]
     fn set_attribute_creates_active_values_for_selection() {

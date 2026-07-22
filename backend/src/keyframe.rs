@@ -416,17 +416,11 @@ pub fn keyframe_create_effect(
 ) -> Result<KeyframeLibraryDocument, String> {
     let mut document = load_document(&show_state)?;
     let number = next_effect_number(&document);
-    let mut effect = KeyframeEffect::new(number, name.unwrap_or_default(), now_ms()?);
+    let effect = KeyframeEffect::new(number, name.unwrap_or_default(), now_ms()?);
 
-    // 模板不含灯具。这里读一次当前选择只是为了挑一个合理的起手属性 ——
-    // 拿手上这批灯都具备的第一个属性建轨道，比塞一个可能不存在的属性强。
-    // 解析不出就留空，让用户从真实属性列表里挑。
-    let selection = selection_state.current()?;
-    if let Some(option) = first_common_attribute(&selection.fixture_ids, &show_state)? {
-        let mut track = KeyframeTrack::new(option.name.clone(), option.feature_group.clone());
-        track.keyframes = default_curve_for(&option);
-        effect.tracks.push(track);
-    }
+    // 模板建出来是空的。轨道在"应用"那一刻按 programmer 里已激活的属性
+    // 生成 —— 你调过什么，效果就驱动什么。这里猜属性只会猜错。
+    let _ = &selection_state;
 
     document.selected_effect_id = Some(effect.id.clone());
     document.effects.push(effect);
@@ -540,6 +534,7 @@ pub fn keyframe_apply_to_selection(
     selection_state: State<'_, FixtureSelectionState>,
     programmer_state: State<'_, ProgrammerState>,
     keyframe_state: State<'_, KeyframeState>,
+    engine_state: State<'_, EngineState>,
     app: AppHandle,
 ) -> Result<limxdesk_programmer::Programmer, String> {
     let library = load_document(&show_state)?;
@@ -552,6 +547,49 @@ pub fn keyframe_apply_to_selection(
         return Err("Select fixtures before applying an effect.".to_string());
     }
 
+    let programmer = programmer_state.current()?;
+    let active = programmer.active_attributes(&selection);
+
+    // 模板还没有轨道时，按 programmer 里已激活的属性补上 —— 效果该驱动
+    // 什么，答案是你手上正在调的那些属性。曲线以现值为高点：调到 50 再
+    // 加效果，就在 0..50 之间摆，而不是跳到满值。
+    let template_has_tracks = library
+        .effects
+        .iter()
+        .find(|item| item.id == effect_id)
+        .is_some_and(limxdesk_keyframe::KeyframeEffect::has_tracks);
+
+    if !template_has_tracks {
+        if active.is_empty() {
+            return Err(
+                "Set an attribute in the programmer first — the effect drives what you have touched."
+                    .to_string(),
+            );
+        }
+        let ranges = attribute_ranges(&selection.fixture_ids, &show_state)?;
+        let tracks = active
+            .iter()
+            .map(|entry| {
+                let mut track =
+                    KeyframeTrack::new(entry.attribute.clone(), entry.feature_group.clone());
+                track.keyframes = curve_from_current(entry, ranges.get(&entry.attribute));
+                track
+            })
+            .collect::<Vec<_>>();
+
+        let mut document = library.clone();
+        if let Some(template) = document
+            .effects
+            .iter_mut()
+            .find(|item| item.id == effect_id)
+        {
+            template.tracks = tracks;
+            template.updated_at_ms = now_ms()?;
+        }
+        document.version = document.version.saturating_add(1);
+        save(&document, &show_state, &keyframe_state, &engine_state, &app)?;
+    }
+
     // 顺序即相位铺开的次序，沿用选择本身的顺序。
     let applied = AppliedEffect::new(
         KEYFRAME_ENGINE_KIND,
@@ -559,7 +597,7 @@ pub fn keyframe_apply_to_selection(
         selection.fixture_ids.clone(),
     );
     keyframe_state.mark_epoch(now_ms()?)?;
-    let programmer = programmer_state.current()?.apply_effect(applied);
+    let programmer = programmer.apply_effect(applied);
     let programmer = programmer_state.set_current(programmer)?;
     events::emit_programmer_changed(app_handle(&app), &programmer);
     request_output(&app);
@@ -600,38 +638,53 @@ pub fn keyframe_remove_applied(
 
 // ── 内部 ────────────────────────────────────────────────────
 
-/// 选中灯具全都具备的第一个属性，按 feature group 的惯用次序取。
-fn first_common_attribute(
+/// 属性名 → GDTF 量程，用来给曲线找一个合理的低点。
+fn attribute_ranges(
     fixture_ids: &[String],
     show_state: &State<'_, ShowRuntimeState>,
-) -> Result<Option<EffectAttributeOption>, String> {
-    if fixture_ids.is_empty() {
-        return Ok(None);
-    }
-    let options = collect_attribute_options(fixture_ids, show_state)?;
-    Ok(options
+) -> Result<BTreeMap<String, EffectAttributeOption>, String> {
+    Ok(collect_attribute_options(fixture_ids, show_state)?
         .into_iter()
-        .find(|option| option.fixture_count == option.total_fixtures))
+        .map(|option| (option.name.clone(), option))
+        .collect())
 }
 
-/// 按属性的实际量程给出首尾两帧。
+/// 以 programmer 现值为基准生成首尾两帧。
 ///
-/// 量程来自 GDTF：Pan 可能是 -270..270，Dimmer 是 0..100。拿固定的
-/// 0..100 建曲线，在非百分比属性上一上来就是错的。
-fn default_curve_for(option: &EffectAttributeOption) -> Vec<limxdesk_keyframe::Keyframe> {
+/// 现值当高点，属性量程的低端当低点：把 Dimmer 调到 50 再加效果，
+/// 效果就在 0..50 之间摆动，而不是无视你刚设的值跳到满。
+/// 位置一类可正可负的属性以现值为中心对称摆动，那才是"摇头"该有的样子。
+fn curve_from_current(
+    entry: &limxdesk_programmer::ActiveAttribute,
+    range: Option<&EffectAttributeOption>,
+) -> Vec<limxdesk_keyframe::Keyframe> {
     use limxdesk_keyframe::{Interpolation, Keyframe};
 
-    let low = option.min_value.filter(|value| value.is_finite()).unwrap_or(0.0);
-    let high = option
-        .max_value
-        .filter(|value| value.is_finite() && *value != low)
-        .unwrap_or(low + 100.0);
+    let current = entry.value.filter(|value| value.is_finite()).unwrap_or(0.0);
+    let min = range
+        .and_then(|option| option.min_value)
+        .filter(|value| value.is_finite());
+    let max = range
+        .and_then(|option| option.max_value)
+        .filter(|value| value.is_finite());
+
+    let (low, high) = match (min, max) {
+        // 量程跨越零（Pan / Tilt 这类）：以现值为中心对称摆动。
+        (Some(min), Some(max)) if min < 0.0 && max > 0.0 => {
+            let reach = ((max - min) * 0.25).abs();
+            ((current - reach).max(min), (current + reach).min(max))
+        }
+        // 单向量程（强度、色轮等）：从低端摆到现值。
+        (Some(min), _) => (min, current),
+        _ => (0.0, current),
+    };
 
     vec![
         Keyframe::new(0.0, low).with_interpolation(Interpolation::Smooth),
         Keyframe::new(180.0, high).with_interpolation(Interpolation::Smooth),
     ]
 }
+
 
 pub(crate) fn load_document(
     state: &State<'_, ShowRuntimeState>,
@@ -724,6 +777,67 @@ mod tests {
             .iter()
             .find(|value| value.attribute == attribute)
             .and_then(|value| value.numeric)
+    }
+
+    fn active(attribute: &str, group: &str, value: Option<f64>) -> limxdesk_programmer::ActiveAttribute {
+        limxdesk_programmer::ActiveAttribute {
+            attribute: attribute.to_string(),
+            feature_group: group.to_string(),
+            value,
+            fixture_count: 1,
+            total_fixtures: 1,
+        }
+    }
+
+    fn range(name: &str, min: f64, max: f64) -> EffectAttributeOption {
+        EffectAttributeOption {
+            name: name.to_string(),
+            feature_group: String::new(),
+            min_value: Some(min),
+            max_value: Some(max),
+            default_value: None,
+            value_kind: "percent".to_string(),
+            fixture_count: 1,
+            total_fixtures: 1,
+        }
+    }
+
+    #[test]
+    fn a_curve_built_from_a_dimmer_swings_up_to_the_current_value() {
+        // 调到 50 再加效果，就该在 0..50 之间摆，而不是无视刚设的值跳到满。
+        let curve = curve_from_current(&active("Dimmer", "Dimmer", Some(50.0)), Some(&range("Dimmer", 0.0, 100.0)));
+        assert_eq!(curve[0].value, 0.0);
+        assert_eq!(curve[1].value, 50.0);
+    }
+
+    #[test]
+    fn a_curve_built_from_pan_swings_around_the_current_value() {
+        // 量程跨零的属性以现值为中心对称摆动 —— 摇头该绕着当前朝向摆。
+        let curve = curve_from_current(
+            &active("Pan", "Position", Some(0.0)),
+            Some(&range("Pan", -270.0, 270.0)),
+        );
+        assert!(curve[0].value < 0.0);
+        assert!(curve[1].value > 0.0);
+        assert!((curve[0].value + curve[1].value).abs() < 1e-9, "应关于现值对称");
+    }
+
+    #[test]
+    fn a_curve_stays_inside_the_attribute_range() {
+        // 现值贴着上限时，对称摆动不能冲出量程。
+        let curve = curve_from_current(
+            &active("Pan", "Position", Some(270.0)),
+            Some(&range("Pan", -270.0, 270.0)),
+        );
+        assert!(curve.iter().all(|frame| frame.value <= 270.0));
+        assert!(curve.iter().all(|frame| frame.value >= -270.0));
+    }
+
+    #[test]
+    fn a_curve_without_range_information_still_builds() {
+        let curve = curve_from_current(&active("Custom", "Other", Some(80.0)), None);
+        assert_eq!(curve.len(), 2);
+        assert_eq!(curve[1].value, 80.0);
     }
 
     #[test]

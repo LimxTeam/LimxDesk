@@ -83,7 +83,7 @@ const INTERPOLATION_LABELS: Array<{ value: Interpolation; label: string }> = [
   { value: "bezier", label: "贝塞尔" },
 ];
 
-/** 可用属性，由后端按效果所含灯具的 GDTF 定义解析得出。 */
+/** 灯库里存在的属性，用于查量程与补充建轨道。 */
 interface AttributeOption {
   name: string;
   featureGroup: string;
@@ -91,7 +91,21 @@ interface AttributeOption {
   maxValue: number | null;
   defaultValue: number | null;
   valueKind: string;
-  /** 具备该属性的灯具数 */
+  fixtureCount: number;
+  totalFixtures: number;
+}
+
+/**
+ * programmer 里已激活的属性 —— 你已经调过的那些。
+ *
+ * 效果的轨道从这里来：调过什么，效果就驱动什么。让人从灯库的全量清单里
+ * 挑属性是把编程顺序倒过来了。
+ */
+interface ActiveAttribute {
+  attribute: string;
+  featureGroup: string;
+  /** 当前值，作为曲线的基准 */
+  value: number | null;
   fixtureCount: number;
   totalFixtures: number;
 }
@@ -107,6 +121,7 @@ export function KeyframeEditorWindow() {
   const [status, setStatus] = useState("No show loaded");
   const [previewAngle, setPreviewAngle] = useState<number | null>(null);
   const [attributes, setAttributes] = useState<AttributeOption[]>([]);
+  const [activeAttributes, setActiveAttributes] = useState<ActiveAttribute[]>([]);
   const [selection, setSelection] = useState<FixtureSelection>({
     fixtureIds: [],
     primaryFixtureId: null,
@@ -123,6 +138,15 @@ export function KeyframeEditorWindow() {
       document.effects[0] ??
       null,
     [document.effects, document.selectedEffectId],
+  );
+
+  // 灯库里有、但编程器还没碰过的属性。放在次要位置备用。
+  const otherAttributes = useMemo(
+    () =>
+      attributes.filter(
+        (option) => !activeAttributes.some((item) => item.attribute === option.name),
+      ),
+    [attributes, activeAttributes],
   );
 
   const track = useMemo(
@@ -212,6 +236,32 @@ export function KeyframeEditorWindow() {
     };
   }, [selection.fixtureIds.join("|")]);
 
+  // programmer 里已激活的属性。它随每次调值变化，因此跟着
+  // programmer:changed 走。
+  useEffect(() => {
+    let active = true;
+    const refresh = () => {
+      void invoke<ActiveAttribute[]>("programmer_active_attributes")
+        .then((next) => {
+          if (active) setActiveAttributes(next);
+        })
+        .catch(() => {
+          if (active) setActiveAttributes([]);
+        });
+    };
+    refresh();
+
+    let unlisten: (() => void) | null = null;
+    void listen("programmer:changed", refresh).then((fn) => {
+      if (active) unlisten = fn;
+      else fn();
+    });
+    return () => {
+      active = false;
+      unlisten?.();
+    };
+  }, [selection.fixtureIds.join("|")]);
+
   async function load() {
     try {
       const next = await invoke<KeyframeLibraryDocument>("keyframe_load_current_show");
@@ -289,24 +339,56 @@ export function KeyframeEditorWindow() {
     });
   }
 
-  function addTrack(option: AttributeOption) {
+  function addTrack(attribute: string, featureGroup: string) {
     if (!effect) return;
-    if (effect.tracks.some((item) => item.attribute === option.name)) {
-      setSelectedTrackId(effect.tracks.find((item) => item.attribute === option.name)?.id ?? null);
-      setStatus(`${option.name} 已有轨道`);
+    const existing = effect.tracks.find((item) => item.attribute === attribute);
+    if (existing) {
+      setSelectedTrackId(existing.id);
+      setStatus(`${attribute} 已有轨道`);
       return;
     }
     const created: KeyframeTrack = {
       id: crypto.randomUUID(),
-      attribute: option.name,
-      featureGroup: option.featureGroup,
+      attribute,
+      featureGroup,
       layer: "absolute",
       enabled: true,
-      keyframes: sortKeyframes(defaultCurveFor(option)),
+      keyframes: sortKeyframes(curveFor(attribute)),
     };
     applyEffect({ ...effect, tracks: [...effect.tracks, created] });
     setSelectedTrackId(created.id);
     setSelectedKeyframe(null);
+  }
+
+  /**
+   * 以 programmer 现值为基准生成首尾两帧。
+   *
+   * 与后端 curve_from_current 同一套规则：现值当高点，量程低端当低点；
+   * 量程跨零的属性（Pan/Tilt）则绕现值对称摆动。
+   */
+  function curveFor(attribute: string): Keyframe[] {
+    const current = activeAttributes.find((item) => item.attribute === attribute)?.value ?? null;
+    const range = attributes.find((item) => item.name === attribute);
+    const min = range?.minValue ?? null;
+    const max = range?.maxValue ?? null;
+    const base = current ?? (max ?? 100);
+
+    let low = 0;
+    let high = base;
+    if (min !== null && max !== null && min < 0 && max > 0) {
+      const reach = Math.abs((max - min) * 0.25);
+      low = Math.max(min, base - reach);
+      high = Math.min(max, base + reach);
+    } else if (min !== null) {
+      low = min;
+      high = base;
+    }
+
+    const handle = { dx: 1 / 3, dy: 0 };
+    return [
+      { angle: 0, value: round(low), interpolation: "smooth", handleOut: { ...handle }, handleIn: { ...handle } },
+      { angle: 180, value: round(high), interpolation: "smooth", handleOut: { ...handle }, handleIn: { ...handle } },
+    ];
   }
 
   function removeTrack(trackId: string) {
@@ -403,7 +485,11 @@ export function KeyframeEditorWindow() {
           type="button"
           disabled={!effect || selection.fixtureIds.length === 0}
           onClick={() => void applyToSelection()}
-          title="把效果应用到当前选中的灯，进入 programmer；随后按 Store 选插槽存下"
+          title={
+            activeAttributes.length === 0
+              ? "先在编程器里调一个属性"
+              : "把效果应用到当前选中的灯，进入编程器；随后按 Store 选插槽存下"
+          }
         >
           应用 {selection.fixtureIds.length > 0 ? `(${selection.fixtureIds.length})` : ""}
         </button>
@@ -472,40 +558,61 @@ export function KeyframeEditorWindow() {
               {effect.tracks.length === 0 && <div style={emptyHintStyle}>还没有轨道</div>}
             </div>
 
-            <div style={panelHeadStyle}>
-              加轨道{attributes.length > 0 ? ` · ${attributes.length}` : ""}
-            </div>
+            <div style={panelHeadStyle}>编程器里已调的属性</div>
             <div style={attributeListStyle}>
               {selection.fixtureIds.length === 0 && (
-                <div style={emptyHintStyle}>选中灯具后按其灯库定义列出属性</div>
+                <div style={emptyHintStyle}>先选灯</div>
               )}
-              {selection.fixtureIds.length > 0 && attributes.length === 0 && (
-                <div style={emptyHintStyle}>选中的灯具没有可用属性</div>
+              {selection.fixtureIds.length > 0 && activeAttributes.length === 0 && (
+                <div style={emptyHintStyle}>
+                  先在编程器里调一个属性 —— 效果驱动的就是你调过的东西
+                </div>
               )}
-              {attributes.map((option) => {
-                const partial = option.fixtureCount < option.totalFixtures;
+              {activeAttributes.map((item) => {
+                const partial = item.fixtureCount < item.totalFixtures;
                 return (
                   <button
-                    key={option.name}
+                    key={item.attribute}
                     className="lx-btn lx-btn-ghost"
                     type="button"
-                    onClick={() => addTrack(option)}
-                    title={`${option.featureGroup}${
-                      partial ? ` · 仅 ${option.fixtureCount}/${option.totalFixtures} 盏具备` : ""
-                    }`}
-                    style={{
-                      justifyContent: "space-between",
-                      opacity: partial ? 0.65 : 1,
-                    }}
+                    onClick={() => addTrack(item.attribute, item.featureGroup)}
+                    title={`${item.featureGroup} · 现值 ${
+                      item.value === null ? "—" : round(item.value)
+                    }${partial ? ` · 仅 ${item.fixtureCount}/${item.totalFixtures} 盏` : ""}`}
+                    style={{ justifyContent: "space-between" }}
                   >
-                    <span style={ellipsisStyle}>{option.name}</span>
-                    <small className="lx-code" style={{ color: "var(--lx-fg-tertiary)" }}>
-                      {partial ? `${option.fixtureCount}/${option.totalFixtures}` : option.featureGroup}
+                    <span style={ellipsisStyle}>{item.attribute}</span>
+                    <small className="lx-code" style={{ color: "var(--lx-accent-bright)" }}>
+                      {item.value === null ? "—" : round(item.value)}
                     </small>
                   </button>
                 );
               })}
             </div>
+
+            {/* 灯库里还有但编程器没碰过的属性，收在后面备用 */}
+            {otherAttributes.length > 0 && (
+              <>
+                <div style={panelHeadStyle}>灯库其余属性</div>
+                <div style={attributeListStyle}>
+                  {otherAttributes.map((option) => (
+                    <button
+                      key={option.name}
+                      className="lx-btn lx-btn-ghost"
+                      type="button"
+                      onClick={() => addTrack(option.name, option.featureGroup)}
+                      title={option.featureGroup}
+                      style={{ justifyContent: "space-between", opacity: 0.6 }}
+                    >
+                      <span style={ellipsisStyle}>{option.name}</span>
+                      <small className="lx-code" style={{ color: "var(--lx-fg-tertiary)" }}>
+                        {option.featureGroup}
+                      </small>
+                    </button>
+                  ))}
+                </div>
+              </>
+            )}
           </div>
 
           {/* 曲线 + 参数 */}
@@ -574,12 +681,7 @@ export function KeyframeEditorWindow() {
                 disabled={!track}
                 onClick={() =>
                   track &&
-                  updateTrack({
-                    ...track,
-                    keyframes: sortKeyframes(
-                      defaultCurveFor(attributes.find((item) => item.name === track.attribute)),
-                    ),
-                  })
+                  updateTrack({ ...track, keyframes: sortKeyframes(curveFor(track.attribute)) })
                 }
                 title="回到首尾两帧的默认曲线"
               >
@@ -823,24 +925,6 @@ function fract(value: number): number {
   return fractional < 0 ? fractional + 1 : fractional;
 }
 
-/**
- * 按属性的实际量程给出首尾两帧。
- *
- * 量程来自 GDTF：Pan 可能是 -270..270，Dimmer 是 0..100。用固定的 0..100
- * 建曲线，在非百分比属性上一上来就是错的。
- */
-function defaultCurveFor(option?: AttributeOption): Keyframe[] {
-  const min = option?.minValue ?? 0;
-  const max = option?.maxValue ?? 100;
-  const low = Number.isFinite(min) ? min : 0;
-  const high = Number.isFinite(max) && max !== low ? max : low + 100;
-
-  const handle = { dx: 1 / 3, dy: 0 };
-  return [
-    { angle: 0, value: round(low), interpolation: "smooth", handleOut: { ...handle }, handleIn: { ...handle } },
-    { angle: 180, value: round(high), interpolation: "smooth", handleOut: { ...handle }, handleIn: { ...handle } },
-  ];
-}
 
 function clampAngle(angle: number): number {
   if (!Number.isFinite(angle)) return 0;

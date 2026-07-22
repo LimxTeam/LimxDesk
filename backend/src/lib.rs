@@ -94,6 +94,7 @@ pub fn run() {
             fixture_selection::fixture_selection_select,
             fixture_selection::fixture_selection_clear,
             programmer::programmer_get,
+            programmer::programmer_active_attributes,
             programmer::programmer_replace_current,
             programmer::programmer_set_mode,
             programmer::programmer_set_blind,
