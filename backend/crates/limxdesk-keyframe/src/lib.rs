@@ -124,8 +124,16 @@ impl KeyframeEffect {
             if !value.value.is_finite() {
                 continue;
             }
-            self.ensure_track(&value.attribute, &value.feature_group)
-                .capture(angle, value.value);
+            let track = self.ensure_track(&value.attribute, &value.feature_group);
+            // 量程随捕获一起记下：之后编辑要靠它钳值，也靠它决定曲线纵轴。
+            // 已有量程不覆盖 —— 换一批灯不该悄悄改掉既有效果的边界。
+            if track.min_value.is_none() {
+                track.min_value = value.min_value;
+            }
+            if track.max_value.is_none() {
+                track.max_value = value.max_value;
+            }
+            track.capture(angle, value.value);
         }
     }
 }
@@ -253,6 +261,8 @@ mod tests {
                 attribute: attribute.to_string(),
                 feature_group: group.to_string(),
                 value: *value,
+                min_value: None,
+                max_value: None,
             })
             .collect()
     }

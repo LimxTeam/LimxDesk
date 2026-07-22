@@ -114,6 +114,8 @@ mod tests {
                 attribute: "Dimmer".to_string(),
                 feature_group: "Dimmer".to_string(),
                 value: 10.0,
+                min_value: None,
+                max_value: None,
             }],
         );
         let id = effect.id.clone();

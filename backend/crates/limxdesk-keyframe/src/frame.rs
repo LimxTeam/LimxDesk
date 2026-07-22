@@ -64,6 +64,14 @@ pub struct KeyframeTrack {
     pub feature_group: String,
     pub layer: crate::TrackLayer,
     pub enabled: bool,
+    /// 该属性的取值范围，打帧时从灯库读入。
+    ///
+    /// 记在轨道上而不是每次现查：曲线的纵轴、取值的钳制都要用它，而灯库
+    /// 查询依赖当前选择 —— 换一批灯之后仍然要能正确编辑既有的效果。
+    #[serde(default)]
+    pub min_value: Option<f64>,
+    #[serde(default)]
+    pub max_value: Option<f64>,
     pub points: Vec<TrackPoint>,
 }
 
@@ -75,8 +83,28 @@ impl KeyframeTrack {
             feature_group: feature_group.into(),
             layer: crate::TrackLayer::Absolute,
             enabled: true,
+            min_value: None,
+            max_value: None,
             points: Vec::new(),
         }
+    }
+
+    /// 把取值钳进该属性的量程。
+    ///
+    /// 量程未知时原样返回 —— 宁可不限制，也不要拿一个猜出来的范围把
+    /// 用户实际调出来的值截掉。
+    pub fn clamp_value(&self, value: f64) -> f64 {
+        if !value.is_finite() {
+            return self.min_value.unwrap_or(0.0);
+        }
+        let mut clamped = value;
+        if let Some(min) = self.min_value.filter(|min| min.is_finite()) {
+            clamped = clamped.max(min);
+        }
+        if let Some(max) = self.max_value.filter(|max| max.is_finite()) {
+            clamped = clamped.min(max);
+        }
+        clamped
     }
 
     /// 在某个角度记一个值。
@@ -85,6 +113,7 @@ impl KeyframeTrack {
     /// 曲线出现零长度的段。
     pub fn capture(&mut self, angle: f64, value: f64) -> String {
         let angle = normalize_angle(angle);
+        let value = self.clamp_value(value);
         if let Some(existing) = self
             .points
             .iter_mut()
@@ -136,10 +165,27 @@ impl KeyframeTrack {
     }
 
     pub fn sort(&mut self) {
+        // 量程反了就换过来，否则钳制会把所有值挤成一个数。
+        if let (Some(min), Some(max)) = (self.min_value, self.max_value) {
+            if min > max {
+                self.min_value = Some(max);
+                self.max_value = Some(min);
+            }
+        }
+
+        let (min, max) = (self.min_value, self.max_value);
         for point in self.points.iter_mut() {
             point.angle = normalize_angle(point.angle);
             if point.id.trim().is_empty() {
                 point.id = Uuid::new_v4().to_string();
+            }
+            if point.value.is_finite() {
+                if let Some(min) = min.filter(|min| min.is_finite()) {
+                    point.value = point.value.max(min);
+                }
+                if let Some(max) = max.filter(|max| max.is_finite()) {
+                    point.value = point.value.min(max);
+                }
             }
         }
         self.points.retain(|point| point.value.is_finite());
@@ -154,6 +200,11 @@ pub struct FrameValue {
     pub attribute: String,
     pub feature_group: String,
     pub value: f64,
+    /// 该属性的量程，来自灯库。
+    #[serde(default)]
+    pub min_value: Option<f64>,
+    #[serde(default)]
+    pub max_value: Option<f64>,
 }
 
 #[cfg(test)]
@@ -215,6 +266,63 @@ mod tests {
     #[test]
     fn an_empty_track_has_a_zero_centre() {
         assert_eq!(KeyframeTrack::new("Pan", "Position").center(), 0.0);
+    }
+
+    #[test]
+    fn captured_values_are_clamped_to_the_attribute_range() {
+        let mut track = KeyframeTrack::new("Dimmer", "Dimmer");
+        track.min_value = Some(0.0);
+        track.max_value = Some(100.0);
+
+        track.capture(0.0, 150.0);
+        track.capture(180.0, -20.0);
+
+        assert_eq!(track.points[0].value, 100.0);
+        assert_eq!(track.points[1].value, 0.0);
+    }
+
+    #[test]
+    fn sorting_clamps_values_that_arrived_out_of_range() {
+        // 存档里可能带着超范围的值（旧版本、手改过的文件）。
+        let mut track = KeyframeTrack::new("Dimmer", "Dimmer");
+        track.min_value = Some(0.0);
+        track.max_value = Some(100.0);
+        track.points.push(TrackPoint::new(0.0, 102.5));
+        track.sort();
+
+        assert_eq!(track.points[0].value, 100.0);
+    }
+
+    #[test]
+    fn an_unknown_range_leaves_values_alone() {
+        // 量程未知时宁可不限制，也不要拿猜出来的范围截掉用户调出来的值。
+        let mut track = KeyframeTrack::new("Custom", "Other");
+        track.capture(0.0, 9999.0);
+        assert_eq!(track.points[0].value, 9999.0);
+    }
+
+    #[test]
+    fn a_reversed_range_is_corrected_rather_than_collapsing_values() {
+        let mut track = KeyframeTrack::new("Pan", "Position");
+        track.min_value = Some(270.0);
+        track.max_value = Some(-270.0);
+        track.points.push(TrackPoint::new(0.0, 0.0));
+        track.sort();
+
+        assert_eq!(track.min_value, Some(-270.0));
+        assert_eq!(track.max_value, Some(270.0));
+        assert_eq!(track.points[0].value, 0.0);
+    }
+
+    #[test]
+    fn a_one_sided_range_clamps_only_that_side() {
+        let mut track = KeyframeTrack::new("Speed", "Control");
+        track.min_value = Some(0.0);
+        track.capture(0.0, -5.0);
+        track.capture(90.0, 1000.0);
+
+        assert_eq!(track.points[0].value, 0.0);
+        assert_eq!(track.points[1].value, 1000.0);
     }
 
     #[test]

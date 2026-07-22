@@ -606,13 +606,24 @@ pub fn keyframe_capture_frame(
         .find(|effect| effect.id == effect_id)
         .ok_or_else(|| format!("effect not found: {effect_id}"))?;
 
+    // 带上灯库量程：轨道靠它钳住取值，曲线靠它定纵轴。
+    let ranges = collect_attribute_options(&selection.fixture_ids, &show_state)?
+        .into_iter()
+        .map(|option| (option.name.clone(), option))
+        .collect::<BTreeMap<_, _>>();
+
     let values = active
         .iter()
         .filter_map(|entry| {
-            entry.value.filter(|value| value.is_finite()).map(|value| FrameValue {
-                attribute: entry.attribute.clone(),
-                feature_group: entry.feature_group.clone(),
-                value,
+            entry.value.filter(|value| value.is_finite()).map(|value| {
+                let range = ranges.get(&entry.attribute);
+                FrameValue {
+                    attribute: entry.attribute.clone(),
+                    feature_group: entry.feature_group.clone(),
+                    value,
+                    min_value: range.and_then(|option| option.min_value),
+                    max_value: range.and_then(|option| option.max_value),
+                }
             })
         })
         .collect::<Vec<_>>();

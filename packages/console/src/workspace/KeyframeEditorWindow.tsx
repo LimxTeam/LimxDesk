@@ -4,6 +4,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { CurveEditor } from "./keyframe/CurveEditor";
 import {
+  clampToTrack,
   CYCLE_DEGREES,
   sortPoints,
   type Interpolation,
@@ -404,8 +405,8 @@ export function KeyframeEditorWindow() {
       clearWorkspaceRuntimeCache(["frames"]);
       const captured = activeAttributes.map((item) => item.attribute).join(", ");
       setStatus(`已在 ${captureAngle}° 记录：${captured}`);
-      // 打完自动挪到下一个常用落点，连着打不用每次改角度。
-      setCaptureAngle((current) => nextAnglePreset(current));
+      // 角度停在原处。自动跳到下一个落点看着省事，实际是让人在没注意的
+      // 位置又打一帧 —— 打哪个角度该由手指决定。
     } catch (error) {
       setStatus(String(error));
     }
@@ -474,7 +475,12 @@ export function KeyframeEditorWindow() {
     const origin = track.points.find((point) => point.id === pointId);
     if (!origin) return;
 
-    const { value, ...shared } = patch;
+    // 取值钳进本轨道的量程 —— 输入框里敲个超范围的数不该被接受。
+    const patched =
+      patch.value === undefined
+        ? patch
+        : { ...patch, value: clampToTrack(track, patch.value) };
+    const { value, ...shared } = patched;
     const hasShared = Object.keys(shared).length > 0;
     const picked = new Set(selectedTracks.map((item) => item.attribute));
 
@@ -493,12 +499,51 @@ export function KeyframeEditorWindow() {
                 ? point.id === pointId
                 : Math.abs(point.angle - origin.angle) < 0.001;
               if (!matches) return point;
-              return primary ? { ...point, ...patch } : { ...point, ...shared };
+              return primary ? { ...point, ...patched } : { ...point, ...shared };
             }),
           ),
         };
       }),
     });
+  }
+
+  /** 在当前轨道上插一个点。曲线上双击走这里。 */
+  function insertPoint(angle: number, value: number) {
+    if (!effect || !track) return;
+    // 同角度已有点就当作改值，避免叠出零长度的段。
+    const existing = track.points.find((point) => Math.abs(point.angle - angle) < 0.5);
+    if (existing) {
+      patchPoint(existing.id, { value });
+      setSelectedPointId(existing.id);
+      return;
+    }
+
+    const created: TrackPoint = {
+      id: crypto.randomUUID(),
+      angle,
+      value,
+      interpolation: track.points[0]?.interpolation ?? "smooth",
+      handleOut: { dx: 1 / 3, dy: 0 },
+      handleIn: { dx: 1 / 3, dy: 0 },
+    };
+    applyEffect({
+      ...effect,
+      tracks: effect.tracks.map((item) =>
+        item.id === track.id ? { ...item, points: sortPoints([...item.points, created]) } : item,
+      ),
+    });
+    setSelectedPointId(created.id);
+  }
+
+  /** 删掉整条轨道。停用只是不驱动它，删掉才是真的不要了。 */
+  function deleteTrack(trackId: string) {
+    if (!effect) return;
+    const removed = effect.tracks.find((item) => item.id === trackId);
+    applyEffect({ ...effect, tracks: effect.tracks.filter((item) => item.id !== trackId) });
+    if (removed) {
+      setSelectedAttributes((current) => current.filter((name) => name !== removed.attribute));
+    }
+    setSelectedPointId(null);
   }
 
   function toggleTrack(trackId: string) {
@@ -679,20 +724,33 @@ export function KeyframeEditorWindow() {
                               : ""}
                           </strong>
                           <small className="lx-code" style={{ color: "var(--lx-fg-tertiary)" }}>
-                            {item.points.length} 点
+                            {item.points.length} 点{rangeHint(item)}
                           </small>
                         </div>
-                        <button
-                          className="lx-btn lx-btn-ghost"
-                          type="button"
-                          title={item.enabled ? "停用（点保留）" : "启用"}
-                          onClick={(event) => {
-                            event.stopPropagation();
-                            toggleTrack(item.id);
-                          }}
-                        >
-                          {item.enabled ? "On" : "Off"}
-                        </button>
+                        <div style={{ display: "flex", gap: 2 }}>
+                          <button
+                            className="lx-btn lx-btn-ghost"
+                            type="button"
+                            title={item.enabled ? "停用（点保留）" : "启用"}
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              toggleTrack(item.id);
+                            }}
+                          >
+                            {item.enabled ? "On" : "Off"}
+                          </button>
+                          <button
+                            className="lx-btn lx-btn-ghost"
+                            type="button"
+                            title="删掉整条轨道"
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              deleteTrack(item.id);
+                            }}
+                          >
+                            ×
+                          </button>
+                        </div>
                       </div>
                     );
                   })}
@@ -753,6 +811,7 @@ export function KeyframeEditorWindow() {
                   // 左右拖是调相位，选中的轨道一起动；上下拖是改这条轨道
                   // 自己的取值。patchPoint 已经区分了这两者。
                   onMove={(pointId, angle, value) => patchPoint(pointId, { angle, value })}
+                  onInsert={insertPoint}
                   playhead={previewAngle}
                 />
               ) : (
@@ -764,7 +823,9 @@ export function KeyframeEditorWindow() {
 
             {/* 选中帧 */}
             <div style={paramRowStyle}>
-              <span style={labelStyle}>选中点</span>
+              <span style={labelStyle} title="曲线上双击可插入一个点">
+                选中点
+              </span>
               <input
                 className="lx-input lx-input-sm"
                 type="number"
@@ -794,9 +855,11 @@ export function KeyframeEditorWindow() {
                   patchPoint(selectedPoint.id, { value: Number(event.currentTarget.value) })
                 }
                 style={{ width: 84 }}
+                min={track?.minValue ?? undefined}
+                max={track?.maxValue ?? undefined}
                 title={
                   track
-                    ? `${track.attribute} 的取值 —— 只改这一条，各属性的值本就不同`
+                    ? `${track.attribute} 的取值${rangeHint(track)} —— 只改这一条，各属性的值本就不同`
                     : "取值"
                 }
               />
@@ -1100,11 +1163,6 @@ function fract(value: number): number {
   return fractional < 0 ? fractional + 1 : fractional;
 }
 
-/** 打完一帧后挪到下一个常用落点，连着打不用每次改角度。 */
-function nextAnglePreset(current: number): number {
-  return ANGLE_PRESETS.find((angle) => angle > current) ?? ANGLE_PRESETS[0];
-}
-
 function clampAngle(angle: number): number {
   if (!Number.isFinite(angle)) return 0;
   return Math.min(CYCLE_DEGREES - 1, Math.max(0, Math.round(angle)));
@@ -1112,6 +1170,13 @@ function clampAngle(angle: number): number {
 
 function round(value: number): number {
   return Math.round(value * 100) / 100;
+}
+
+/** 量程提示。未知时留空，不要显示一个假的范围。 */
+function rangeHint(track: KeyframeTrack): string {
+  const { minValue, maxValue } = track;
+  if (minValue === null || maxValue === null) return "";
+  return ` · ${round(minValue)}~${round(maxValue)}`;
 }
 
 // ── 样式 ────────────────────────────────────────────────────

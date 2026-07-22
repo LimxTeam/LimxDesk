@@ -41,7 +41,44 @@ export interface KeyframeTrack {
   featureGroup: string;
   layer: "absolute" | "relative";
   enabled: boolean;
+  /** 该属性的取值范围，打帧时从灯库记入。 */
+  minValue: number | null;
+  maxValue: number | null;
   points: TrackPoint[];
+}
+
+/** 把取值钳进轨道的量程。量程未知时原样返回。 */
+export function clampToTrack(track: KeyframeTrack, value: number): number {
+  if (!Number.isFinite(value)) return track.minValue ?? 0;
+  let clamped = value;
+  if (track.minValue !== null && Number.isFinite(track.minValue)) {
+    clamped = Math.max(clamped, track.minValue);
+  }
+  if (track.maxValue !== null && Number.isFinite(track.maxValue)) {
+    clamped = Math.min(clamped, track.maxValue);
+  }
+  return clamped;
+}
+
+/**
+ * 绘图用的纵轴范围。
+ *
+ * 优先用属性自己的量程 —— 亮度就该显示成 0..100，而不是按现有点自动缩放成
+ * 87.5..102.5 那种既看不出位置、又暗示可以超出的样子。量程未知时才回退到
+ * 按数据取范围。
+ */
+export function axisRange(track: KeyframeTrack): { min: number; max: number } {
+  const { minValue, maxValue } = track;
+  if (
+    minValue !== null &&
+    maxValue !== null &&
+    Number.isFinite(minValue) &&
+    Number.isFinite(maxValue) &&
+    maxValue > minValue
+  ) {
+    return { min: minValue, max: maxValue };
+  }
+  return valueRange(track.points);
 }
 
 export const DEFAULT_HANDLE: Handle = { dx: 1 / 3, dy: 0 };

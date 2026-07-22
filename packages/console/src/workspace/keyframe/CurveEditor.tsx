@@ -1,10 +1,11 @@
 import { useCallback, useMemo, useRef } from "react";
 import type { CSSProperties, PointerEvent as ReactPointerEvent } from "react";
 import {
+  axisRange,
+  clampToTrack,
   CYCLE_DEGREES,
   normalizeAngle,
   sample,
-  valueRange,
   type KeyframeTrack,
   type TrackPoint,
 } from "./curve";
@@ -44,6 +45,8 @@ export interface CurveEditorProps {
   onSelect: (pointId: string | null) => void;
   /** 拖动改变某个点的角度与取值。只影响主轨道上的这一个点。 */
   onMove: (pointId: string, angle: number, value: number) => void;
+  /** 在曲线上插入一个点 */
+  onInsert: (angle: number, value: number) => void;
   /** 当前播放角度，没有在跑时为 null */
   playhead: number | null;
 }
@@ -55,6 +58,7 @@ export function CurveEditor({
   selectedPointId,
   onSelect,
   onMove,
+  onInsert,
   playhead,
 }: CurveEditorProps) {
   const svgRef = useRef<SVGSVGElement>(null);
@@ -62,8 +66,12 @@ export function CurveEditor({
 
   const points = useMemo(() => track?.points ?? [], [track]);
 
-  // 纵轴范围取整到"整齐"的边界，这样拖动时坐标轴不会一直跳。
-  const range = useMemo(() => niceRange(valueRange(points)), [points]);
+  // 纵轴优先按属性量程：亮度就是 0..100，不该随手上的点缩放成
+  // 87.5..102.5 那样 —— 那既看不出值在量程里的位置，也暗示能超出。
+  const range = useMemo(
+    () => (track ? axisRange(track) : { min: 0, max: 100 }),
+    [track],
+  );
 
   const toX = useCallback((angle: number) => PAD_LEFT + (angle / CYCLE_DEGREES) * PLOT_WIDTH, []);
   const toY = useCallback(
@@ -105,7 +113,8 @@ export function CurveEditor({
     if (!pointId || !track) return;
     const position = fromClient(event.clientX, event.clientY);
     if (!position) return;
-    onMove(pointId, clampAngle(position.angle), round(position.value));
+    // 拖不出属性的量程 —— 越界的值发出去也是被驱动截掉，不如在这里就挡住。
+    onMove(pointId, clampAngle(position.angle), round(clampToTrack(track, position.value)));
   }
 
   function handlePointerUp(event: ReactPointerEvent<SVGGElement>) {
@@ -132,6 +141,15 @@ export function CurveEditor({
         fill="rgba(0,0,0,0.28)"
         stroke="rgba(255,255,255,0.08)"
         onPointerDown={() => onSelect(null)}
+        // 双击在曲线上插一个点。打帧记录的是编程器里的值，但把已有曲线
+        // 掰出一个中间点是另一回事，不必为此先去调灯。
+        onDoubleClick={(event) => {
+          if (!track) return;
+          const position = fromClient(event.clientX, event.clientY);
+          if (!position) return;
+          onInsert(clampAngle(position.angle), round(clampToTrack(track, position.value)));
+        }}
+        style={{ cursor: track ? "crosshair" : "default" }}
       />
 
       {/* 角度刻度：每 90 度一条 */}
@@ -275,7 +293,7 @@ function buildPath(
  * 其中一条会被压成直线，看不出形状。
  */
 function ghostMapper(track: KeyframeTrack): (value: number) => number {
-  const ghostRange = niceRange(valueRange(track.points));
+  const ghostRange = axisRange(track);
   const span = ghostRange.max - ghostRange.min || 1;
   return (value: number) =>
     PAD_TOP + PLOT_HEIGHT - ((value - ghostRange.min) / span) * PLOT_HEIGHT;
@@ -288,25 +306,6 @@ function clampAngle(angle: number): number {
 
 function round(value: number): number {
   return Math.round(value * 100) / 100;
-}
-
-/** 把范围扩到整齐的边界，减少拖拽时坐标轴的跳动。 */
-function niceRange({ min, max }: { min: number; max: number }): { min: number; max: number } {
-  const span = max - min;
-  const step = niceStep(span);
-  return {
-    min: Math.floor(min / step) * step,
-    max: Math.ceil(max / step) * step,
-  };
-}
-
-function niceStep(span: number): number {
-  if (!Number.isFinite(span) || span <= 0) return 25;
-  const magnitude = 10 ** Math.floor(Math.log10(span));
-  const normalized = span / magnitude;
-  if (normalized < 2) return magnitude / 4;
-  if (normalized < 5) return magnitude / 2;
-  return magnitude;
 }
 
 function formatValue(value: number): string {
