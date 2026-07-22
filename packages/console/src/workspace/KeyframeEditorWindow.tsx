@@ -5,10 +5,10 @@ import { listen } from "@tauri-apps/api/event";
 import { CurveEditor } from "./keyframe/CurveEditor";
 import {
   CYCLE_DEGREES,
-  frameValue,
-  sortFrames,
+  sortPoints,
   type Interpolation,
-  type Keyframe,
+  type KeyframeTrack,
+  type TrackPoint,
 } from "./keyframe/curve";
 import { clearWorkspaceRuntimeCache } from "./workspaceRuntime";
 
@@ -20,9 +20,9 @@ import { clearWorkspaceRuntimeCache } from "./workspaceRuntime";
  * 跑到蓝，就调成红打一帧、调成蓝打一帧 —— 没有任何东西替你决定跑什么，
  * 那是预制效果的事。
  *
- * 一帧横跨所有属性：颜色是 R/G/B 三个值同时成立的一件事，位置是 Pan/Tilt
- * 一起构成的一个朝向，拆开记就不成其为颜色或朝向了。图上一次看一个属性的
- * 曲线，其余属性以淡色作参考。
+ * 打帧是跨属性的一次动作 —— 颜色是 R/G/B 同时成立的一件事，必须一起记。
+ * 但记下之后每个属性有自己独立的轨道：亮度可以只用两个点、颜色用四个，
+ * 挪动亮度的点不会连带拖走颜色。图上一次编辑一条轨道，其余以淡色作参考。
  *
  * 模板不含灯具。选灯之后点「应用」，效果落到编程器的效果层上；随后按 Store
  * 选一个插槽，它跟编程器里的其他内容一起进 cue。
@@ -31,7 +31,6 @@ import { clearWorkspaceRuntimeCache } from "./workspaceRuntime";
 // ── 契约类型（对应 limxdesk-keyframe） ──────────────────────
 
 type PlaybackKind = "loop" | "pingPong" | "reverse" | "once" | "repeat";
-type TrackLayer = "absolute" | "relative";
 
 interface PlaybackMode {
   kind: PlaybackKind;
@@ -46,14 +45,6 @@ interface PhaseSpread {
   reverse: boolean;
 }
 
-/** 参与效果的属性。停用只是不再驱动它，帧里的值仍然保留。 */
-interface EffectAttribute {
-  attribute: string;
-  featureGroup: string;
-  layer: TrackLayer;
-  enabled: boolean;
-}
-
 interface KeyframeEffect {
   id: string;
   number: number;
@@ -61,8 +52,7 @@ interface KeyframeEffect {
   cycleMs: number;
   playback: PlaybackMode;
   phase: PhaseSpread;
-  attributes: EffectAttribute[];
-  frames: Keyframe[];
+  tracks: KeyframeTrack[];
   updatedAtMs: number;
 }
 
@@ -112,7 +102,7 @@ export function KeyframeEditorWindow() {
     version: 0,
   });
   const [selectedAttribute, setSelectedAttribute] = useState<string | null>(null);
-  const [selectedFrameId, setSelectedFrameId] = useState<string | null>(null);
+  const [selectedPointId, setSelectedPointId] = useState<string | null>(null);
   const [captureAngle, setCaptureAngle] = useState(0);
   const [status, setStatus] = useState("No show loaded");
   const [previewAngle, setPreviewAngle] = useState<number | null>(null);
@@ -135,26 +125,22 @@ export function KeyframeEditorWindow() {
     [document.effects, document.selectedEffectId],
   );
 
-  const attribute = useMemo(() => {
-    const list = effect?.attributes ?? [];
-    return (
-      list.find((item) => item.attribute === selectedAttribute)?.attribute ??
-      list[0]?.attribute ??
-      null
-    );
+  const track = useMemo(() => {
+    const list = effect?.tracks ?? [];
+    return list.find((item) => item.attribute === selectedAttribute) ?? list[0] ?? null;
   }, [effect, selectedAttribute]);
 
-  const ghostAttributes = useMemo(
+  const ghostTracks = useMemo(
     () =>
-      (effect?.attributes ?? [])
-        .filter((item) => item.enabled && item.attribute !== attribute)
-        .map((item) => item.attribute),
-    [effect, attribute],
+      (effect?.tracks ?? []).filter(
+        (item) => item.enabled && item.attribute !== track?.attribute && item.points.length > 0,
+      ),
+    [effect, track],
   );
 
-  const selectedFrame = useMemo(
-    () => effect?.frames.find((frame) => frame.id === selectedFrameId) ?? null,
-    [effect, selectedFrameId],
+  const selectedPoint = useMemo(
+    () => track?.points.find((point) => point.id === selectedPointId) ?? null,
+    [track, selectedPointId],
   );
 
   useEffect(() => {
@@ -292,7 +278,7 @@ export function KeyframeEditorWindow() {
     try {
       flushPendingSave();
       setDocument(await invoke<KeyframeLibraryDocument>(command, args));
-      setSelectedFrameId(null);
+      setSelectedPointId(null);
     } catch (error) {
       setStatus(String(error));
     }
@@ -314,7 +300,7 @@ export function KeyframeEditorWindow() {
       setDocument(next);
       clearWorkspaceRuntimeCache(["frames"]);
       const captured = activeAttributes.map((item) => item.attribute).join(", ");
-      setStatus(`已在 ${captureAngle}° 打帧：${captured}`);
+      setStatus(`已在 ${captureAngle}° 记录：${captured}`);
       // 打完自动挪到下一个常用落点，连着打不用每次改角度。
       setCaptureAngle((current) => nextAnglePreset(current));
     } catch (error) {
@@ -322,17 +308,19 @@ export function KeyframeEditorWindow() {
     }
   }
 
-  async function removeFrame(frameId: string) {
-    if (!effect) return;
+  /** 删掉当前轨道上的一个点。只影响这一个属性。 */
+  async function removePoint(pointId: string) {
+    if (!effect || !track) return;
     flushPendingSave();
     try {
       setDocument(
-        await invoke<KeyframeLibraryDocument>("keyframe_remove_frame", {
+        await invoke<KeyframeLibraryDocument>("keyframe_remove_point", {
           effectId: effect.id,
-          frameId,
+          attribute: track.attribute,
+          pointId,
         }),
       );
-      setSelectedFrameId(null);
+      setSelectedPointId(null);
       clearWorkspaceRuntimeCache(["frames"]);
     } catch (error) {
       setStatus(String(error));
@@ -350,42 +338,36 @@ export function KeyframeEditorWindow() {
     }
   }
 
-  /** 拖动图上的点：改这一帧的角度，以及它在当前属性上的取值。 */
-  function moveFrame(frameId: string, angle: number, value: number) {
-    if (!effect || !attribute) return;
-    const frames = effect.frames.map((frame) => {
-      if (frame.id !== frameId) return frame;
-      const values = frame.values.some((item) => item.attribute === attribute)
-        ? frame.values.map((item) =>
-            item.attribute === attribute ? { ...item, value } : item,
-          )
-        : [...frame.values, { attribute, value }];
-      return { ...frame, angle, values };
-    });
-    applyEffect({ ...effect, frames: sortFrames(frames) });
-  }
-
-  function patchFrame(frameId: string, patch: Partial<Keyframe>) {
-    if (!effect) return;
+  /**
+   * 改当前轨道上的一个点。
+   *
+   * 只动这一条轨道 —— 其他属性的时间分布与之无关，不该被牵动。
+   */
+  function patchPoint(pointId: string, patch: Partial<TrackPoint>) {
+    if (!effect || !track) return;
     applyEffect({
       ...effect,
-      frames: sortFrames(
-        effect.frames.map((frame) => (frame.id === frameId ? { ...frame, ...patch } : frame)),
+      tracks: effect.tracks.map((item) =>
+        item.id === track.id
+          ? {
+              ...item,
+              points: sortPoints(
+                item.points.map((point) =>
+                  point.id === pointId ? { ...point, ...patch } : point,
+                ),
+              ),
+            }
+          : item,
       ),
     });
   }
 
-  function setFrameValue(frameId: string, value: number) {
-    if (!effect || !attribute) return;
-    moveFrame(frameId, effect.frames.find((frame) => frame.id === frameId)?.angle ?? 0, value);
-  }
-
-  function toggleAttribute(name: string) {
+  function toggleTrack(trackId: string) {
     if (!effect) return;
     applyEffect({
       ...effect,
-      attributes: effect.attributes.map((item) =>
-        item.attribute === name ? { ...item, enabled: !item.enabled } : item,
+      tracks: effect.tracks.map((item) =>
+        item.id === trackId ? { ...item, enabled: !item.enabled } : item,
       ),
     });
   }
@@ -514,72 +496,78 @@ export function KeyframeEditorWindow() {
               </small>
             </div>
 
-            <div style={panelHeadStyle}>帧 · {effect.frames.length}</div>
+            <div style={panelHeadStyle}>轨道</div>
             <div style={listStyle}>
-              {effect.frames.length === 0 && (
-                <div style={emptyHintStyle}>一帧都还没打</div>
+              {effect.tracks.length === 0 && (
+                <div style={emptyHintStyle}>打帧后轨道会自动建立</div>
               )}
-              {effect.frames.map((frame) => (
+              {effect.tracks.map((item) => (
                 <div
-                  key={frame.id}
-                  onClick={() => setSelectedFrameId(frame.id)}
-                  style={{
-                    ...rowStyle,
-                    borderColor:
-                      frame.id === selectedFrameId
-                        ? "var(--lx-accent-bright)"
-                        : "rgba(255,255,255,0.08)",
+                  key={item.id}
+                  onClick={() => {
+                    setSelectedAttribute(item.attribute);
+                    setSelectedPointId(null);
                   }}
-                >
-                  <div style={{ display: "grid", gap: 1, minWidth: 0 }}>
-                    <strong className="lx-code">{round(frame.angle)}°</strong>
-                    <small style={ellipsisStyle} title={frame.values.map((v) => v.attribute).join(", ")}>
-                      {frame.values.length} 个属性
-                    </small>
-                  </div>
-                  <button
-                    className="lx-btn lx-btn-ghost"
-                    type="button"
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      void removeFrame(frame.id);
-                    }}
-                  >
-                    ×
-                  </button>
-                </div>
-              ))}
-            </div>
-
-            <div style={panelHeadStyle}>属性</div>
-            <div style={listStyle}>
-              {effect.attributes.length === 0 && (
-                <div style={emptyHintStyle}>打帧后属性会自动登记</div>
-              )}
-              {effect.attributes.map((item) => (
-                <div
-                  key={item.attribute}
-                  onClick={() => setSelectedAttribute(item.attribute)}
                   style={{
                     ...rowStyle,
                     borderColor:
-                      item.attribute === attribute
+                      item.attribute === track?.attribute
                         ? "var(--lx-accent-bright)"
                         : "rgba(255,255,255,0.08)",
                     opacity: item.enabled ? 1 : 0.45,
                   }}
                 >
-                  <span style={ellipsisStyle}>{item.attribute}</span>
+                  <div style={{ display: "grid", gap: 1, minWidth: 0 }}>
+                    <strong style={ellipsisStyle}>{item.attribute}</strong>
+                    <small className="lx-code" style={{ color: "var(--lx-fg-tertiary)" }}>
+                      {item.points.length} 点
+                    </small>
+                  </div>
                   <button
                     className="lx-btn lx-btn-ghost"
                     type="button"
-                    title={item.enabled ? "停用（帧里的值保留）" : "启用"}
+                    title={item.enabled ? "停用（点保留）" : "启用"}
                     onClick={(event) => {
                       event.stopPropagation();
-                      toggleAttribute(item.attribute);
+                      toggleTrack(item.id);
                     }}
                   >
                     {item.enabled ? "On" : "Off"}
+                  </button>
+                </div>
+              ))}
+            </div>
+
+            <div style={panelHeadStyle}>
+              {track ? `${track.attribute} · ${track.points.length} 点` : "关键点"}
+            </div>
+            <div style={listStyle}>
+              {!track && <div style={emptyHintStyle}>先选一条轨道</div>}
+              {track?.points.length === 0 && <div style={emptyHintStyle}>这条轨道还没有点</div>}
+              {track?.points.map((point) => (
+                <div
+                  key={point.id}
+                  onClick={() => setSelectedPointId(point.id)}
+                  style={{
+                    ...rowStyle,
+                    borderColor:
+                      point.id === selectedPointId
+                        ? "var(--lx-accent-bright)"
+                        : "rgba(255,255,255,0.08)",
+                  }}
+                >
+                  <span className="lx-code" style={ellipsisStyle}>
+                    {round(point.angle)}° · {round(point.value)}
+                  </span>
+                  <button
+                    className="lx-btn lx-btn-ghost"
+                    type="button"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      void removePoint(point.id);
+                    }}
+                  >
+                    ×
                   </button>
                 </div>
               ))}
@@ -589,68 +577,64 @@ export function KeyframeEditorWindow() {
           {/* 右栏：曲线 + 参数 */}
           <div style={curveColumnStyle}>
             <div style={curveBoxStyle}>
-              {effect.frames.length > 0 && attribute ? (
+              {track && track.points.length > 0 ? (
                 <CurveEditor
-                  frames={effect.frames}
-                  attribute={attribute}
-                  ghostAttributes={ghostAttributes}
-                  selectedFrameId={selectedFrameId}
-                  onSelect={setSelectedFrameId}
-                  onMove={moveFrame}
+                  track={track}
+                  ghostTracks={ghostTracks}
+                  selectedPointId={selectedPointId}
+                  onSelect={setSelectedPointId}
+                  onMove={(pointId, angle, value) => patchPoint(pointId, { angle, value })}
                   playhead={previewAngle}
                 />
               ) : (
                 <div style={emptyHintStyle}>
-                  把灯调成想要的样子，按「打帧」记下第一帧
+                  把灯调成想要的样子，按「打帧」记下第一个点
                 </div>
               )}
             </div>
 
             {/* 选中帧 */}
             <div style={paramRowStyle}>
-              <span style={labelStyle}>选中帧</span>
+              <span style={labelStyle}>选中点</span>
               <input
                 className="lx-input lx-input-sm"
                 type="number"
-                value={selectedFrame ? round(selectedFrame.angle) : ""}
-                disabled={!selectedFrame}
+                value={selectedPoint ? round(selectedPoint.angle) : ""}
+                disabled={!selectedPoint}
                 onChange={(event) =>
-                  selectedFrame &&
-                  patchFrame(selectedFrame.id, {
+                  selectedPoint &&
+                  patchPoint(selectedPoint.id, {
                     angle: clampAngle(Number(event.currentTarget.value)),
                   })
                 }
                 style={{ width: 70 }}
-                title="角度"
+                title="角度 —— 只影响当前轨道"
               />
               <span style={unitStyle}>°</span>
               <input
                 className="lx-input lx-input-sm"
                 type="number"
-                value={
-                  selectedFrame && attribute
-                    ? (frameValue(selectedFrame, attribute) ?? "")
-                    : ""
-                }
-                disabled={!selectedFrame || !attribute}
+                value={selectedPoint ? round(selectedPoint.value) : ""}
+                disabled={!selectedPoint}
                 onChange={(event) =>
-                  selectedFrame && setFrameValue(selectedFrame.id, Number(event.currentTarget.value))
+                  selectedPoint &&
+                  patchPoint(selectedPoint.id, { value: Number(event.currentTarget.value) })
                 }
                 style={{ width: 84 }}
-                title={attribute ? `${attribute} 的取值` : "取值"}
+                title={track ? `${track.attribute} 的取值` : "取值"}
               />
               <select
                 className="lx-input lx-input-sm"
-                value={selectedFrame?.interpolation ?? "smooth"}
-                disabled={!selectedFrame}
+                value={selectedPoint?.interpolation ?? "smooth"}
+                disabled={!selectedPoint}
                 onChange={(event) =>
-                  selectedFrame &&
-                  patchFrame(selectedFrame.id, {
+                  selectedPoint &&
+                  patchPoint(selectedPoint.id, {
                     interpolation: event.currentTarget.value as Interpolation,
                   })
                 }
                 style={{ width: 88 }}
-                title="到下一帧的过渡方式"
+                title="到下一个点的过渡方式"
               >
                 {INTERPOLATION_LABELS.map((item) => (
                   <option key={item.value} value={item.value}>
@@ -661,24 +645,24 @@ export function KeyframeEditorWindow() {
               <button
                 className="lx-btn lx-btn-ghost"
                 type="button"
-                disabled={!selectedFrame}
-                onClick={() => selectedFrame && void removeFrame(selectedFrame.id)}
+                disabled={!selectedPoint}
+                onClick={() => selectedPoint && void removePoint(selectedPoint.id)}
               >
-                删除帧
+                删除点
               </button>
               <div style={{ flex: 1 }} />
               <button
                 className="lx-btn lx-btn-ghost"
                 type="button"
-                disabled={!selectedFrame || !canCapture}
+                disabled={!selectedPoint || !canCapture}
                 onClick={() => {
-                  if (!selectedFrame) return;
-                  setCaptureAngle(selectedFrame.angle);
+                  if (!selectedPoint) return;
+                  setCaptureAngle(selectedPoint.angle);
                   void captureFrame();
                 }}
-                title="用编程器里此刻的值覆盖这一帧"
+                title="用编程器里此刻的值在这个角度重录"
               >
-                重录此帧
+                重录
               </button>
             </div>
 
@@ -822,7 +806,7 @@ export function KeyframeEditorWindow() {
         <span>{status}</span>
         <span>
           {effect
-            ? `${effect.frames.length} 帧 · 一圈 ${CYCLE_DEGREES}° / ${Math.round(effect.cycleMs)}ms`
+            ? `${effect.tracks.length} 轨道 · 一圈 ${CYCLE_DEGREES}° / ${Math.round(effect.cycleMs)}ms`
             : ""}
         </span>
       </div>

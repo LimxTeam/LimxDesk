@@ -2,12 +2,11 @@ import { useCallback, useMemo, useRef } from "react";
 import type { CSSProperties, PointerEvent as ReactPointerEvent } from "react";
 import {
   CYCLE_DEGREES,
-  curveFor,
-  frameValue,
   normalizeAngle,
   sample,
   valueRange,
-  type Keyframe,
+  type KeyframeTrack,
+  type TrackPoint,
 } from "./curve";
 
 /**
@@ -16,9 +15,8 @@ import {
  * 横轴是一个完整周期的 0..360 度，纵轴是所选属性的值。曲线闭环 ——
  * 末帧接回首帧。
  *
- * 一帧横跨多个属性，所以图上一个点代表的是"这一帧在当前所选属性上的取值"。
- * 拖动它只改这一个属性的值，帧里其他属性不受影响；左右拖则移动整帧的角度，
- * 因为角度是整帧共有的。
+ * 每个属性一条独立的轨道，图上显示当前所选轨道的点。拖动一个点只影响这条
+ * 轨道 —— 挪亮度的点不会连带拖走颜色，两者的时间分布本来就该各自成立。
  */
 
 /** 内部坐标系。SVG 用 viewBox 缩放到实际尺寸，交互换算只需按比例。 */
@@ -36,24 +34,22 @@ const PLOT_HEIGHT = VIEW_HEIGHT - PAD_TOP - PAD_BOTTOM;
 const SAMPLE_STEP = 2;
 
 export interface CurveEditorProps {
-  frames: Keyframe[];
-  /** 当前在图上显示的属性 */
-  attribute: string | null;
-  /** 其余属性的曲线，淡色作为参考 */
-  ghostAttributes: string[];
-  selectedFrameId: string | null;
-  onSelect: (frameId: string | null) => void;
-  /** 拖动改变某帧的角度与当前属性上的取值 */
-  onMove: (frameId: string, angle: number, value: number) => void;
+  /** 当前在图上编辑的轨道 */
+  track: KeyframeTrack | null;
+  /** 其余轨道，淡色作为参考 */
+  ghostTracks: KeyframeTrack[];
+  selectedPointId: string | null;
+  onSelect: (pointId: string | null) => void;
+  /** 拖动改变某个点的角度与取值。只影响当前轨道。 */
+  onMove: (pointId: string, angle: number, value: number) => void;
   /** 当前播放角度，没有在跑时为 null */
   playhead: number | null;
 }
 
 export function CurveEditor({
-  frames,
-  attribute,
-  ghostAttributes,
-  selectedFrameId,
+  track,
+  ghostTracks,
+  selectedPointId,
   onSelect,
   onMove,
   playhead,
@@ -61,10 +57,7 @@ export function CurveEditor({
   const svgRef = useRef<SVGSVGElement>(null);
   const draggingRef = useRef<string | null>(null);
 
-  const points = useMemo(
-    () => (attribute ? curveFor(frames, attribute) : []),
-    [frames, attribute],
-  );
+  const points = useMemo(() => track?.points ?? [], [track]);
 
   // 纵轴范围取整到"整齐"的边界，这样拖动时坐标轴不会一直跳。
   const range = useMemo(() => niceRange(valueRange(points)), [points]);
@@ -97,19 +90,19 @@ export function CurveEditor({
 
   const path = useMemo(() => buildPath(points, toX, toY), [points, toX, toY]);
 
-  function handlePointerDown(event: ReactPointerEvent<SVGGElement>, frameId: string) {
+  function handlePointerDown(event: ReactPointerEvent<SVGGElement>, pointId: string) {
     event.stopPropagation();
-    onSelect(frameId);
-    draggingRef.current = frameId;
+    onSelect(pointId);
+    draggingRef.current = pointId;
     event.currentTarget.setPointerCapture(event.pointerId);
   }
 
   function handlePointerMove(event: ReactPointerEvent<SVGGElement>) {
-    const frameId = draggingRef.current;
-    if (!frameId || !attribute) return;
-    const point = fromClient(event.clientX, event.clientY);
-    if (!point) return;
-    onMove(frameId, clampAngle(point.angle), round(point.value));
+    const pointId = draggingRef.current;
+    if (!pointId || !track) return;
+    const position = fromClient(event.clientX, event.clientY);
+    if (!position) return;
+    onMove(pointId, clampAngle(position.angle), round(position.value));
   }
 
   function handlePointerUp(event: ReactPointerEvent<SVGGElement>) {
@@ -186,12 +179,11 @@ export function CurveEditor({
         </g>
       ))}
 
-      {/* 其余属性的曲线，淡色参考 —— 一帧里的属性是一起动的，
-          只看一条容易忘了别的属性也在跑 */}
-      {ghostAttributes.map((ghost) => (
+      {/* 其余轨道的曲线，淡色参考 —— 它们同时在跑，只看一条容易忘了别的 */}
+      {ghostTracks.map((ghost) => (
         <path
-          key={`ghost-${ghost}`}
-          d={buildPath(curveFor(frames, ghost), toX, toYGhost(frames, ghost, toY, range))}
+          key={`ghost-${ghost.attribute}`}
+          d={buildPath(ghost.points, toX, ghostMapper(ghost))}
           fill="none"
           stroke="rgba(255,255,255,0.14)"
           strokeWidth={1}
@@ -215,29 +207,23 @@ export function CurveEditor({
         />
       )}
 
-      {/* 帧点 */}
-      {frames.map((frame) => {
-        const value = attribute ? frameValue(frame, attribute) : null;
-        const selected = frame.id === selectedFrameId;
-        // 该帧没记录当前属性时，画在轴底并标成空心 —— 让人看得出
-        // "这一帧存在，但没有这个属性的值"。
-        const missing = value === null;
-        const y = missing ? PAD_TOP + PLOT_HEIGHT : toY(value);
+      {/* 当前轨道的关键点 */}
+      {points.map((point) => {
+        const selected = point.id === selectedPointId;
         return (
           <g
-            key={frame.id}
-            onPointerDown={(event) => handlePointerDown(event, frame.id)}
+            key={point.id}
+            onPointerDown={(event) => handlePointerDown(event, point.id)}
             style={{ cursor: "grab" }}
           >
-            <circle cx={toX(frame.angle)} cy={y} r={11} fill="transparent" />
+            <circle cx={toX(point.angle)} cy={toY(point.value)} r={11} fill="transparent" />
             <circle
-              cx={toX(frame.angle)}
-              cy={y}
+              cx={toX(point.angle)}
+              cy={toY(point.value)}
               r={selected ? 6 : 4.5}
-              fill={missing ? "transparent" : selected ? "var(--lx-accent-bright)" : "var(--lx-bg-deep)"}
-              stroke={missing ? "var(--lx-fg-tertiary)" : "var(--lx-accent-bright)"}
+              fill={selected ? "var(--lx-accent-bright)" : "var(--lx-bg-deep)"}
+              stroke="var(--lx-accent-bright)"
               strokeWidth={2}
-              strokeDasharray={missing ? "2 2" : undefined}
               pointerEvents="none"
             />
           </g>
@@ -249,7 +235,7 @@ export function CurveEditor({
 
 /** 采样出曲线路径。整圈闭合，所以采到 360 度为止。 */
 function buildPath(
-  points: ReturnType<typeof curveFor>,
+  points: TrackPoint[],
   toX: (angle: number) => number,
   toY: (value: number) => number,
 ): string {
@@ -273,13 +259,8 @@ function buildPath(
  * 不同属性量纲差得远（Dimmer 0..100、Pan -270..270），共用一根纵轴的话
  * 其中一条会被压成直线，看不出形状。
  */
-function toYGhost(
-  frames: Keyframe[],
-  attribute: string,
-  _toY: (value: number) => number,
-  _range: { min: number; max: number },
-): (value: number) => number {
-  const ghostRange = niceRange(valueRange(curveFor(frames, attribute)));
+function ghostMapper(track: KeyframeTrack): (value: number) => number {
+  const ghostRange = niceRange(valueRange(track.points));
   const span = ghostRange.max - ghostRange.min || 1;
   return (value: number) =>
     PAD_TOP + PLOT_HEIGHT - ((value - ghostRange.min) / span) * PLOT_HEIGHT;

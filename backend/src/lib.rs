@@ -163,7 +163,7 @@ pub fn run() {
             keyframe::keyframe_available_attributes,
             keyframe::keyframe_apply_to_selection,
             keyframe::keyframe_capture_frame,
-            keyframe::keyframe_remove_frame,
+            keyframe::keyframe_remove_point,
             keyframe::keyframe_update_applied,
             keyframe::keyframe_remove_applied,
         ])

@@ -505,14 +505,21 @@ pub fn keyframe_duplicate_effect(
     copy.cycle_ms = source.cycle_ms;
     copy.playback = source.playback;
     copy.phase = source.phase;
-    copy.attributes = source.attributes.clone();
-    // 帧要换新 id，否则两个效果的帧会共用标识。
-    copy.frames = source
-        .frames
+    // 轨道与点都要换新 id，否则两个效果会共用标识。
+    copy.tracks = source
+        .tracks
         .iter()
-        .map(|frame| limxdesk_keyframe::Keyframe {
+        .map(|track| limxdesk_keyframe::KeyframeTrack {
             id: uuid_string(),
-            ..frame.clone()
+            points: track
+                .points
+                .iter()
+                .map(|point| limxdesk_keyframe::TrackPoint {
+                    id: uuid_string(),
+                    ..point.clone()
+                })
+                .collect(),
+            ..track.clone()
         })
         .collect();
 
@@ -602,11 +609,10 @@ pub fn keyframe_capture_frame(
     let values = active
         .iter()
         .filter_map(|entry| {
-            entry.value.filter(|value| value.is_finite()).map(|value| {
-                FrameValue {
-                    attribute: entry.attribute.clone(),
-                    value,
-                }
+            entry.value.filter(|value| value.is_finite()).map(|value| FrameValue {
+                attribute: entry.attribute.clone(),
+                feature_group: entry.feature_group.clone(),
+                value,
             })
         })
         .collect::<Vec<_>>();
@@ -614,21 +620,23 @@ pub fn keyframe_capture_frame(
         return Err("The active attributes have no numeric value to capture.".to_string());
     }
 
-    for entry in &active {
-        effect.ensure_attribute(&entry.attribute, &entry.feature_group);
-    }
-    effect.capture_frame(angle, values);
+    // 一次捕获，值分别落进各属性自己的轨道 —— 之后调整任一属性的时间
+    // 分布都不会牵动其他属性。
+    effect.capture(angle, &values);
     effect.updated_at_ms = now_ms()?;
 
     document.version = document.version.saturating_add(1);
     save(&document, &show_state, &keyframe_state, &engine_state, &app)
 }
 
-/// 删掉一帧。
+/// 删掉某条轨道上的一个关键点。
+///
+/// 点属于单个属性，删它不影响其他属性在同一角度上的点。
 #[tauri::command]
-pub fn keyframe_remove_frame(
+pub fn keyframe_remove_point(
     effect_id: String,
-    frame_id: String,
+    attribute: String,
+    point_id: String,
     show_state: State<'_, ShowRuntimeState>,
     keyframe_state: State<'_, KeyframeState>,
     engine_state: State<'_, EngineState>,
@@ -640,7 +648,9 @@ pub fn keyframe_remove_frame(
         .iter_mut()
         .find(|effect| effect.id == effect_id)
         .ok_or_else(|| format!("effect not found: {effect_id}"))?;
-    effect.remove_frame(&frame_id);
+    if let Some(track) = effect.track_mut(&attribute) {
+        track.remove_point(&point_id);
+    }
     effect.updated_at_ms = now_ms()?;
 
     document.version = document.version.saturating_add(1);

@@ -6,12 +6,12 @@
 // 再打一帧，效果就在红蓝之间跑；位置同理，打两个朝向就在两者之间扫。
 // 这里不替用户决定跑什么 —— 那是预制效果的事。
 //
-// 一帧横跨所有属性，而不是每个属性各有一套帧：颜色是 R/G/B 三个属性、
-// 位置是 Pan/Tilt 两个，它们必须在同一时刻一起被捕获，否则"红色"会散成
-// 三条互不相干的曲线，没法作为一个颜色来编辑。
+// 捕获是跨属性的一次动作（红色是 R/G/B 同时成立），但每个属性各有一条
+// 独立的轨道：亮度可以只用两个点、颜色用四个，挪动亮度的点不会连带
+// 拖走颜色。
 //
-//   frame     关键帧与属性登记
-//   curve     两帧之间怎么过渡
+//   frame     轨道与关键点
+//   curve     两点之间怎么过渡
 //   playback  时间 → 周期角度（循环 / 反弹 / 倒放 / 单次 / 定次）
 //   phase     一组灯之间怎么错开
 //   library   可复用的效果集合
@@ -26,9 +26,7 @@ pub mod phase;
 pub mod playback;
 
 pub use curve::{normalize_angle, sample_points, CurvePoint, Handle, Interpolation, CYCLE_DEGREES};
-pub use frame::{
-    attribute_track, attributes_in, sort_frames, EffectAttribute, FrameValue, Keyframe,
-};
+pub use frame::{FrameValue, KeyframeTrack, TrackPoint};
 pub use library::{KeyframeLibrary, KeyframeLibraryDocument};
 pub use phase::PhaseSpread;
 pub use playback::{CyclePosition, PlaybackMode};
@@ -37,14 +35,14 @@ use limxdesk_effect::EffectOverrides;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-/// 属性产出的值怎么进入合成。
+/// 轨道产出的值怎么进入合成。
 #[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub enum TrackLayer {
-    /// 帧里记录的值就是最终值。
+    /// 记录的值就是最终值。
     #[default]
     Absolute,
-    /// 帧里记录的值是相对基准的偏移，叠加在回放之上。
+    /// 记录的值是相对基准的偏移，叠加在回放之上。
     Relative,
 }
 
@@ -62,10 +60,8 @@ pub struct KeyframeEffect {
     pub cycle_ms: f64,
     pub playback: PlaybackMode,
     pub phase: PhaseSpread,
-    /// 参与效果的属性登记表。
-    pub attributes: Vec<EffectAttribute>,
-    /// 关键帧，按角度排序。
-    pub frames: Vec<Keyframe>,
+    /// 每个属性一条轨道，各自拥有独立的时间分布。
+    pub tracks: Vec<KeyframeTrack>,
     pub updated_at_ms: u64,
 }
 
@@ -83,8 +79,7 @@ impl KeyframeEffect {
             cycle_ms: 2000.0,
             playback: PlaybackMode::Loop,
             phase: PhaseSpread::default(),
-            attributes: Vec::new(),
-            frames: Vec::new(),
+            tracks: Vec::new(),
             updated_at_ms: now_ms,
         }
     }
@@ -94,81 +89,43 @@ impl KeyframeEffect {
         self.playback.is_endless() && self.has_output()
     }
 
-    /// 是否有可产出的内容。一帧也没打过的效果不该出光。
+    /// 是否有可产出的内容。一个点也没打过的效果不该出光。
     pub fn has_output(&self) -> bool {
-        !self.frames.is_empty() && self.attributes.iter().any(|item| item.enabled)
-    }
-
-    /// 登记一个属性，已存在则沿用原设置。
-    pub fn ensure_attribute(&mut self, attribute: &str, feature_group: &str) {
-        if !self
-            .attributes
+        self.tracks
             .iter()
-            .any(|item| item.attribute == attribute)
-        {
-            self.attributes
-                .push(EffectAttribute::new(attribute, feature_group));
-        }
+            .any(|track| track.enabled && !track.points.is_empty())
     }
 
-    /// 打一帧：把给定的一组属性值记在某个角度上。
-    ///
-    /// 同一角度上已有帧就并入它，而不是叠一帧在同一位置 —— 两帧重合会让
-    /// 曲线出现零长度的段。
-    pub fn capture_frame(&mut self, angle: f64, values: Vec<FrameValue>) -> String {
-        let angle = normalize_angle(angle);
-        if let Some(existing) = self
-            .frames
+    pub fn track(&self, attribute: &str) -> Option<&KeyframeTrack> {
+        self.tracks.iter().find(|track| track.attribute == attribute)
+    }
+
+    pub fn track_mut(&mut self, attribute: &str) -> Option<&mut KeyframeTrack> {
+        self.tracks
             .iter_mut()
-            .find(|frame| (frame.angle - angle).abs() < 0.001)
-        {
-            for value in values {
-                existing.set_value(&value.attribute, value.value);
+            .find(|track| track.attribute == attribute)
+    }
+
+    /// 取得属性对应的轨道，没有就建一条。
+    pub fn ensure_track(&mut self, attribute: &str, feature_group: &str) -> &mut KeyframeTrack {
+        if self.track(attribute).is_none() {
+            self.tracks
+                .push(KeyframeTrack::new(attribute, feature_group));
+        }
+        self.track_mut(attribute).expect("track just ensured")
+    }
+
+    /// 打一帧：把一组属性值同时记在某个角度上。
+    ///
+    /// 记录是跨属性的一次动作，但每个值落进各自的轨道 —— 之后调整任一
+    /// 属性的时间分布都不会牵动其他属性。
+    pub fn capture(&mut self, angle: f64, values: &[FrameValue]) {
+        for value in values {
+            if !value.value.is_finite() {
+                continue;
             }
-            return existing.id.clone();
-        }
-
-        let frame = Keyframe::capture(angle, values);
-        let id = frame.id.clone();
-        self.frames.push(frame);
-        sort_frames(&mut self.frames);
-        id
-    }
-
-    pub fn remove_frame(&mut self, frame_id: &str) {
-        self.frames.retain(|frame| frame.id != frame_id);
-    }
-
-    /// 某个属性在各帧上的曲线采样点。
-    fn curve_for(&self, attribute: &str) -> Vec<CurvePoint> {
-        attribute_track(&self.frames, attribute)
-            .into_iter()
-            .map(|(angle, value, frame)| CurvePoint {
-                angle,
-                value,
-                interpolation: frame.interpolation,
-                handle_out: frame.handle_out,
-                handle_in: frame.handle_in,
-            })
-            .collect()
-    }
-
-    /// 曲线的中值，作为幅度缩放的支点。
-    fn center_of(&self, attribute: &str) -> f64 {
-        let values = attribute_track(&self.frames, attribute);
-        if values.is_empty() {
-            return 0.0;
-        }
-        let mut min = f64::INFINITY;
-        let mut max = f64::NEG_INFINITY;
-        for (_, value, _) in &values {
-            min = min.min(*value);
-            max = max.max(*value);
-        }
-        if min.is_finite() && max.is_finite() {
-            (min + max) / 2.0
-        } else {
-            0.0
+            self.ensure_track(&value.attribute, &value.feature_group)
+                .capture(angle, value.value);
         }
     }
 }
@@ -216,34 +173,27 @@ pub fn evaluate(
     let mut phase = effect.phase;
     phase.spread *= overrides.spread_scale;
 
-    // 每个启用的属性预先取出自己的曲线与中值，避免逐灯重算。
+    // 每条轨道预先取出曲线与中值，避免逐灯重算。
     let curves = effect
-        .attributes
+        .tracks
         .iter()
-        .filter(|item| item.enabled)
-        .map(|item| {
-            (
-                item,
-                effect.curve_for(&item.attribute),
-                effect.center_of(&item.attribute),
-            )
-        })
-        .filter(|(_, points, _)| !points.is_empty())
+        .filter(|track| track.enabled && !track.points.is_empty())
+        .map(|track| (track, track.curve(), track.center()))
         .collect::<Vec<_>>();
 
     let total = fixtures.len();
     frame.values.reserve(total * curves.len());
     for (index, fixture_id) in fixtures.iter().enumerate() {
         let angle = position.angle + phase.offset(index, total) + overrides.phase_offset;
-        for (attribute, points, center) in &curves {
+        for (track, points, center) in &curves {
             let Some(raw) = sample_points(points, angle) else {
                 continue;
             };
             frame.values.push(EffectValue {
                 fixture_id: fixture_id.clone(),
-                attribute: attribute.attribute.clone(),
-                feature_group: attribute.feature_group.clone(),
-                layer: attribute.layer,
+                attribute: track.attribute.clone(),
+                feature_group: track.feature_group.clone(),
+                layer: track.layer,
                 // 幅度围绕曲线自己的中值缩放：调小 size 是"起伏变小"，
                 // 不是"整体压向零"。
                 value: center + (raw - center) * overrides.size,
@@ -277,13 +227,13 @@ pub fn normalize_effect(mut effect: KeyframeEffect) -> KeyframeEffect {
     effect.phase.wings = effect.phase.wings.max(1);
 
     effect
-        .attributes
-        .retain(|item| !item.attribute.trim().is_empty());
-    sort_frames(&mut effect.frames);
-
-    // 帧里出现过、但没登记的属性补上登记，否则它永远不会被求值。
-    for attribute in attributes_in(&effect.frames) {
-        effect.ensure_attribute(&attribute, "");
+        .tracks
+        .retain(|track| !track.attribute.trim().is_empty());
+    for track in effect.tracks.iter_mut() {
+        if track.id.trim().is_empty() {
+            track.id = Uuid::new_v4().to_string();
+        }
+        track.sort();
     }
     effect
 }
@@ -296,30 +246,36 @@ mod tests {
         ids.iter().map(|id| id.to_string()).collect()
     }
 
-    fn values(items: &[(&str, f64)]) -> Vec<FrameValue> {
+    fn values(items: &[(&str, &str, f64)]) -> Vec<FrameValue> {
         items
             .iter()
-            .map(|(attribute, value)| FrameValue {
+            .map(|(attribute, group, value)| FrameValue {
                 attribute: attribute.to_string(),
+                feature_group: group.to_string(),
                 value: *value,
             })
             .collect()
     }
 
-    /// 打两帧：红 → 蓝。这正是关键帧该表达的东西。
+    /// 打两帧：红 → 蓝。
     fn red_to_blue() -> KeyframeEffect {
         let mut effect = KeyframeEffect::new(1, "Colour", 0);
         effect.cycle_ms = 1000.0;
-        for attribute in ["ColorRGB_R", "ColorRGB_G", "ColorRGB_B"] {
-            effect.ensure_attribute(attribute, "Color");
-        }
-        effect.capture_frame(
+        effect.capture(
             0.0,
-            values(&[("ColorRGB_R", 255.0), ("ColorRGB_G", 0.0), ("ColorRGB_B", 0.0)]),
+            &values(&[
+                ("ColorRGB_R", "Color", 255.0),
+                ("ColorRGB_G", "Color", 0.0),
+                ("ColorRGB_B", "Color", 0.0),
+            ]),
         );
-        effect.capture_frame(
+        effect.capture(
             180.0,
-            values(&[("ColorRGB_R", 0.0), ("ColorRGB_G", 0.0), ("ColorRGB_B", 255.0)]),
+            &values(&[
+                ("ColorRGB_R", "Color", 0.0),
+                ("ColorRGB_G", "Color", 0.0),
+                ("ColorRGB_B", "Color", 255.0),
+            ]),
         );
         effect
     }
@@ -337,138 +293,165 @@ mod tests {
     }
 
     #[test]
-    fn an_effect_with_no_frames_produces_nothing() {
-        let mut effect = KeyframeEffect::new(1, "Empty", 0);
-        effect.ensure_attribute("Dimmer", "Dimmer");
+    fn an_effect_with_no_points_produces_nothing() {
+        let effect = KeyframeEffect::new(1, "Empty", 0);
         assert!(run(&effect, 500.0, &["fix-1"]).values.is_empty());
     }
 
     #[test]
-    fn a_captured_frame_is_reproduced_at_its_angle() {
+    fn a_captured_value_is_reproduced_at_its_angle() {
         let effect = red_to_blue();
         let frame = run(&effect, 0.0, &["fix-1"]);
-
         assert_eq!(value_of(&frame, "fix-1", "ColorRGB_R"), Some(255.0));
         assert_eq!(value_of(&frame, "fix-1", "ColorRGB_B"), Some(0.0));
     }
 
     #[test]
-    fn colour_runs_from_the_first_frame_to_the_second() {
+    fn colour_runs_from_the_first_capture_to_the_second() {
         let effect = red_to_blue();
 
-        // 半个周期 = 180 度 = 第二帧：纯蓝。
         let frame = run(&effect, 500.0, &["fix-1"]);
         assert_eq!(value_of(&frame, "fix-1", "ColorRGB_R"), Some(0.0));
         assert_eq!(value_of(&frame, "fix-1", "ColorRGB_B"), Some(255.0));
 
-        // 四分之一周期落在两帧之间，红蓝各半 —— 这才是"从红跑到蓝"。
         let frame = run(&effect, 250.0, &["fix-1"]);
         let red = value_of(&frame, "fix-1", "ColorRGB_R").unwrap();
         let blue = value_of(&frame, "fix-1", "ColorRGB_B").unwrap();
         assert!(red > 0.0 && red < 255.0, "红应在两帧之间，实际 {red}");
-        assert!(blue > 0.0 && blue < 255.0, "蓝应在两帧之间，实际 {blue}");
-    }
-
-    #[test]
-    fn all_attributes_of_a_frame_move_together() {
-        // 一帧捕获的是一个颜色，三个分量必须同步推进，
-        // 否则中途会出现原始素材里根本没有的颜色。
-        let effect = red_to_blue();
-        let frame = run(&effect, 250.0, &["fix-1"]);
-        let red = value_of(&frame, "fix-1", "ColorRGB_R").unwrap();
-        let blue = value_of(&frame, "fix-1", "ColorRGB_B").unwrap();
         assert!((red + blue - 255.0).abs() < 1.0, "两个分量应此消彼长");
     }
 
     #[test]
-    fn a_third_frame_extends_the_run() {
-        let mut effect = red_to_blue();
-        // 中间插一帧绿色。
-        effect.capture_frame(
-            90.0,
-            values(&[("ColorRGB_R", 0.0), ("ColorRGB_G", 255.0), ("ColorRGB_B", 0.0)]),
-        );
+    fn one_capture_writes_into_each_attributes_own_track() {
+        // 捕获是跨属性的一次动作，但落进的是各自的轨道。
+        let effect = red_to_blue();
+        assert_eq!(effect.tracks.len(), 3);
+        for track in &effect.tracks {
+            assert_eq!(track.points.len(), 2);
+        }
+    }
 
-        assert_eq!(effect.frames.len(), 3);
+    #[test]
+    fn moving_one_attributes_point_leaves_the_others_alone() {
+        // 这是轨道独立的意义所在：挪亮度的点不该连带拖走颜色。
+        let mut effect = red_to_blue();
+        effect.capture(0.0, &values(&[("Dimmer", "Dimmer", 50.0)]));
+        effect.capture(180.0, &values(&[("Dimmer", "Dimmer", 100.0)]));
+
+        let point_id = effect.track("Dimmer").unwrap().points[1].id.clone();
+        effect
+            .track_mut("Dimmer")
+            .unwrap()
+            .point_mut(&point_id)
+            .unwrap()
+            .angle = 90.0;
+        effect.track_mut("Dimmer").unwrap().sort();
+
+        // 亮度的第二个点挪到 90 度。
+        let dimmer_angles = effect
+            .track("Dimmer")
+            .unwrap()
+            .points
+            .iter()
+            .map(|point| point.angle)
+            .collect::<Vec<_>>();
+        assert_eq!(dimmer_angles, vec![0.0, 90.0]);
+
+        // 颜色的点纹丝不动。
+        let red_angles = effect
+            .track("ColorRGB_R")
+            .unwrap()
+            .points
+            .iter()
+            .map(|point| point.angle)
+            .collect::<Vec<_>>();
+        assert_eq!(red_angles, vec![0.0, 180.0]);
+
+        // 求值也跟着分开：90 度处亮度已到顶，颜色才走到一半。
         let frame = run(&effect, 250.0, &["fix-1"]);
-        assert_eq!(value_of(&frame, "fix-1", "ColorRGB_G"), Some(255.0));
+        assert_eq!(value_of(&frame, "fix-1", "Dimmer"), Some(100.0));
+        let red = value_of(&frame, "fix-1", "ColorRGB_R").unwrap();
+        assert!(red > 0.0 && red < 255.0);
     }
 
     #[test]
-    fn capturing_at_an_existing_angle_merges_instead_of_stacking() {
+    fn attributes_can_have_different_point_counts() {
+        // 亮度两个点、颜色四个点，各跑各的。
+        let mut effect = KeyframeEffect::new(1, "Mixed", 0);
+        effect.cycle_ms = 1000.0;
+        effect.capture(0.0, &values(&[("Dimmer", "Dimmer", 0.0)]));
+        effect.capture(180.0, &values(&[("Dimmer", "Dimmer", 100.0)]));
+        for (index, angle) in [0.0, 90.0, 180.0, 270.0].iter().enumerate() {
+            effect.capture(
+                *angle,
+                &values(&[("ColorRGB_R", "Color", (index * 60) as f64)]),
+            );
+        }
+
+        assert_eq!(effect.track("Dimmer").unwrap().points.len(), 2);
+        assert_eq!(effect.track("ColorRGB_R").unwrap().points.len(), 4);
+
+        let frame = run(&effect, 250.0, &["fix-1"]);
+        assert!(value_of(&frame, "fix-1", "Dimmer").is_some());
+        assert!(value_of(&frame, "fix-1", "ColorRGB_R").is_some());
+    }
+
+    #[test]
+    fn a_later_capture_extends_only_the_attributes_it_names() {
         let mut effect = red_to_blue();
-        effect.capture_frame(0.0, values(&[("Dimmer", 80.0)]));
+        effect.capture(90.0, &values(&[("ColorRGB_G", "Color", 255.0)]));
 
-        assert_eq!(effect.frames.len(), 2, "同角度应并入而不是叠一帧");
-        assert_eq!(effect.frames[0].value_of("Dimmer"), Some(80.0));
-        assert_eq!(effect.frames[0].value_of("ColorRGB_R"), Some(255.0));
+        assert_eq!(effect.track("ColorRGB_G").unwrap().points.len(), 3);
+        assert_eq!(effect.track("ColorRGB_R").unwrap().points.len(), 2);
     }
 
     #[test]
-    fn frames_stay_sorted_by_angle() {
-        let mut effect = KeyframeEffect::new(1, "Sorted", 0);
-        effect.ensure_attribute("Dimmer", "Dimmer");
-        effect.capture_frame(270.0, values(&[("Dimmer", 3.0)]));
-        effect.capture_frame(90.0, values(&[("Dimmer", 1.0)]));
-        effect.capture_frame(180.0, values(&[("Dimmer", 2.0)]));
-
-        let angles = effect.frames.iter().map(|frame| frame.angle).collect::<Vec<_>>();
-        assert_eq!(angles, vec![90.0, 180.0, 270.0]);
-    }
-
-    #[test]
-    fn removing_a_frame_shortens_the_run() {
+    fn capturing_at_an_existing_angle_overwrites_that_point() {
         let mut effect = red_to_blue();
-        let id = effect.frames[1].id.clone();
-        effect.remove_frame(&id);
+        effect.capture(0.0, &values(&[("ColorRGB_R", "Color", 12.0)]));
 
-        assert_eq!(effect.frames.len(), 1);
-        // 只剩一帧就是恒定值，不再跑动。
-        let early = value_of(&run(&effect, 0.0, &["fix-1"]), "fix-1", "ColorRGB_R");
-        let late = value_of(&run(&effect, 500.0, &["fix-1"]), "fix-1", "ColorRGB_R");
-        assert_eq!(early, late);
+        let track = effect.track("ColorRGB_R").unwrap();
+        assert_eq!(track.points.len(), 2, "同角度应覆盖而不是叠一个点");
+        assert_eq!(track.points[0].value, 12.0);
     }
 
     #[test]
-    fn a_disabled_attribute_stops_being_driven_without_losing_its_frames() {
+    fn removing_a_point_shortens_only_that_track() {
         let mut effect = red_to_blue();
-        effect.attributes[0].enabled = false;
+        let id = effect.track("ColorRGB_R").unwrap().points[1].id.clone();
+        effect.track_mut("ColorRGB_R").unwrap().remove_point(&id);
+
+        assert_eq!(effect.track("ColorRGB_R").unwrap().points.len(), 1);
+        assert_eq!(effect.track("ColorRGB_B").unwrap().points.len(), 2);
+    }
+
+    #[test]
+    fn a_disabled_track_stops_being_driven_without_losing_its_points() {
+        let mut effect = red_to_blue();
+        effect.tracks[0].enabled = false;
 
         let frame = run(&effect, 0.0, &["fix-1"]);
         assert_eq!(value_of(&frame, "fix-1", "ColorRGB_R"), None);
         assert_eq!(value_of(&frame, "fix-1", "ColorRGB_B"), Some(0.0));
-        // 帧里的值还在，重新启用就能恢复，不用重打。
-        assert_eq!(effect.frames[0].value_of("ColorRGB_R"), Some(255.0));
+        // 点还在，重新启用就能恢复，不用重打。
+        assert_eq!(effect.tracks[0].points.len(), 2);
     }
 
     #[test]
-    fn an_attribute_recorded_in_only_some_frames_still_runs() {
-        // Pan 只在两帧里出现，Dimmer 在三帧里出现 —— 各按各的曲线跑。
-        let mut effect = KeyframeEffect::new(1, "Mixed", 0);
-        effect.cycle_ms = 1000.0;
-        effect.ensure_attribute("Dimmer", "Dimmer");
-        effect.ensure_attribute("Pan", "Position");
-        effect.capture_frame(0.0, values(&[("Dimmer", 0.0)]));
-        effect.capture_frame(120.0, values(&[("Dimmer", 100.0), ("Pan", -90.0)]));
-        effect.capture_frame(240.0, values(&[("Dimmer", 50.0), ("Pan", 90.0)]));
-
-        let frame = run(&effect, 0.0, &["fix-1"]);
-        assert!(value_of(&frame, "fix-1", "Dimmer").is_some());
-        assert!(value_of(&frame, "fix-1", "Pan").is_some());
-    }
-
-    #[test]
-    fn position_frames_sweep_between_the_captured_orientations() {
+    fn position_captures_sweep_between_the_recorded_orientations() {
         let mut effect = KeyframeEffect::new(1, "Sweep", 0);
         effect.cycle_ms = 1000.0;
-        effect.ensure_attribute("Pan", "Position");
-        effect.ensure_attribute("Tilt", "Position");
-        effect.capture_frame(0.0, values(&[("Pan", -90.0), ("Tilt", 10.0)]));
-        effect.capture_frame(180.0, values(&[("Pan", 90.0), ("Tilt", -10.0)]));
+        effect.capture(
+            0.0,
+            &values(&[("Pan", "Position", -90.0), ("Tilt", "Position", 10.0)]),
+        );
+        effect.capture(
+            180.0,
+            &values(&[("Pan", "Position", 90.0), ("Tilt", "Position", -10.0)]),
+        );
 
         assert_eq!(value_of(&run(&effect, 0.0, &["fix-1"]), "fix-1", "Pan"), Some(-90.0));
         assert_eq!(value_of(&run(&effect, 500.0, &["fix-1"]), "fix-1", "Pan"), Some(90.0));
-        // 两个轴同时反向走，扫出的是一条斜线而不是各走各的。
         let mid = run(&effect, 250.0, &["fix-1"]);
         assert!(value_of(&mid, "fix-1", "Pan").unwrap().abs() < 90.0);
         assert!(value_of(&mid, "fix-1", "Tilt").unwrap().abs() < 10.0);
@@ -482,7 +465,6 @@ mod tests {
             ..PhaseSpread::default()
         };
 
-        // 两盏灯错开半圈：一盏红，另一盏蓝。
         let frame = run(&effect, 0.0, &["fix-1", "fix-2"]);
         assert_eq!(value_of(&frame, "fix-1", "ColorRGB_R"), Some(255.0));
         assert_eq!(value_of(&frame, "fix-2", "ColorRGB_B"), Some(255.0));
@@ -494,7 +476,6 @@ mod tests {
         fast.cycle_ms = 500.0;
         let slow = red_to_blue();
 
-        // 同一时刻，周期短的走得更远（更接近蓝）。
         let fast_blue = value_of(&run(&fast, 125.0, &["fix-1"]), "fix-1", "ColorRGB_B").unwrap();
         let slow_blue = value_of(&run(&slow, 125.0, &["fix-1"]), "fix-1", "ColorRGB_B").unwrap();
         assert!(fast_blue > slow_blue);
@@ -538,9 +519,8 @@ mod tests {
     fn size_override_scales_around_the_curve_centre() {
         let mut effect = KeyframeEffect::new(1, "Dim", 0);
         effect.cycle_ms = 1000.0;
-        effect.ensure_attribute("Dimmer", "Dimmer");
-        effect.capture_frame(0.0, values(&[("Dimmer", 0.0)]));
-        effect.capture_frame(180.0, values(&[("Dimmer", 100.0)]));
+        effect.capture(0.0, &values(&[("Dimmer", "Dimmer", 0.0)]));
+        effect.capture(180.0, &values(&[("Dimmer", "Dimmer", 100.0)]));
 
         // 曲线 0..100，中值 50。半幅后 180 度处应是 75。
         let scaled = evaluate(
@@ -556,19 +536,7 @@ mod tests {
     }
 
     #[test]
-    fn normalising_registers_attributes_that_only_exist_in_frames() {
-        // 帧里出现过但没登记的属性要补上登记，否则永远不会被求值。
-        let mut effect = KeyframeEffect::new(1, "Recovered", 0);
-        effect.capture_frame(0.0, values(&[("Dimmer", 10.0)]));
-        effect.capture_frame(180.0, values(&[("Dimmer", 90.0)]));
-
-        let effect = normalize_effect(effect);
-        assert!(effect.attributes.iter().any(|item| item.attribute == "Dimmer"));
-        assert!(value_of(&run(&effect, 500.0, &["fix-1"]), "fix-1", "Dimmer").is_some());
-    }
-
-    #[test]
-    fn normalising_clamps_the_cycle_and_sorts_frames() {
+    fn normalising_clamps_the_cycle_and_sorts_points() {
         let mut effect = red_to_blue();
         effect.cycle_ms = -5.0;
         effect.phase.blocks = 0;
@@ -576,6 +544,7 @@ mod tests {
         let effect = normalize_effect(effect);
         assert!(effect.cycle_ms >= 10.0);
         assert_eq!(effect.phase.blocks, 1);
-        assert!(effect.frames[0].angle <= effect.frames[1].angle);
+        let points = &effect.tracks[0].points;
+        assert!(points[0].angle <= points[1].angle);
     }
 }

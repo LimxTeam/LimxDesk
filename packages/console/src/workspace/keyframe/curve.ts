@@ -19,34 +19,29 @@ export interface Handle {
   dy: number;
 }
 
-/** 一帧里某个属性的取值。 */
-export interface FrameValue {
-  attribute: string;
-  value: number;
-}
-
 /**
- * 一个关键帧：某个角度上的一组属性快照。
+ * 一条轨道上的关键点。
  *
- * 一帧横跨所有属性，而不是每个属性各有一套帧 —— 颜色是 R/G/B 三个值同时
- * 成立的一件事，拆开记就不再是一个颜色了。
+ * 捕获是跨属性的一次动作（红色是 R/G/B 同时成立），但记下之后每个属性
+ * 有自己独立的时间线 —— 挪动亮度的点不会连带拖走颜色。
  */
-export interface Keyframe {
+export interface TrackPoint {
   id: string;
   angle: number;
-  values: FrameValue[];
+  value: number;
   interpolation: Interpolation;
   handleOut: Handle;
   handleIn: Handle;
 }
 
-/** 曲线上的一个采样点，由某个属性在各帧上的取值展开而来。 */
-export interface CurvePoint {
-  angle: number;
-  value: number;
-  interpolation: Interpolation;
-  handleOut: Handle;
-  handleIn: Handle;
+/** 一条驱动单个属性的轨道。 */
+export interface KeyframeTrack {
+  id: string;
+  attribute: string;
+  featureGroup: string;
+  layer: "absolute" | "relative";
+  enabled: boolean;
+  points: TrackPoint[];
 }
 
 export const DEFAULT_HANDLE: Handle = { dx: 1 / 3, dy: 0 };
@@ -57,40 +52,14 @@ export function normalizeAngle(angle: number): number {
   return wrapped < 0 ? wrapped + CYCLE_DEGREES : wrapped;
 }
 
-export function sortFrames(frames: Keyframe[]): Keyframe[] {
-  return [...frames]
-    .map((frame) => ({ ...frame, angle: normalizeAngle(frame.angle) }))
+export function sortPoints(points: TrackPoint[]): TrackPoint[] {
+  return [...points]
+    .map((point) => ({ ...point, angle: normalizeAngle(point.angle) }))
     .sort((left, right) => left.angle - right.angle);
 }
 
-export function frameValue(frame: Keyframe, attribute: string): number | null {
-  return frame.values.find((item) => item.attribute === attribute)?.value ?? null;
-}
-
-/**
- * 取出某个属性在各帧上的曲线。
- *
- * 没有记录该属性的帧会被跳过 —— 后加入的属性在早先的帧里本来就没有值，
- * 补零会让灯在那一段突然熄掉。
- */
-export function curveFor(frames: Keyframe[], attribute: string): CurvePoint[] {
-  const points: CurvePoint[] = [];
-  for (const frame of frames) {
-    const value = frameValue(frame, attribute);
-    if (value === null) continue;
-    points.push({
-      angle: frame.angle,
-      value,
-      interpolation: frame.interpolation,
-      handleOut: frame.handleOut,
-      handleIn: frame.handleIn,
-    });
-  }
-  return points;
-}
-
 /** 在给定角度采样一条曲线。采样点须已排序。没有采样点时返回 null。 */
-export function sample(points: CurvePoint[], angle: number): number | null {
+export function sample(points: TrackPoint[], angle: number): number | null {
   if (points.length === 0) return null;
   if (points.length === 1) return points[0].value;
 
@@ -103,7 +72,7 @@ export function sample(points: CurvePoint[], angle: number): number | null {
  * 找出角度所在的段。落在末帧之后或首帧之前时走的是跨 0 度的收尾段 ——
  * 曲线在这里闭合成环。
  */
-function segmentAt(points: CurvePoint[], angle: number): [CurvePoint, CurvePoint, number] {
+function segmentAt(points: TrackPoint[], angle: number): [TrackPoint, TrackPoint, number] {
   const first = points[0];
   const last = points[points.length - 1];
 
@@ -129,7 +98,7 @@ function ratio(travelled: number, span: number): number {
   return Math.min(1, Math.max(0, travelled / span));
 }
 
-function interpolate(from: CurvePoint, to: CurvePoint, progress: number): number {
+function interpolate(from: TrackPoint, to: TrackPoint, progress: number): number {
   switch (from.interpolation) {
     case "step":
       return from.value;
@@ -200,7 +169,7 @@ function cubicBezierDerivative(t: number, p1: number, p2: number): number {
 }
 
 /** 曲线的取值范围，用来决定绘图的纵轴。留一点余量避免贴边。 */
-export function valueRange(points: CurvePoint[]): { min: number; max: number } {
+export function valueRange(points: TrackPoint[]): { min: number; max: number } {
   if (points.length === 0) return { min: 0, max: 100 };
 
   let min = Infinity;

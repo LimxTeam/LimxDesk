@@ -108,10 +108,13 @@ mod tests {
     #[test]
     fn effects_are_looked_up_by_id() {
         let mut effect = KeyframeEffect::new(1, "Sine", 0);
-        effect.ensure_attribute("Dimmer", "Dimmer");
-        effect.capture_frame(
+        effect.capture(
             0.0,
-            vec![FrameValue { attribute: "Dimmer".to_string(), value: 10.0 }],
+            &[FrameValue {
+                attribute: "Dimmer".to_string(),
+                feature_group: "Dimmer".to_string(),
+                value: 10.0,
+            }],
         );
         let id = effect.id.clone();
 
