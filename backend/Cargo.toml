@@ -39,7 +39,14 @@ edition = "2021"
 [lib]
 name = "limxdesk_lib"
 path = "src/lib.rs"
-crate-type = ["lib", "cdylib", "staticlib"]
+# 桌面端只需要 lib（被 main.rs 依赖）与 cdylib。
+#
+# Tauri v2 模板默认还带一个 staticlib，那是给 iOS / Android 用的；本项目
+# 目前没有移动端目标（gen/ 下只有 schemas）。留着它会让 `cargo test` 在
+# Windows 上链接失败：主 crate 一旦经由回放引擎走到 dyn 分发（配方扩展点），
+# staticlib 就会拉出未解析的 std 符号（drop_in_place<Box<dyn Any + Send>>）。
+# 将来要做移动端时把 staticlib 加回来，届时需要一并解决这个链接问题。
+crate-type = ["lib", "cdylib"]
 
 [[bin]]
 name = "LimxDesk"

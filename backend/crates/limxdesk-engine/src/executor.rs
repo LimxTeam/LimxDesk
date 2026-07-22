@@ -377,6 +377,15 @@ impl ExecutorRuntime {
         }
     }
 
+    /// 供配方引擎读取的当前状态。
+    pub fn recipe_state(&self) -> crate::recipe::RecipeExecutorState {
+        crate::recipe::RecipeExecutorState {
+            local_time_ms: self.local_time_ms,
+            master: self.effective_master(),
+            order: self.order,
+        }
+    }
+
     fn effective_master(&self) -> f64 {
         if self.flash {
             1.0

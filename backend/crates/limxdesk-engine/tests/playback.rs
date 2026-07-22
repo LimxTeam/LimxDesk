@@ -634,3 +634,173 @@ fn sequence_priority_reaches_the_output_values() {
         "Sequence.priority 必须传到渲染层，否则多序列的覆盖顺序无从判定"
     );
 }
+
+// ── 配方扩展点 ──────────────────────────────────────────────
+//
+// 这里验证的是接线本身：slot 会不会被调用、拿到的 t 对不对、
+// 贡献的值有没有进入输出。测试里的引擎是个占位实现，不代表任何
+// 效果语义 —— 效果本身怎么建模是另一件事。
+
+use limxdesk_dmx::{DmxChannelSource, DmxMergeMode};
+use limxdesk_engine::{RecipeContext, RecipeEngine};
+use limxdesk_sequence::SequenceRecipeSlot;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
+
+/// 记录被调用时的 t，并贡献一个固定值。
+struct ProbeEngine {
+    kind: String,
+    last_time_ms: AtomicU64,
+}
+
+impl ProbeEngine {
+    fn new(kind: &str) -> Arc<Self> {
+        Arc::new(Self {
+            kind: kind.to_string(),
+            last_time_ms: AtomicU64::new(u64::MAX),
+        })
+    }
+}
+
+impl RecipeEngine for ProbeEngine {
+    fn kind(&self) -> &str {
+        &self.kind
+    }
+
+    fn contribute(&self, context: &RecipeContext<'_>, out: &mut Vec<DmxOutputValue>) {
+        self.last_time_ms
+            .store(context.local_time_ms as u64, Ordering::SeqCst);
+        out.push(DmxOutputValue {
+            merge: DmxMergeMode::Ltp,
+            // 故意填错优先级：引擎应当无权决定自己的合并优先级。
+            priority: 200,
+            order: 999,
+            ..DmxOutputValue::simple(
+                "fix-9",
+                "Dimmer",
+                Some(context.master * 100.0),
+                true,
+                DmxChannelSource::Effect,
+            )
+        });
+    }
+}
+
+fn sequence_with_slot(kind: &str) -> (SequenceDocument, String) {
+    let (mut document, id) = sequence_with(vec![cue(
+        1.0,
+        vec![dimmer("fix-1", 100.0)],
+        CueTiming::default(),
+    )]);
+    document.sequences[0].priority = 42;
+    document.sequences[0].recipe_slots = vec![SequenceRecipeSlot {
+        id: "slot-1".to_string(),
+        engine_kind: kind.to_string(),
+        label: "Probe".to_string(),
+        enabled: true,
+    }];
+    (document, id)
+}
+
+#[test]
+fn a_registered_recipe_contributes_to_the_output() {
+    let (document, sequence_id) = sequence_with_slot("probe");
+    let (mut engine, key) = engine_with(&document, &sequence_id);
+    engine.recipes_mut().register(ProbeEngine::new("probe"));
+
+    engine.tick(0);
+    engine.fire(&key, PlaybackAction::Go);
+
+    assert_eq!(
+        find(&engine.collect_output(), "fix-9", "Dimmer"),
+        Some(100.0),
+        "启用的 slot 应当参与渲染"
+    );
+}
+
+#[test]
+fn recipe_priority_and_order_come_from_the_owner_not_the_engine() {
+    let (document, sequence_id) = sequence_with_slot("probe");
+    let (mut engine, key) = engine_with(&document, &sequence_id);
+    engine.recipes_mut().register(ProbeEngine::new("probe"));
+
+    engine.tick(0);
+    engine.fire(&key, PlaybackAction::Go);
+
+    let output = engine.collect_output();
+    let contributed = output
+        .iter()
+        .find(|value| value.fixture_id == "fix-9")
+        .expect("recipe value present");
+
+    assert_eq!(
+        contributed.priority, 42,
+        "优先级应取自所属 sequence，而不是引擎自报的 200"
+    );
+    assert_ne!(contributed.order, 999, "排序依据应由 executor 决定");
+}
+
+#[test]
+fn recipes_receive_the_scaled_local_clock() {
+    let (document, sequence_id) = sequence_with_slot("probe");
+    let (mut engine, key) = engine_with(&document, &sequence_id);
+    let probe = ProbeEngine::new("probe");
+    engine.recipes_mut().register(probe.clone());
+
+    engine.tick(0);
+    engine.set_rate(&key, 2.0);
+    engine.fire(&key, PlaybackAction::Go);
+    advance(&mut engine, 0, 1000);
+    let _ = engine.collect_output();
+
+    let observed = probe.last_time_ms.load(Ordering::SeqCst);
+    assert!(
+        (1800..=2200).contains(&observed),
+        "双倍速下走过 1 秒挂钟，配方看到的 t 应约为 2000ms，实际 {observed}"
+    );
+}
+
+#[test]
+fn an_unregistered_kind_is_skipped_rather_than_failing() {
+    let (document, sequence_id) = sequence_with_slot("not-installed");
+    let (mut engine, key) = engine_with(&document, &sequence_id);
+    engine.recipes_mut().register(ProbeEngine::new("probe"));
+
+    engine.tick(0);
+    engine.fire(&key, PlaybackAction::Go);
+
+    let output = engine.collect_output();
+    assert_eq!(find(&output, "fix-1", "Dimmer"), Some(100.0), "cue 仍应正常输出");
+    assert_eq!(
+        find(&output, "fix-9", "Dimmer"),
+        None,
+        "不认识的配方跳过即可，不该影响其余渲染"
+    );
+}
+
+#[test]
+fn a_disabled_slot_does_not_contribute() {
+    let (mut document, sequence_id) = sequence_with_slot("probe");
+    document.sequences[0].recipe_slots[0].enabled = false;
+    let (mut engine, key) = engine_with(&document, &sequence_id);
+    engine.recipes_mut().register(ProbeEngine::new("probe"));
+
+    engine.tick(0);
+    engine.fire(&key, PlaybackAction::Go);
+
+    assert_eq!(find(&engine.collect_output(), "fix-9", "Dimmer"), None);
+}
+
+#[test]
+fn an_idle_executor_runs_no_recipes() {
+    let (document, sequence_id) = sequence_with_slot("probe");
+    let (mut engine, _key) = engine_with(&document, &sequence_id);
+    engine.recipes_mut().register(ProbeEngine::new("probe"));
+
+    engine.tick(0);
+
+    assert!(
+        engine.collect_output().is_empty(),
+        "executor 没在跑时配方也不该产出"
+    );
+}

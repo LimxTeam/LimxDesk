@@ -441,6 +441,23 @@ export function PlaybackWindow() {
     }
   }
 
+  /** 把当前推子值固化进 show，作为下次加载的初值。 */
+  async function persistExecutorMaster(executor: Executor, master: number) {
+    if (!page) return;
+    const next = Number.isFinite(master) ? Math.min(1, Math.max(0, master)) : 1;
+    try {
+      setPlayback(
+        await invoke<PlaybackDocument>("playback_persist_executor_master", {
+          pageId: page.id,
+          executorId: executor.id,
+          master: next,
+        }),
+      );
+    } catch (error) {
+      setStatus(String(error));
+    }
+  }
+
   return (
     <div style={rootStyle}>
       <div style={toolbarStyle}>
@@ -498,6 +515,7 @@ export function PlaybackWindow() {
                     onClear={() => clearExecutor(executor)}
                     onFire={(action) => fireExecutor(executor, action)}
                     onMaster={(master) => setExecutorMaster(executor, master)}
+                    onMasterCommit={(master) => persistExecutorMaster(executor, master)}
                   />
                 );
               })}
@@ -519,6 +537,7 @@ function ExecutorCell({
   onClear,
   onFire,
   onMaster,
+  onMasterCommit,
 }: {
   executor: Executor;
   sequence: SequenceModel | null;
@@ -529,6 +548,7 @@ function ExecutorCell({
   onClear: () => void;
   onFire: (action: "go" | "back" | "pause" | "off" | "flashOn" | "flashOff" | "toggle") => void;
   onMaster: (master: number) => void;
+  onMasterCommit: (master: number) => void;
 }) {
   const currentCue = sequence?.cues.find((cue) => cue.id === state?.currentCueId) ?? null;
   const assigned = Boolean(executor.assignment);
@@ -586,6 +606,10 @@ function ExecutorCell({
           disabled={!assigned}
           onClick={(event) => event.stopPropagation()}
           onChange={(event) => onMaster(Number(event.currentTarget.value) / 100)}
+          // 拖动中只改运行时值；松手时才把结果写进 show，作为下次加载的初值。
+          // 这样连续控制不会每移动一格就序列化一次 playback section。
+          onPointerUp={(event) => onMasterCommit(Number(event.currentTarget.value) / 100)}
+          onKeyUp={(event) => onMasterCommit(Number(event.currentTarget.value) / 100)}
           style={{ width: "100%" }}
         />
         <button className="lx-btn lx-btn-ghost" type="button" disabled={!assigned} onClick={(event) => { event.stopPropagation(); void onClear(); }}>

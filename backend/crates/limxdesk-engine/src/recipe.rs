@@ -18,6 +18,18 @@ use limxdesk_sequence::SequenceRecipeSlot;
 use std::collections::HashMap;
 use std::sync::Arc;
 
+/// 引擎调用配方时给出的 executor 侧状态。
+#[derive(Clone, Copy, Debug)]
+pub struct RecipeExecutorState {
+    /// 所属 executor 的本地时间（毫秒，已按 rate 缩放）。效果是时间的函数，
+    /// 这就是那个 t。
+    pub local_time_ms: f64,
+    /// 所属 executor 的实际推子值（flash 期间为满）。
+    pub master: f64,
+    /// 所属 executor 的排序依据。
+    pub order: u32,
+}
+
 /// 调用配方引擎时的上下文。
 pub struct RecipeContext<'a> {
     pub slot: &'a SequenceRecipeSlot,
@@ -64,20 +76,8 @@ impl RecipeRegistry {
         self.engines.is_empty()
     }
 
-    /// 让某个 sequence 上所有启用的 slot 贡献值。
-    ///
-    /// 未注册的 kind 直接跳过：show 文件里可能存着当前版本不认识的配方，
-    /// 那不该让渲染失败。
-    pub fn contribute_all(&self, context_for: impl Fn(&SequenceRecipeSlot) -> RecipeContext<'_>, sequence: &CompiledSequence, out: &mut Vec<DmxOutputValue>) {
-        if self.engines.is_empty() {
-            return;
-        }
-        for slot in sequence.recipe_slots.iter().filter(|slot| slot.enabled) {
-            let Some(engine) = self.engines.get(&slot.engine_kind) else {
-                continue;
-            };
-            engine.contribute(&context_for(slot), out);
-        }
+    pub fn kinds(&self) -> impl Iterator<Item = &str> {
+        self.engines.keys().map(String::as_str)
     }
 }
 
