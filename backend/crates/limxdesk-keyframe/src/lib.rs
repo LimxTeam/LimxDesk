@@ -2,11 +2,16 @@
 // 文件名称：lib.rs
 // 功能描述：关键帧效果 —— LimxDesk 效果体系中的一种
 //
-// 一个效果由若干条轨道组成，每条轨道驱动一个属性，轨道上是一条环形的
-// 关键帧曲线：整圈 360 度，末帧接回首帧。速度用"跑完一圈要多久"表达；
-// 灯与灯之间靠相位错开。
+// 关键帧记录的是"打帧那一刻编程器里的值"。把灯调成红色打一帧、调成蓝色
+// 再打一帧，效果就在红蓝之间跑；位置同理，打两个朝向就在两者之间扫。
+// 这里不替用户决定跑什么 —— 那是预制效果的事。
 //
-//   curve     曲线本身与插值
+// 一帧横跨所有属性，而不是每个属性各有一套帧：颜色是 R/G/B 三个属性、
+// 位置是 Pan/Tilt 两个，它们必须在同一时刻一起被捕获，否则"红色"会散成
+// 三条互不相干的曲线，没法作为一个颜色来编辑。
+//
+//   frame     关键帧与属性登记
+//   curve     两帧之间怎么过渡
 //   playback  时间 → 周期角度（循环 / 反弹 / 倒放 / 单次 / 定次）
 //   phase     一组灯之间怎么错开
 //   library   可复用的效果集合
@@ -15,11 +20,15 @@
 // ============================================================
 
 pub mod curve;
+pub mod frame;
 pub mod library;
 pub mod phase;
 pub mod playback;
 
-pub use curve::{normalize_angle, sample, sort_keyframes, Handle, Interpolation, Keyframe, CYCLE_DEGREES};
+pub use curve::{normalize_angle, sample_points, CurvePoint, Handle, Interpolation, CYCLE_DEGREES};
+pub use frame::{
+    attribute_track, attributes_in, sort_frames, EffectAttribute, FrameValue, Keyframe,
+};
 pub use library::{KeyframeLibrary, KeyframeLibraryDocument};
 pub use phase::PhaseSpread;
 pub use playback::{CyclePosition, PlaybackMode};
@@ -28,75 +37,21 @@ use limxdesk_effect::EffectOverrides;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-/// 轨道产出的值怎么进入合成。
+/// 属性产出的值怎么进入合成。
 #[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub enum TrackLayer {
-    /// 曲线值就是最终值。
+    /// 帧里记录的值就是最终值。
     #[default]
     Absolute,
-    /// 曲线值是相对当前基准的偏移，叠加在回放之上。
+    /// 帧里记录的值是相对基准的偏移，叠加在回放之上。
     Relative,
-}
-
-/// 一条驱动单个属性的轨道。
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
-#[serde(rename_all = "camelCase")]
-pub struct KeyframeTrack {
-    pub id: String,
-    pub attribute: String,
-    pub feature_group: String,
-    pub layer: TrackLayer,
-    pub enabled: bool,
-    pub keyframes: Vec<Keyframe>,
-}
-
-impl KeyframeTrack {
-    /// 建一条默认的首尾帧轨道：0 度到 180 度走一个来回。
-    ///
-    /// 这是"打首尾帧"最常见的起点 —— 曲线闭环，180..360 自动走回来。
-    pub fn new(attribute: impl Into<String>, feature_group: impl Into<String>) -> Self {
-        Self {
-            id: Uuid::new_v4().to_string(),
-            attribute: attribute.into(),
-            feature_group: feature_group.into(),
-            layer: TrackLayer::Absolute,
-            enabled: true,
-            keyframes: vec![
-                Keyframe::new(0.0, 0.0).with_interpolation(Interpolation::Smooth),
-                Keyframe::new(180.0, 100.0).with_interpolation(Interpolation::Smooth),
-            ],
-        }
-    }
-
-    pub fn value_at(&self, angle: f64) -> f64 {
-        sample(&self.keyframes, angle)
-    }
-
-    /// 曲线的中值，作为幅度缩放的支点。
-    pub fn center(&self) -> f64 {
-        if self.keyframes.is_empty() {
-            return 0.0;
-        }
-        let mut min = f64::INFINITY;
-        let mut max = f64::NEG_INFINITY;
-        for keyframe in &self.keyframes {
-            min = min.min(keyframe.value);
-            max = max.max(keyframe.value);
-        }
-        if min.is_finite() && max.is_finite() {
-            (min + max) / 2.0
-        } else {
-            0.0
-        }
-    }
 }
 
 /// 一个关键帧效果模板。
 ///
 /// 只描述形状、速度与相位规则，不含灯具 —— 作用于谁由效果实例
-/// （limxdesk-effect 的 AppliedEffect）决定。模板因此可以被任意多处复用，
-/// 改一次处处生效。
+/// （limxdesk-effect 的 AppliedEffect）决定，模板因此可被任意多处复用。
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct KeyframeEffect {
@@ -107,7 +62,10 @@ pub struct KeyframeEffect {
     pub cycle_ms: f64,
     pub playback: PlaybackMode,
     pub phase: PhaseSpread,
-    pub tracks: Vec<KeyframeTrack>,
+    /// 参与效果的属性登记表。
+    pub attributes: Vec<EffectAttribute>,
+    /// 关键帧，按角度排序。
+    pub frames: Vec<Keyframe>,
     pub updated_at_ms: u64,
 }
 
@@ -125,21 +83,93 @@ impl KeyframeEffect {
             cycle_ms: 2000.0,
             playback: PlaybackMode::Loop,
             phase: PhaseSpread::default(),
-            tracks: Vec::new(),
+            attributes: Vec::new(),
+            frames: Vec::new(),
             updated_at_ms: now_ms,
         }
     }
 
     /// 该效果是否会一直动下去。用来决定回放时钟能不能停。
     pub fn is_endless(&self) -> bool {
-        self.playback.is_endless() && self.has_tracks()
+        self.playback.is_endless() && self.has_output()
     }
 
-    /// 模板是否有可产出的轨道。作用于哪些灯由实例决定，与模板无关。
-    pub fn has_tracks(&self) -> bool {
-        self.tracks
+    /// 是否有可产出的内容。一帧也没打过的效果不该出光。
+    pub fn has_output(&self) -> bool {
+        !self.frames.is_empty() && self.attributes.iter().any(|item| item.enabled)
+    }
+
+    /// 登记一个属性，已存在则沿用原设置。
+    pub fn ensure_attribute(&mut self, attribute: &str, feature_group: &str) {
+        if !self
+            .attributes
             .iter()
-            .any(|track| track.enabled && !track.keyframes.is_empty())
+            .any(|item| item.attribute == attribute)
+        {
+            self.attributes
+                .push(EffectAttribute::new(attribute, feature_group));
+        }
+    }
+
+    /// 打一帧：把给定的一组属性值记在某个角度上。
+    ///
+    /// 同一角度上已有帧就并入它，而不是叠一帧在同一位置 —— 两帧重合会让
+    /// 曲线出现零长度的段。
+    pub fn capture_frame(&mut self, angle: f64, values: Vec<FrameValue>) -> String {
+        let angle = normalize_angle(angle);
+        if let Some(existing) = self
+            .frames
+            .iter_mut()
+            .find(|frame| (frame.angle - angle).abs() < 0.001)
+        {
+            for value in values {
+                existing.set_value(&value.attribute, value.value);
+            }
+            return existing.id.clone();
+        }
+
+        let frame = Keyframe::capture(angle, values);
+        let id = frame.id.clone();
+        self.frames.push(frame);
+        sort_frames(&mut self.frames);
+        id
+    }
+
+    pub fn remove_frame(&mut self, frame_id: &str) {
+        self.frames.retain(|frame| frame.id != frame_id);
+    }
+
+    /// 某个属性在各帧上的曲线采样点。
+    fn curve_for(&self, attribute: &str) -> Vec<CurvePoint> {
+        attribute_track(&self.frames, attribute)
+            .into_iter()
+            .map(|(angle, value, frame)| CurvePoint {
+                angle,
+                value,
+                interpolation: frame.interpolation,
+                handle_out: frame.handle_out,
+                handle_in: frame.handle_in,
+            })
+            .collect()
+    }
+
+    /// 曲线的中值，作为幅度缩放的支点。
+    fn center_of(&self, attribute: &str) -> f64 {
+        let values = attribute_track(&self.frames, attribute);
+        if values.is_empty() {
+            return 0.0;
+        }
+        let mut min = f64::INFINITY;
+        let mut max = f64::NEG_INFINITY;
+        for (_, value, _) in &values {
+            min = min.min(*value);
+            max = max.max(*value);
+        }
+        if min.is_finite() && max.is_finite() {
+            (min + max) / 2.0
+        } else {
+            0.0
+        }
     }
 }
 
@@ -172,7 +202,7 @@ pub fn evaluate(
     overrides: EffectOverrides,
 ) -> EffectFrame {
     let mut frame = EffectFrame::default();
-    if fixtures.is_empty() || !effect.has_tracks() {
+    if fixtures.is_empty() || !effect.has_output() {
         return frame;
     }
 
@@ -186,27 +216,36 @@ pub fn evaluate(
     let mut phase = effect.phase;
     phase.spread *= overrides.spread_scale;
 
-    let total = fixtures.len();
-    let tracks = effect
-        .tracks
+    // 每个启用的属性预先取出自己的曲线与中值，避免逐灯重算。
+    let curves = effect
+        .attributes
         .iter()
-        .filter(|track| track.enabled && !track.keyframes.is_empty())
+        .filter(|item| item.enabled)
+        .map(|item| {
+            (
+                item,
+                effect.curve_for(&item.attribute),
+                effect.center_of(&item.attribute),
+            )
+        })
+        .filter(|(_, points, _)| !points.is_empty())
         .collect::<Vec<_>>();
 
-    // 幅度围绕各轨道自己的中值缩放，这样调小 size 是"起伏变小"，
-    // 而不是"整体压向零"。
-    let centers = tracks.iter().map(|track| track.center()).collect::<Vec<_>>();
-
-    frame.values.reserve(total * tracks.len());
+    let total = fixtures.len();
+    frame.values.reserve(total * curves.len());
     for (index, fixture_id) in fixtures.iter().enumerate() {
         let angle = position.angle + phase.offset(index, total) + overrides.phase_offset;
-        for (track, center) in tracks.iter().zip(centers.iter()) {
-            let raw = track.value_at(angle);
+        for (attribute, points, center) in &curves {
+            let Some(raw) = sample_points(points, angle) else {
+                continue;
+            };
             frame.values.push(EffectValue {
                 fixture_id: fixture_id.clone(),
-                attribute: track.attribute.clone(),
-                feature_group: track.feature_group.clone(),
-                layer: track.layer,
+                attribute: attribute.attribute.clone(),
+                feature_group: attribute.feature_group.clone(),
+                layer: attribute.layer,
+                // 幅度围绕曲线自己的中值缩放：调小 size 是"起伏变小"，
+                // 不是"整体压向零"。
                 value: center + (raw - center) * overrides.size,
             });
         }
@@ -237,12 +276,14 @@ pub fn normalize_effect(mut effect: KeyframeEffect) -> KeyframeEffect {
     effect.phase.groups = effect.phase.groups.max(1);
     effect.phase.wings = effect.phase.wings.max(1);
 
-    effect.tracks.retain(|track| !track.attribute.trim().is_empty());
-    for track in effect.tracks.iter_mut() {
-        if track.id.trim().is_empty() {
-            track.id = Uuid::new_v4().to_string();
-        }
-        sort_keyframes(&mut track.keyframes);
+    effect
+        .attributes
+        .retain(|item| !item.attribute.trim().is_empty());
+    sort_frames(&mut effect.frames);
+
+    // 帧里出现过、但没登记的属性补上登记，否则它永远不会被求值。
+    for attribute in attributes_in(&effect.frames) {
+        effect.ensure_attribute(&attribute, "");
     }
     effect
 }
@@ -251,140 +292,232 @@ pub fn normalize_effect(mut effect: KeyframeEffect) -> KeyframeEffect {
 mod tests {
     use super::*;
 
-    fn template(tracks: Vec<KeyframeTrack>) -> KeyframeEffect {
-        let mut effect = KeyframeEffect::new(1, "Test", 0);
-        effect.tracks = tracks;
-        effect.cycle_ms = 1000.0;
-        effect
-    }
-
     fn fixtures(ids: &[&str]) -> Vec<String> {
         ids.iter().map(|id| id.to_string()).collect()
+    }
+
+    fn values(items: &[(&str, f64)]) -> Vec<FrameValue> {
+        items
+            .iter()
+            .map(|(attribute, value)| FrameValue {
+                attribute: attribute.to_string(),
+                value: *value,
+            })
+            .collect()
+    }
+
+    /// 打两帧：红 → 蓝。这正是关键帧该表达的东西。
+    fn red_to_blue() -> KeyframeEffect {
+        let mut effect = KeyframeEffect::new(1, "Colour", 0);
+        effect.cycle_ms = 1000.0;
+        for attribute in ["ColorRGB_R", "ColorRGB_G", "ColorRGB_B"] {
+            effect.ensure_attribute(attribute, "Color");
+        }
+        effect.capture_frame(
+            0.0,
+            values(&[("ColorRGB_R", 255.0), ("ColorRGB_G", 0.0), ("ColorRGB_B", 0.0)]),
+        );
+        effect.capture_frame(
+            180.0,
+            values(&[("ColorRGB_R", 0.0), ("ColorRGB_G", 0.0), ("ColorRGB_B", 255.0)]),
+        );
+        effect
     }
 
     fn run(effect: &KeyframeEffect, elapsed: f64, ids: &[&str]) -> EffectFrame {
         evaluate(effect, elapsed, &fixtures(ids), EffectOverrides::default())
     }
 
-    fn linear_track() -> KeyframeTrack {
-        let mut track = KeyframeTrack::new("Dimmer", "Dimmer");
-        track.keyframes = vec![Keyframe::new(0.0, 0.0), Keyframe::new(180.0, 100.0)];
-        track
-    }
-
-    fn value_for(frame: &EffectFrame, fixture: &str) -> Option<f64> {
+    fn value_of(frame: &EffectFrame, fixture: &str, attribute: &str) -> Option<f64> {
         frame
             .values
             .iter()
-            .find(|value| value.fixture_id == fixture)
+            .find(|value| value.fixture_id == fixture && value.attribute == attribute)
             .map(|value| value.value)
     }
 
     #[test]
-    fn an_instance_without_fixtures_produces_nothing() {
-        let effect = template(vec![linear_track()]);
-        assert!(run(&effect, 500.0, &[]).values.is_empty());
-    }
-
-    #[test]
-    fn a_template_without_tracks_produces_nothing() {
-        let effect = template(Vec::new());
+    fn an_effect_with_no_frames_produces_nothing() {
+        let mut effect = KeyframeEffect::new(1, "Empty", 0);
+        effect.ensure_attribute("Dimmer", "Dimmer");
         assert!(run(&effect, 500.0, &["fix-1"]).values.is_empty());
     }
 
     #[test]
-    fn a_disabled_track_is_skipped() {
-        let mut track = linear_track();
-        track.enabled = false;
-        let effect = template(vec![track]);
-        assert!(run(&effect, 500.0, &["fix-1"]).values.is_empty());
+    fn a_captured_frame_is_reproduced_at_its_angle() {
+        let effect = red_to_blue();
+        let frame = run(&effect, 0.0, &["fix-1"]);
+
+        assert_eq!(value_of(&frame, "fix-1", "ColorRGB_R"), Some(255.0));
+        assert_eq!(value_of(&frame, "fix-1", "ColorRGB_B"), Some(0.0));
     }
 
     #[test]
-    fn the_curve_is_sampled_at_the_current_angle() {
-        let effect = template(vec![linear_track()]);
-        // 四分之一周期 = 90 度 = 线性段的中点。
+    fn colour_runs_from_the_first_frame_to_the_second() {
+        let effect = red_to_blue();
+
+        // 半个周期 = 180 度 = 第二帧：纯蓝。
+        let frame = run(&effect, 500.0, &["fix-1"]);
+        assert_eq!(value_of(&frame, "fix-1", "ColorRGB_R"), Some(0.0));
+        assert_eq!(value_of(&frame, "fix-1", "ColorRGB_B"), Some(255.0));
+
+        // 四分之一周期落在两帧之间，红蓝各半 —— 这才是"从红跑到蓝"。
         let frame = run(&effect, 250.0, &["fix-1"]);
-        assert!((value_for(&frame, "fix-1").unwrap() - 50.0).abs() < 1e-9);
+        let red = value_of(&frame, "fix-1", "ColorRGB_R").unwrap();
+        let blue = value_of(&frame, "fix-1", "ColorRGB_B").unwrap();
+        assert!(red > 0.0 && red < 255.0, "红应在两帧之间，实际 {red}");
+        assert!(blue > 0.0 && blue < 255.0, "蓝应在两帧之间，实际 {blue}");
+    }
+
+    #[test]
+    fn all_attributes_of_a_frame_move_together() {
+        // 一帧捕获的是一个颜色，三个分量必须同步推进，
+        // 否则中途会出现原始素材里根本没有的颜色。
+        let effect = red_to_blue();
+        let frame = run(&effect, 250.0, &["fix-1"]);
+        let red = value_of(&frame, "fix-1", "ColorRGB_R").unwrap();
+        let blue = value_of(&frame, "fix-1", "ColorRGB_B").unwrap();
+        assert!((red + blue - 255.0).abs() < 1.0, "两个分量应此消彼长");
+    }
+
+    #[test]
+    fn a_third_frame_extends_the_run() {
+        let mut effect = red_to_blue();
+        // 中间插一帧绿色。
+        effect.capture_frame(
+            90.0,
+            values(&[("ColorRGB_R", 0.0), ("ColorRGB_G", 255.0), ("ColorRGB_B", 0.0)]),
+        );
+
+        assert_eq!(effect.frames.len(), 3);
+        let frame = run(&effect, 250.0, &["fix-1"]);
+        assert_eq!(value_of(&frame, "fix-1", "ColorRGB_G"), Some(255.0));
+    }
+
+    #[test]
+    fn capturing_at_an_existing_angle_merges_instead_of_stacking() {
+        let mut effect = red_to_blue();
+        effect.capture_frame(0.0, values(&[("Dimmer", 80.0)]));
+
+        assert_eq!(effect.frames.len(), 2, "同角度应并入而不是叠一帧");
+        assert_eq!(effect.frames[0].value_of("Dimmer"), Some(80.0));
+        assert_eq!(effect.frames[0].value_of("ColorRGB_R"), Some(255.0));
+    }
+
+    #[test]
+    fn frames_stay_sorted_by_angle() {
+        let mut effect = KeyframeEffect::new(1, "Sorted", 0);
+        effect.ensure_attribute("Dimmer", "Dimmer");
+        effect.capture_frame(270.0, values(&[("Dimmer", 3.0)]));
+        effect.capture_frame(90.0, values(&[("Dimmer", 1.0)]));
+        effect.capture_frame(180.0, values(&[("Dimmer", 2.0)]));
+
+        let angles = effect.frames.iter().map(|frame| frame.angle).collect::<Vec<_>>();
+        assert_eq!(angles, vec![90.0, 180.0, 270.0]);
+    }
+
+    #[test]
+    fn removing_a_frame_shortens_the_run() {
+        let mut effect = red_to_blue();
+        let id = effect.frames[1].id.clone();
+        effect.remove_frame(&id);
+
+        assert_eq!(effect.frames.len(), 1);
+        // 只剩一帧就是恒定值，不再跑动。
+        let early = value_of(&run(&effect, 0.0, &["fix-1"]), "fix-1", "ColorRGB_R");
+        let late = value_of(&run(&effect, 500.0, &["fix-1"]), "fix-1", "ColorRGB_R");
+        assert_eq!(early, late);
+    }
+
+    #[test]
+    fn a_disabled_attribute_stops_being_driven_without_losing_its_frames() {
+        let mut effect = red_to_blue();
+        effect.attributes[0].enabled = false;
+
+        let frame = run(&effect, 0.0, &["fix-1"]);
+        assert_eq!(value_of(&frame, "fix-1", "ColorRGB_R"), None);
+        assert_eq!(value_of(&frame, "fix-1", "ColorRGB_B"), Some(0.0));
+        // 帧里的值还在，重新启用就能恢复，不用重打。
+        assert_eq!(effect.frames[0].value_of("ColorRGB_R"), Some(255.0));
+    }
+
+    #[test]
+    fn an_attribute_recorded_in_only_some_frames_still_runs() {
+        // Pan 只在两帧里出现，Dimmer 在三帧里出现 —— 各按各的曲线跑。
+        let mut effect = KeyframeEffect::new(1, "Mixed", 0);
+        effect.cycle_ms = 1000.0;
+        effect.ensure_attribute("Dimmer", "Dimmer");
+        effect.ensure_attribute("Pan", "Position");
+        effect.capture_frame(0.0, values(&[("Dimmer", 0.0)]));
+        effect.capture_frame(120.0, values(&[("Dimmer", 100.0), ("Pan", -90.0)]));
+        effect.capture_frame(240.0, values(&[("Dimmer", 50.0), ("Pan", 90.0)]));
+
+        let frame = run(&effect, 0.0, &["fix-1"]);
+        assert!(value_of(&frame, "fix-1", "Dimmer").is_some());
+        assert!(value_of(&frame, "fix-1", "Pan").is_some());
+    }
+
+    #[test]
+    fn position_frames_sweep_between_the_captured_orientations() {
+        let mut effect = KeyframeEffect::new(1, "Sweep", 0);
+        effect.cycle_ms = 1000.0;
+        effect.ensure_attribute("Pan", "Position");
+        effect.ensure_attribute("Tilt", "Position");
+        effect.capture_frame(0.0, values(&[("Pan", -90.0), ("Tilt", 10.0)]));
+        effect.capture_frame(180.0, values(&[("Pan", 90.0), ("Tilt", -10.0)]));
+
+        assert_eq!(value_of(&run(&effect, 0.0, &["fix-1"]), "fix-1", "Pan"), Some(-90.0));
+        assert_eq!(value_of(&run(&effect, 500.0, &["fix-1"]), "fix-1", "Pan"), Some(90.0));
+        // 两个轴同时反向走，扫出的是一条斜线而不是各走各的。
+        let mid = run(&effect, 250.0, &["fix-1"]);
+        assert!(value_of(&mid, "fix-1", "Pan").unwrap().abs() < 90.0);
+        assert!(value_of(&mid, "fix-1", "Tilt").unwrap().abs() < 10.0);
     }
 
     #[test]
     fn phase_offsets_stagger_the_fixtures() {
-        let mut effect = template(vec![linear_track()]);
+        let mut effect = red_to_blue();
         effect.phase = PhaseSpread {
             spread: 360.0,
             ..PhaseSpread::default()
         };
 
-        // 两盏灯错开半圈：一盏在 0 度取 0，另一盏在 180 度取 100。
+        // 两盏灯错开半圈：一盏红，另一盏蓝。
         let frame = run(&effect, 0.0, &["fix-1", "fix-2"]);
-        assert!((value_for(&frame, "fix-1").unwrap() - 0.0).abs() < 1e-9);
-        assert!((value_for(&frame, "fix-2").unwrap() - 100.0).abs() < 1e-9);
-    }
-
-    #[test]
-    fn every_fixture_gets_a_value_from_every_enabled_track() {
-        let mut second = KeyframeTrack::new("Pan", "Position");
-        second.keyframes = vec![Keyframe::new(0.0, 10.0)];
-        let effect = template(vec![linear_track(), second]);
-
-        let frame = run(&effect, 0.0, &["fix-1", "fix-2"]);
-        assert_eq!(frame.values.len(), 4);
-        assert_eq!(
-            frame
-                .values
-                .iter()
-                .filter(|value| value.attribute == "Pan")
-                .count(),
-            2
-        );
+        assert_eq!(value_of(&frame, "fix-1", "ColorRGB_R"), Some(255.0));
+        assert_eq!(value_of(&frame, "fix-2", "ColorRGB_B"), Some(255.0));
     }
 
     #[test]
     fn cycle_time_controls_the_speed() {
-        let mut fast = template(vec![linear_track()]);
+        let mut fast = red_to_blue();
         fast.cycle_ms = 500.0;
-        let mut slow = template(vec![linear_track()]);
-        slow.cycle_ms = 2000.0;
+        let slow = red_to_blue();
 
-        // 同一时刻，周期短的走得更远。
-        let fast_value = value_for(&run(&fast, 125.0, &["fix-1"]), "fix-1").unwrap();
-        let slow_value = value_for(&run(&slow, 125.0, &["fix-1"]), "fix-1").unwrap();
-        assert!(fast_value > slow_value, "{fast_value} 应大于 {slow_value}");
+        // 同一时刻，周期短的走得更远（更接近蓝）。
+        let fast_blue = value_of(&run(&fast, 125.0, &["fix-1"]), "fix-1", "ColorRGB_B").unwrap();
+        let slow_blue = value_of(&run(&slow, 125.0, &["fix-1"]), "fix-1", "ColorRGB_B").unwrap();
+        assert!(fast_blue > slow_blue);
     }
 
     #[test]
     fn a_finished_once_effect_reports_completion() {
-        let mut effect = template(vec![linear_track()]);
+        let mut effect = red_to_blue();
         effect.playback = PlaybackMode::Once;
         assert!(!run(&effect, 500.0, &["fix-1"]).finished);
         assert!(run(&effect, 1500.0, &["fix-1"]).finished);
     }
 
     #[test]
-    fn endlessness_requires_both_a_looping_mode_and_tracks() {
-        let mut effect = template(vec![linear_track()]);
-        assert!(effect.is_endless());
-
-        effect.playback = PlaybackMode::Once;
-        assert!(!effect.is_endless());
-
-        effect.playback = PlaybackMode::Loop;
-        effect.tracks.clear();
-        assert!(!effect.is_endless(), "没有轨道就不该让时钟一直转");
-    }
-
-    #[test]
     fn a_template_is_reusable_across_different_fixture_sets() {
-        // 模板不含灯具，同一份可以给任意几组灯用 —— 这正是它作为模板的意义。
-        let effect = template(vec![linear_track()]);
-        assert_eq!(run(&effect, 0.0, &["a"]).values.len(), 1);
-        assert_eq!(run(&effect, 0.0, &["a", "b", "c"]).values.len(), 3);
+        let effect = red_to_blue();
+        assert_eq!(run(&effect, 0.0, &["a"]).values.len(), 3);
+        assert_eq!(run(&effect, 0.0, &["a", "b", "c"]).values.len(), 9);
     }
 
     #[test]
     fn rate_override_speeds_the_instance_up() {
-        let effect = template(vec![linear_track()]);
+        let effect = red_to_blue();
         let normal = run(&effect, 125.0, &["fix-1"]);
         let fast = evaluate(
             &effect,
@@ -396,31 +529,20 @@ mod tests {
             },
         );
         assert!(
-            value_for(&fast, "fix-1").unwrap() > value_for(&normal, "fix-1").unwrap(),
-            "速度倍率应让实例走得更快"
+            value_of(&fast, "fix-1", "ColorRGB_B").unwrap()
+                > value_of(&normal, "fix-1", "ColorRGB_B").unwrap()
         );
-    }
-
-    #[test]
-    fn phase_offset_override_shifts_the_whole_instance() {
-        let effect = template(vec![linear_track()]);
-        let shifted = evaluate(
-            &effect,
-            0.0,
-            &fixtures(&["fix-1"]),
-            EffectOverrides {
-                phase_offset: 90.0,
-                ..EffectOverrides::default()
-            },
-        );
-        // 起点整体挪到 90 度：线性段的中点。
-        assert!((value_for(&shifted, "fix-1").unwrap() - 50.0).abs() < 1e-9);
     }
 
     #[test]
     fn size_override_scales_around_the_curve_centre() {
-        let effect = template(vec![linear_track()]);
-        // 曲线 0..100，中值 50。半幅后 180 度处应是 75，而不是压向零。
+        let mut effect = KeyframeEffect::new(1, "Dim", 0);
+        effect.cycle_ms = 1000.0;
+        effect.ensure_attribute("Dimmer", "Dimmer");
+        effect.capture_frame(0.0, values(&[("Dimmer", 0.0)]));
+        effect.capture_frame(180.0, values(&[("Dimmer", 100.0)]));
+
+        // 曲线 0..100，中值 50。半幅后 180 度处应是 75。
         let scaled = evaluate(
             &effect,
             500.0,
@@ -430,31 +552,30 @@ mod tests {
                 ..EffectOverrides::default()
             },
         );
-        assert!((value_for(&scaled, "fix-1").unwrap() - 75.0).abs() < 1e-9);
+        assert!((value_of(&scaled, "fix-1", "Dimmer").unwrap() - 75.0).abs() < 1e-9);
     }
 
     #[test]
-    fn normalising_clamps_the_cycle_and_orders_keyframes() {
-        let mut effect = template(vec![linear_track()]);
-        effect.cycle_ms = -5.0;
-        effect.phase.blocks = 0;
-        effect.tracks[0].keyframes = vec![Keyframe::new(200.0, 1.0), Keyframe::new(20.0, 2.0)];
+    fn normalising_registers_attributes_that_only_exist_in_frames() {
+        // 帧里出现过但没登记的属性要补上登记，否则永远不会被求值。
+        let mut effect = KeyframeEffect::new(1, "Recovered", 0);
+        effect.capture_frame(0.0, values(&[("Dimmer", 10.0)]));
+        effect.capture_frame(180.0, values(&[("Dimmer", 90.0)]));
 
         let effect = normalize_effect(effect);
-
-        assert!(effect.cycle_ms >= 10.0);
-        assert_eq!(effect.phase.blocks, 1);
-        assert_eq!(effect.tracks[0].keyframes[0].angle, 20.0);
+        assert!(effect.attributes.iter().any(|item| item.attribute == "Dimmer"));
+        assert!(value_of(&run(&effect, 500.0, &["fix-1"]), "fix-1", "Dimmer").is_some());
     }
 
     #[test]
-    fn a_default_track_makes_a_closed_loop() {
-        // 打首尾两帧就该得到完整的往复：0 度起、180 度到顶、绕回 0。
-        let track = KeyframeTrack::new("Dimmer", "Dimmer");
-        assert!((track.value_at(0.0) - 0.0).abs() < 1e-9);
-        assert!((track.value_at(180.0) - 100.0).abs() < 1e-9);
-        assert!((track.value_at(90.0) - 50.0).abs() < 1.0);
-        assert!((track.value_at(270.0) - 50.0).abs() < 1.0);
-        assert!(track.value_at(359.0) < 2.0);
+    fn normalising_clamps_the_cycle_and_sorts_frames() {
+        let mut effect = red_to_blue();
+        effect.cycle_ms = -5.0;
+        effect.phase.blocks = 0;
+
+        let effect = normalize_effect(effect);
+        assert!(effect.cycle_ms >= 10.0);
+        assert_eq!(effect.phase.blocks, 1);
+        assert!(effect.frames[0].angle <= effect.frames[1].angle);
     }
 }

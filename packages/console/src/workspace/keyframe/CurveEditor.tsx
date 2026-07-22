@@ -2,10 +2,10 @@ import { useCallback, useMemo, useRef } from "react";
 import type { CSSProperties, PointerEvent as ReactPointerEvent } from "react";
 import {
   CYCLE_DEGREES,
-  makeKeyframe,
+  curveFor,
+  frameValue,
   normalizeAngle,
   sample,
-  sortKeyframes,
   valueRange,
   type Keyframe,
 } from "./curve";
@@ -13,8 +13,12 @@ import {
 /**
  * 关键帧曲线编辑器。
  *
- * 横轴是一个完整周期的 0..360 度，纵轴是属性值。曲线闭环 —— 右端接回左端，
- * 所以右边缘之外画的是首帧的重复，帮助看清接缝处是否平滑。
+ * 横轴是一个完整周期的 0..360 度，纵轴是所选属性的值。曲线闭环 ——
+ * 末帧接回首帧。
+ *
+ * 一帧横跨多个属性，所以图上一个点代表的是"这一帧在当前所选属性上的取值"。
+ * 拖动它只改这一个属性的值，帧里其他属性不受影响；左右拖则移动整帧的角度，
+ * 因为角度是整帧共有的。
  */
 
 /** 内部坐标系。SVG 用 viewBox 缩放到实际尺寸，交互换算只需按比例。 */
@@ -32,28 +36,38 @@ const PLOT_HEIGHT = VIEW_HEIGHT - PAD_TOP - PAD_BOTTOM;
 const SAMPLE_STEP = 2;
 
 export interface CurveEditorProps {
-  keyframes: Keyframe[];
-  selectedIndex: number | null;
-  onSelect: (index: number | null) => void;
-  onChange: (keyframes: Keyframe[]) => void;
-  /** 当前播放角度，没有在跑时为 null。 */
+  frames: Keyframe[];
+  /** 当前在图上显示的属性 */
+  attribute: string | null;
+  /** 其余属性的曲线，淡色作为参考 */
+  ghostAttributes: string[];
+  selectedFrameId: string | null;
+  onSelect: (frameId: string | null) => void;
+  /** 拖动改变某帧的角度与当前属性上的取值 */
+  onMove: (frameId: string, angle: number, value: number) => void;
+  /** 当前播放角度，没有在跑时为 null */
   playhead: number | null;
-  disabled?: boolean;
 }
 
 export function CurveEditor({
-  keyframes,
-  selectedIndex,
+  frames,
+  attribute,
+  ghostAttributes,
+  selectedFrameId,
   onSelect,
-  onChange,
+  onMove,
   playhead,
-  disabled = false,
 }: CurveEditorProps) {
   const svgRef = useRef<SVGSVGElement>(null);
-  const dragRef = useRef<{ index: number } | null>(null);
+  const draggingRef = useRef<string | null>(null);
 
-  // 纵轴范围取整到"整齐"的边界，这样拖动关键帧时坐标轴不会一直跳。
-  const range = useMemo(() => niceRange(valueRange(keyframes)), [keyframes]);
+  const points = useMemo(
+    () => (attribute ? curveFor(frames, attribute) : []),
+    [frames, attribute],
+  );
+
+  // 纵轴范围取整到"整齐"的边界，这样拖动时坐标轴不会一直跳。
+  const range = useMemo(() => niceRange(valueRange(points)), [points]);
 
   const toX = useCallback((angle: number) => PAD_LEFT + (angle / CYCLE_DEGREES) * PLOT_WIDTH, []);
   const toY = useCallback(
@@ -64,7 +78,6 @@ export function CurveEditor({
     [range],
   );
 
-  /** 屏幕坐标 → 数据坐标。 */
   const fromClient = useCallback(
     (clientX: number, clientY: number) => {
       const element = svgRef.current;
@@ -82,59 +95,27 @@ export function CurveEditor({
     [range],
   );
 
-  const path = useMemo(() => buildPath(keyframes, toX, toY), [keyframes, toX, toY]);
+  const path = useMemo(() => buildPath(points, toX, toY), [points, toX, toY]);
 
-  function handleBackgroundClick(event: ReactPointerEvent<SVGRectElement>) {
-    if (disabled) return;
-    const point = fromClient(event.clientX, event.clientY);
-    if (!point) return;
-
-    // 在空白处按下即新增一帧并选中它，可以立刻接着拖。
-    const next = sortKeyframes([
-      ...keyframes,
-      makeKeyframe(clampAngle(point.angle), round(point.value), inheritedInterpolation(keyframes)),
-    ]);
-    const index = next.findIndex(
-      (frame) => Math.abs(frame.angle - clampAngle(point.angle)) < 1e-6,
-    );
-    onChange(next);
-    onSelect(index >= 0 ? index : null);
-  }
-
-  function handleKeyframePointerDown(event: ReactPointerEvent<SVGGElement>, index: number) {
-    if (disabled) return;
+  function handlePointerDown(event: ReactPointerEvent<SVGGElement>, frameId: string) {
     event.stopPropagation();
-    onSelect(index);
-    dragRef.current = { index };
+    onSelect(frameId);
+    draggingRef.current = frameId;
     event.currentTarget.setPointerCapture(event.pointerId);
   }
 
   function handlePointerMove(event: ReactPointerEvent<SVGGElement>) {
-    const drag = dragRef.current;
-    if (!drag || disabled) return;
+    const frameId = draggingRef.current;
+    if (!frameId || !attribute) return;
     const point = fromClient(event.clientX, event.clientY);
     if (!point) return;
-
-    const moved = keyframes.map((frame, index) =>
-      index === drag.index
-        ? { ...frame, angle: clampAngle(point.angle), value: round(point.value) }
-        : frame,
-    );
-
-    // 拖过相邻帧时顺序会变，重排后要把选中跟到新位置上，
-    // 否则松手前后选中的会是另一帧。
-    const target = moved[drag.index];
-    const sorted = sortKeyframes(moved);
-    const nextIndex = sorted.indexOf(target);
-    dragRef.current = { index: nextIndex >= 0 ? nextIndex : drag.index };
-    onChange(sorted);
-    onSelect(nextIndex >= 0 ? nextIndex : drag.index);
+    onMove(frameId, clampAngle(point.angle), round(point.value));
   }
 
   function handlePointerUp(event: ReactPointerEvent<SVGGElement>) {
-    if (dragRef.current) {
+    if (draggingRef.current) {
       event.currentTarget.releasePointerCapture(event.pointerId);
-      dragRef.current = null;
+      draggingRef.current = null;
     }
   }
 
@@ -154,11 +135,10 @@ export function CurveEditor({
         height={PLOT_HEIGHT}
         fill="rgba(0,0,0,0.28)"
         stroke="rgba(255,255,255,0.08)"
-        onPointerDown={handleBackgroundClick}
-        style={{ cursor: disabled ? "default" : "crosshair" }}
+        onPointerDown={() => onSelect(null)}
       />
 
-      {/* 角度刻度：每 90 度一条，标出四分之一周期 */}
+      {/* 角度刻度：每 90 度一条 */}
       {[0, 90, 180, 270, 360].map((angle) => (
         <g key={`grid-${angle}`}>
           <line
@@ -206,7 +186,20 @@ export function CurveEditor({
         </g>
       ))}
 
-      {/* 曲线 */}
+      {/* 其余属性的曲线，淡色参考 —— 一帧里的属性是一起动的，
+          只看一条容易忘了别的属性也在跑 */}
+      {ghostAttributes.map((ghost) => (
+        <path
+          key={`ghost-${ghost}`}
+          d={buildPath(curveFor(frames, ghost), toX, toYGhost(frames, ghost, toY, range))}
+          fill="none"
+          stroke="rgba(255,255,255,0.14)"
+          strokeWidth={1}
+          pointerEvents="none"
+        />
+      ))}
+
+      {/* 当前属性的曲线 */}
       <path d={path} fill="none" stroke="var(--lx-accent-bright)" strokeWidth={2} pointerEvents="none" />
 
       {/* 播放头 */}
@@ -222,24 +215,29 @@ export function CurveEditor({
         />
       )}
 
-      {/* 关键帧 */}
-      {keyframes.map((frame, index) => {
-        const selected = index === selectedIndex;
+      {/* 帧点 */}
+      {frames.map((frame) => {
+        const value = attribute ? frameValue(frame, attribute) : null;
+        const selected = frame.id === selectedFrameId;
+        // 该帧没记录当前属性时，画在轴底并标成空心 —— 让人看得出
+        // "这一帧存在，但没有这个属性的值"。
+        const missing = value === null;
+        const y = missing ? PAD_TOP + PLOT_HEIGHT : toY(value);
         return (
           <g
-            key={`${frame.angle}-${index}`}
-            onPointerDown={(event) => handleKeyframePointerDown(event, index)}
-            style={{ cursor: disabled ? "default" : "grab" }}
+            key={frame.id}
+            onPointerDown={(event) => handlePointerDown(event, frame.id)}
+            style={{ cursor: "grab" }}
           >
-            {/* 命中区域比可见的点大一圈，拖起来不用瞄准 */}
-            <circle cx={toX(frame.angle)} cy={toY(frame.value)} r={11} fill="transparent" />
+            <circle cx={toX(frame.angle)} cy={y} r={11} fill="transparent" />
             <circle
               cx={toX(frame.angle)}
-              cy={toY(frame.value)}
+              cy={y}
               r={selected ? 6 : 4.5}
-              fill={selected ? "var(--lx-accent-bright)" : "var(--lx-bg-deep)"}
-              stroke="var(--lx-accent-bright)"
+              fill={missing ? "transparent" : selected ? "var(--lx-accent-bright)" : "var(--lx-bg-deep)"}
+              stroke={missing ? "var(--lx-fg-tertiary)" : "var(--lx-accent-bright)"}
               strokeWidth={2}
+              strokeDasharray={missing ? "2 2" : undefined}
               pointerEvents="none"
             />
           </g>
@@ -251,24 +249,40 @@ export function CurveEditor({
 
 /** 采样出曲线路径。整圈闭合，所以采到 360 度为止。 */
 function buildPath(
-  keyframes: Keyframe[],
+  points: ReturnType<typeof curveFor>,
   toX: (angle: number) => number,
   toY: (value: number) => number,
 ): string {
-  if (keyframes.length === 0) return "";
+  if (points.length === 0) return "";
 
-  const points: string[] = [];
+  const segments: string[] = [];
   for (let angle = 0; angle <= CYCLE_DEGREES; angle += SAMPLE_STEP) {
     // 360 度处取 0 度的值，让曲线首尾接上。
-    const value = sample(keyframes, angle >= CYCLE_DEGREES ? 0 : angle);
-    points.push(`${points.length === 0 ? "M" : "L"}${toX(angle).toFixed(2)},${toY(value).toFixed(2)}`);
+    const value = sample(points, angle >= CYCLE_DEGREES ? 0 : angle);
+    if (value === null) continue;
+    segments.push(
+      `${segments.length === 0 ? "M" : "L"}${toX(angle).toFixed(2)},${toY(value).toFixed(2)}`,
+    );
   }
-  return points.join(" ");
+  return segments.join(" ");
 }
 
-/** 新帧沿用曲线上已有的插值方式，而不是一律回到线性。 */
-function inheritedInterpolation(keyframes: Keyframe[]) {
-  return keyframes[0]?.interpolation ?? "linear";
+/**
+ * 参考曲线用自己的取值范围映射到同一张图上。
+ *
+ * 不同属性量纲差得远（Dimmer 0..100、Pan -270..270），共用一根纵轴的话
+ * 其中一条会被压成直线，看不出形状。
+ */
+function toYGhost(
+  frames: Keyframe[],
+  attribute: string,
+  _toY: (value: number) => number,
+  _range: { min: number; max: number },
+): (value: number) => number {
+  const ghostRange = niceRange(valueRange(curveFor(frames, attribute)));
+  const span = ghostRange.max - ghostRange.min || 1;
+  return (value: number) =>
+    PAD_TOP + PLOT_HEIGHT - ((value - ghostRange.min) / span) * PLOT_HEIGHT;
 }
 
 function clampAngle(angle: number): number {

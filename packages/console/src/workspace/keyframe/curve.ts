@@ -19,7 +19,29 @@ export interface Handle {
   dy: number;
 }
 
+/** 一帧里某个属性的取值。 */
+export interface FrameValue {
+  attribute: string;
+  value: number;
+}
+
+/**
+ * 一个关键帧：某个角度上的一组属性快照。
+ *
+ * 一帧横跨所有属性，而不是每个属性各有一套帧 —— 颜色是 R/G/B 三个值同时
+ * 成立的一件事，拆开记就不再是一个颜色了。
+ */
 export interface Keyframe {
+  id: string;
+  angle: number;
+  values: FrameValue[];
+  interpolation: Interpolation;
+  handleOut: Handle;
+  handleIn: Handle;
+}
+
+/** 曲线上的一个采样点，由某个属性在各帧上的取值展开而来。 */
+export interface CurvePoint {
   angle: number;
   value: number;
   interpolation: Interpolation;
@@ -35,29 +57,45 @@ export function normalizeAngle(angle: number): number {
   return wrapped < 0 ? wrapped + CYCLE_DEGREES : wrapped;
 }
 
-export function makeKeyframe(angle: number, value: number, interpolation: Interpolation = "linear"): Keyframe {
-  return {
-    angle: normalizeAngle(angle),
-    value,
-    interpolation,
-    handleOut: { ...DEFAULT_HANDLE },
-    handleIn: { ...DEFAULT_HANDLE },
-  };
-}
-
-export function sortKeyframes(keyframes: Keyframe[]): Keyframe[] {
-  return [...keyframes]
+export function sortFrames(frames: Keyframe[]): Keyframe[] {
+  return [...frames]
     .map((frame) => ({ ...frame, angle: normalizeAngle(frame.angle) }))
     .sort((left, right) => left.angle - right.angle);
 }
 
-/** 在给定角度采样曲线。关键帧须已排序。 */
-export function sample(keyframes: Keyframe[], angle: number): number {
-  if (keyframes.length === 0) return 0;
-  if (keyframes.length === 1) return keyframes[0].value;
+export function frameValue(frame: Keyframe, attribute: string): number | null {
+  return frame.values.find((item) => item.attribute === attribute)?.value ?? null;
+}
+
+/**
+ * 取出某个属性在各帧上的曲线。
+ *
+ * 没有记录该属性的帧会被跳过 —— 后加入的属性在早先的帧里本来就没有值，
+ * 补零会让灯在那一段突然熄掉。
+ */
+export function curveFor(frames: Keyframe[], attribute: string): CurvePoint[] {
+  const points: CurvePoint[] = [];
+  for (const frame of frames) {
+    const value = frameValue(frame, attribute);
+    if (value === null) continue;
+    points.push({
+      angle: frame.angle,
+      value,
+      interpolation: frame.interpolation,
+      handleOut: frame.handleOut,
+      handleIn: frame.handleIn,
+    });
+  }
+  return points;
+}
+
+/** 在给定角度采样一条曲线。采样点须已排序。没有采样点时返回 null。 */
+export function sample(points: CurvePoint[], angle: number): number | null {
+  if (points.length === 0) return null;
+  if (points.length === 1) return points[0].value;
 
   const target = normalizeAngle(angle);
-  const [from, to, progress] = segmentAt(keyframes, target);
+  const [from, to, progress] = segmentAt(points, target);
   return interpolate(from, to, progress);
 }
 
@@ -65,9 +103,9 @@ export function sample(keyframes: Keyframe[], angle: number): number {
  * 找出角度所在的段。落在末帧之后或首帧之前时走的是跨 0 度的收尾段 ——
  * 曲线在这里闭合成环。
  */
-function segmentAt(keyframes: Keyframe[], angle: number): [Keyframe, Keyframe, number] {
-  const first = keyframes[0];
-  const last = keyframes[keyframes.length - 1];
+function segmentAt(points: CurvePoint[], angle: number): [CurvePoint, CurvePoint, number] {
+  const first = points[0];
+  const last = points[points.length - 1];
 
   if (angle < first.angle || angle >= last.angle) {
     const span = CYCLE_DEGREES - last.angle + first.angle;
@@ -75,9 +113,9 @@ function segmentAt(keyframes: Keyframe[], angle: number): [Keyframe, Keyframe, n
     return [last, first, ratio(travelled, span)];
   }
 
-  for (let index = 0; index < keyframes.length - 1; index += 1) {
-    const from = keyframes[index];
-    const to = keyframes[index + 1];
+  for (let index = 0; index < points.length - 1; index += 1) {
+    const from = points[index];
+    const to = points[index + 1];
     if (angle >= from.angle && angle < to.angle) {
       return [from, to, ratio(angle - from.angle, to.angle - from.angle)];
     }
@@ -91,7 +129,7 @@ function ratio(travelled: number, span: number): number {
   return Math.min(1, Math.max(0, travelled / span));
 }
 
-function interpolate(from: Keyframe, to: Keyframe, progress: number): number {
+function interpolate(from: CurvePoint, to: CurvePoint, progress: number): number {
   switch (from.interpolation) {
     case "step":
       return from.value;
@@ -162,18 +200,19 @@ function cubicBezierDerivative(t: number, p1: number, p2: number): number {
 }
 
 /** 曲线的取值范围，用来决定绘图的纵轴。留一点余量避免贴边。 */
-export function valueRange(keyframes: Keyframe[]): { min: number; max: number } {
-  if (keyframes.length === 0) return { min: 0, max: 100 };
+export function valueRange(points: CurvePoint[]): { min: number; max: number } {
+  if (points.length === 0) return { min: 0, max: 100 };
 
   let min = Infinity;
   let max = -Infinity;
-  for (const frame of keyframes) {
-    min = Math.min(min, frame.value);
-    max = Math.max(max, frame.value);
+  for (const point of points) {
+    min = Math.min(min, point.value);
+    max = Math.max(max, point.value);
   }
-  // 贝塞尔过冲可能超出关键帧本身的范围，采样一遍把它包进去。
+  // 贝塞尔过冲可能超出采样点本身的范围，扫一遍把它包进去。
   for (let angle = 0; angle < CYCLE_DEGREES; angle += 4) {
-    const value = sample(keyframes, angle);
+    const value = sample(points, angle);
+    if (value === null) continue;
     min = Math.min(min, value);
     max = Math.max(max, value);
   }

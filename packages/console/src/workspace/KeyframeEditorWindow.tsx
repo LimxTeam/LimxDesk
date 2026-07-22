@@ -3,19 +3,29 @@ import type { CSSProperties } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { CurveEditor } from "./keyframe/CurveEditor";
-import { CYCLE_DEGREES, sortKeyframes, type Interpolation, type Keyframe } from "./keyframe/curve";
+import {
+  CYCLE_DEGREES,
+  frameValue,
+  sortFrames,
+  type Interpolation,
+  type Keyframe,
+} from "./keyframe/curve";
 import { clearWorkspaceRuntimeCache } from "./workspaceRuntime";
 
 /**
  * 关键帧效果编辑器。
  *
- * 这里编辑的是效果模板：形状、速度、相位规则，不含灯具。选中灯之后点
- * "应用"，效果就落到 programmer 的效果层上；随后按 Store 选一个插槽，
- * 它跟 programmer 里的其他内容一起进 cue —— 存效果走的是既有的那条
- * 保存链路，没有单独的保存命令。
+ * 工作方式是"记录"，不是"生成"：把灯调成想要的样子，按「打帧」记下这一刻
+ * 所有已激活属性的值；再调一次、再打一帧，效果就在两帧之间跑。要让灯从红
+ * 跑到蓝，就调成红打一帧、调成蓝打一帧 —— 没有任何东西替你决定跑什么，
+ * 那是预制效果的事。
  *
- * 一个周期是一整圈 360 度：打上首尾帧，曲线自动闭环。速度用"跑完一圈
- * 要多久"来设，而不是某个抽象的速率数字。
+ * 一帧横跨所有属性：颜色是 R/G/B 三个值同时成立的一件事，位置是 Pan/Tilt
+ * 一起构成的一个朝向，拆开记就不成其为颜色或朝向了。图上一次看一个属性的
+ * 曲线，其余属性以淡色作参考。
+ *
+ * 模板不含灯具。选灯之后点「应用」，效果落到编程器的效果层上；随后按 Store
+ * 选一个插槽，它跟编程器里的其他内容一起进 cue。
  */
 
 // ── 契约类型（对应 limxdesk-keyframe） ──────────────────────
@@ -36,13 +46,12 @@ interface PhaseSpread {
   reverse: boolean;
 }
 
-interface KeyframeTrack {
-  id: string;
+/** 参与效果的属性。停用只是不再驱动它，帧里的值仍然保留。 */
+interface EffectAttribute {
   attribute: string;
   featureGroup: string;
   layer: TrackLayer;
   enabled: boolean;
-  keyframes: Keyframe[];
 }
 
 interface KeyframeEffect {
@@ -52,7 +61,8 @@ interface KeyframeEffect {
   cycleMs: number;
   playback: PlaybackMode;
   phase: PhaseSpread;
-  tracks: KeyframeTrack[];
+  attributes: EffectAttribute[];
+  frames: Keyframe[];
   updatedAtMs: number;
 }
 
@@ -66,6 +76,15 @@ interface FixtureSelection {
   fixtureIds: string[];
   primaryFixtureId: string | null;
   version: number;
+}
+
+/** 编程器里已激活的属性 —— 打帧时被记录的就是这些。 */
+interface ActiveAttribute {
+  attribute: string;
+  featureGroup: string;
+  value: number | null;
+  fixtureCount: number;
+  totalFixtures: number;
 }
 
 const PLAYBACK_LABELS: Array<{ kind: PlaybackKind; label: string; hint: string }> = [
@@ -83,32 +102,8 @@ const INTERPOLATION_LABELS: Array<{ value: Interpolation; label: string }> = [
   { value: "bezier", label: "贝塞尔" },
 ];
 
-/** 灯库里存在的属性，用于查量程与补充建轨道。 */
-interface AttributeOption {
-  name: string;
-  featureGroup: string;
-  minValue: number | null;
-  maxValue: number | null;
-  defaultValue: number | null;
-  valueKind: string;
-  fixtureCount: number;
-  totalFixtures: number;
-}
-
-/**
- * programmer 里已激活的属性 —— 你已经调过的那些。
- *
- * 效果的轨道从这里来：调过什么，效果就驱动什么。让人从灯库的全量清单里
- * 挑属性是把编程顺序倒过来了。
- */
-interface ActiveAttribute {
-  attribute: string;
-  featureGroup: string;
-  /** 当前值，作为曲线的基准 */
-  value: number | null;
-  fixtureCount: number;
-  totalFixtures: number;
-}
+/** 打帧角度的快捷位置。四分之一圈是最常用的落点。 */
+const ANGLE_PRESETS = [0, 90, 180, 270];
 
 export function KeyframeEditorWindow() {
   const [document, setDocument] = useState<KeyframeLibraryDocument>({
@@ -116,11 +111,11 @@ export function KeyframeEditorWindow() {
     selectedEffectId: null,
     version: 0,
   });
-  const [selectedTrackId, setSelectedTrackId] = useState<string | null>(null);
-  const [selectedKeyframe, setSelectedKeyframe] = useState<number | null>(null);
+  const [selectedAttribute, setSelectedAttribute] = useState<string | null>(null);
+  const [selectedFrameId, setSelectedFrameId] = useState<string | null>(null);
+  const [captureAngle, setCaptureAngle] = useState(0);
   const [status, setStatus] = useState("No show loaded");
   const [previewAngle, setPreviewAngle] = useState<number | null>(null);
-  const [attributes, setAttributes] = useState<AttributeOption[]>([]);
   const [activeAttributes, setActiveAttributes] = useState<ActiveAttribute[]>([]);
   const [selection, setSelection] = useState<FixtureSelection>({
     fixtureIds: [],
@@ -128,7 +123,7 @@ export function KeyframeEditorWindow() {
     version: 0,
   });
 
-  // 编辑是本地即时的，落盘另行节流 —— 拖一次曲线不该写十几次 show 文件。
+  // 编辑本地即时生效，落盘另行节流 —— 拖一次曲线不该写十几次 show 文件。
   const pendingSaveRef = useRef<KeyframeEffect | null>(null);
   const saveTimerRef = useRef<number | null>(null);
 
@@ -140,18 +135,26 @@ export function KeyframeEditorWindow() {
     [document.effects, document.selectedEffectId],
   );
 
-  // 灯库里有、但编程器还没碰过的属性。放在次要位置备用。
-  const otherAttributes = useMemo(
+  const attribute = useMemo(() => {
+    const list = effect?.attributes ?? [];
+    return (
+      list.find((item) => item.attribute === selectedAttribute)?.attribute ??
+      list[0]?.attribute ??
+      null
+    );
+  }, [effect, selectedAttribute]);
+
+  const ghostAttributes = useMemo(
     () =>
-      attributes.filter(
-        (option) => !activeAttributes.some((item) => item.attribute === option.name),
-      ),
-    [attributes, activeAttributes],
+      (effect?.attributes ?? [])
+        .filter((item) => item.enabled && item.attribute !== attribute)
+        .map((item) => item.attribute),
+    [effect, attribute],
   );
 
-  const track = useMemo(
-    () => effect?.tracks.find((item) => item.id === selectedTrackId) ?? effect?.tracks[0] ?? null,
-    [effect, selectedTrackId],
+  const selectedFrame = useMemo(
+    () => effect?.frames.find((frame) => frame.id === selectedFrameId) ?? null,
+    [effect, selectedFrameId],
   );
 
   useEffect(() => {
@@ -165,16 +168,12 @@ export function KeyframeEditorWindow() {
     const unlisteners: Array<() => void> = [];
 
     const register = async () => {
-      const changed = await listen("keyframe:changed", () => {
-        void load();
-      });
+      const changed = await listen("keyframe:changed", () => void load());
       const selectionChanged = await listen<FixtureSelection>(
         "fixture-selection:changed",
         (event) => setSelection(event.payload),
       );
-      const showLoaded = await listen("show:loaded", () => {
-        void load();
-      });
+      const showLoaded = await listen("show:loaded", () => void load());
       const showDeleted = await listen("show:deleted", () => {
         setDocument({ effects: [], selectedEffectId: null, version: 0 });
         setStatus("No show loaded");
@@ -197,47 +196,7 @@ export function KeyframeEditorWindow() {
     };
   }, []);
 
-  // 预览播放头：按效果的周期与模式在本地推进，纯显示用途。
-  useEffect(() => {
-    if (!effect) {
-      setPreviewAngle(null);
-      return;
-    }
-    const startedAt = performance.now();
-    let frame = 0;
-    const step = () => {
-      const elapsed = performance.now() - startedAt;
-      setPreviewAngle(previewAngleFor(effect, elapsed));
-      frame = requestAnimationFrame(step);
-    };
-    frame = requestAnimationFrame(step);
-    return () => cancelAnimationFrame(frame);
-  }, [effect?.id, effect?.cycleMs, effect?.playback.kind, effect?.playback.count]);
-
-  // 可用属性取决于手上选中的灯 —— 型号不同能做的事就不同，
-  // 一份写死的清单在真实 rig 上必然是错的。
-  useEffect(() => {
-    if (selection.fixtureIds.length === 0) {
-      setAttributes([]);
-      return;
-    }
-    let active = true;
-    void invoke<AttributeOption[]>("keyframe_available_attributes", {
-      fixtureIds: selection.fixtureIds,
-    })
-      .then((next) => {
-        if (active) setAttributes(next);
-      })
-      .catch((error) => {
-        if (active) setStatus(String(error));
-      });
-    return () => {
-      active = false;
-    };
-  }, [selection.fixtureIds.join("|")]);
-
-  // programmer 里已激活的属性。它随每次调值变化，因此跟着
-  // programmer:changed 走。
+  // 编程器里已激活的属性。打帧记录的就是这些，因此要跟着编程器变。
   useEffect(() => {
     let active = true;
     const refresh = () => {
@@ -262,14 +221,30 @@ export function KeyframeEditorWindow() {
     };
   }, [selection.fixtureIds.join("|")]);
 
+  // 预览播放头：按效果的周期与模式在本地推进，纯显示用途。
+  useEffect(() => {
+    if (!effect) {
+      setPreviewAngle(null);
+      return;
+    }
+    const startedAt = performance.now();
+    let frame = 0;
+    const step = () => {
+      setPreviewAngle(previewAngleFor(effect, performance.now() - startedAt));
+      frame = requestAnimationFrame(step);
+    };
+    frame = requestAnimationFrame(step);
+    return () => cancelAnimationFrame(frame);
+  }, [effect?.id, effect?.cycleMs, effect?.playback.kind, effect?.playback.count]);
+
   async function load() {
     try {
       const next = await invoke<KeyframeLibraryDocument>("keyframe_load_current_show");
       setDocument(next);
       setStatus(
         next.effects.length === 0
-          ? "No effects yet"
-          : `${next.effects.length} effect${next.effects.length === 1 ? "" : "s"}`,
+          ? "还没有效果"
+          : `${next.effects.length} 个效果`,
       );
     } catch (error) {
       setDocument({ effects: [], selectedEffectId: null, version: 0 });
@@ -277,12 +252,7 @@ export function KeyframeEditorWindow() {
     }
   }
 
-  /**
-   * 本地立即生效，落盘延后合并。
-   *
-   * 拖动曲线会连续产生几十次改动，每次都写 show 文件既慢也毫无必要；
-   * 这里只保留最后一次，静止 220ms 后再写。
-   */
+  /** 本地立即生效，落盘延后合并。 */
   const applyEffect = useCallback((next: KeyframeEffect) => {
     setDocument((current) => ({
       ...current,
@@ -290,9 +260,7 @@ export function KeyframeEditorWindow() {
     }));
 
     pendingSaveRef.current = next;
-    if (saveTimerRef.current !== null) {
-      window.clearTimeout(saveTimerRef.current);
-    }
+    if (saveTimerRef.current !== null) window.clearTimeout(saveTimerRef.current);
     saveTimerRef.current = window.setTimeout(() => {
       saveTimerRef.current = null;
       const pending = pendingSaveRef.current;
@@ -323,86 +291,54 @@ export function KeyframeEditorWindow() {
   async function run(command: string, args: Record<string, unknown> = {}) {
     try {
       flushPendingSave();
-      const next = await invoke<KeyframeLibraryDocument>(command, args);
-      setDocument(next);
-      setSelectedKeyframe(null);
+      setDocument(await invoke<KeyframeLibraryDocument>(command, args));
+      setSelectedFrameId(null);
     } catch (error) {
       setStatus(String(error));
     }
   }
 
-  function updateTrack(next: KeyframeTrack) {
-    if (!effect) return;
-    applyEffect({
-      ...effect,
-      tracks: effect.tracks.map((item) => (item.id === next.id ? next : item)),
-    });
-  }
-
-  function addTrack(attribute: string, featureGroup: string) {
-    if (!effect) return;
-    const existing = effect.tracks.find((item) => item.attribute === attribute);
-    if (existing) {
-      setSelectedTrackId(existing.id);
-      setStatus(`${attribute} 已有轨道`);
-      return;
-    }
-    const created: KeyframeTrack = {
-      id: crypto.randomUUID(),
-      attribute,
-      featureGroup,
-      layer: "absolute",
-      enabled: true,
-      keyframes: sortKeyframes(curveFor(attribute)),
-    };
-    applyEffect({ ...effect, tracks: [...effect.tracks, created] });
-    setSelectedTrackId(created.id);
-    setSelectedKeyframe(null);
-  }
-
   /**
-   * 以 programmer 现值为基准生成首尾两帧。
+   * 打一帧：把编程器里此刻的值记在指定角度上。
    *
-   * 与后端 curve_from_current 同一套规则：现值当高点，量程低端当低点；
-   * 量程跨零的属性（Pan/Tilt）则绕现值对称摆动。
+   * 这是关键帧的核心动作 —— 记录你已经调好的样子，而不是生成一条曲线。
    */
-  function curveFor(attribute: string): Keyframe[] {
-    const current = activeAttributes.find((item) => item.attribute === attribute)?.value ?? null;
-    const range = attributes.find((item) => item.name === attribute);
-    const min = range?.minValue ?? null;
-    const max = range?.maxValue ?? null;
-    const base = current ?? (max ?? 100);
-
-    let low = 0;
-    let high = base;
-    if (min !== null && max !== null && min < 0 && max > 0) {
-      const reach = Math.abs((max - min) * 0.25);
-      low = Math.max(min, base - reach);
-      high = Math.min(max, base + reach);
-    } else if (min !== null) {
-      low = min;
-      high = base;
-    }
-
-    const handle = { dx: 1 / 3, dy: 0 };
-    return [
-      { angle: 0, value: round(low), interpolation: "smooth", handleOut: { ...handle }, handleIn: { ...handle } },
-      { angle: 180, value: round(high), interpolation: "smooth", handleOut: { ...handle }, handleIn: { ...handle } },
-    ];
-  }
-
-  function removeTrack(trackId: string) {
+  async function captureFrame() {
     if (!effect) return;
-    applyEffect({ ...effect, tracks: effect.tracks.filter((item) => item.id !== trackId) });
-    setSelectedTrackId(null);
+    flushPendingSave();
+    try {
+      const next = await invoke<KeyframeLibraryDocument>("keyframe_capture_frame", {
+        effectId: effect.id,
+        angle: captureAngle,
+      });
+      setDocument(next);
+      clearWorkspaceRuntimeCache(["frames"]);
+      const captured = activeAttributes.map((item) => item.attribute).join(", ");
+      setStatus(`已在 ${captureAngle}° 打帧：${captured}`);
+      // 打完自动挪到下一个常用落点，连着打不用每次改角度。
+      setCaptureAngle((current) => nextAnglePreset(current));
+    } catch (error) {
+      setStatus(String(error));
+    }
   }
 
-  /**
-   * 把效果应用到当前选择，进入 programmer。
-   *
-   * 之后按 Store 选插槽即可存下 —— 效果和 programmer 里的其他内容一起走，
-   * 不需要为它单开一条保存路径。
-   */
+  async function removeFrame(frameId: string) {
+    if (!effect) return;
+    flushPendingSave();
+    try {
+      setDocument(
+        await invoke<KeyframeLibraryDocument>("keyframe_remove_frame", {
+          effectId: effect.id,
+          frameId,
+        }),
+      );
+      setSelectedFrameId(null);
+      clearWorkspaceRuntimeCache(["frames"]);
+    } catch (error) {
+      setStatus(String(error));
+    }
+  }
+
   async function applyToSelection() {
     if (!effect) return;
     flushPendingSave();
@@ -414,44 +350,60 @@ export function KeyframeEditorWindow() {
     }
   }
 
-  function updateKeyframes(next: Keyframe[]) {
-    if (!effect || !track) return;
-    updateTrack({ ...track, keyframes: next });
-  }
-
-  function updateSelectedKeyframe(patch: Partial<Keyframe>) {
-    if (!track || selectedKeyframe === null) return;
-    const next = track.keyframes.map((frame, index) =>
-      index === selectedKeyframe ? { ...frame, ...patch } : frame,
-    );
-    updateTrack({ ...track, keyframes: sortKeyframes(next) });
-  }
-
-  function deleteSelectedKeyframe() {
-    if (!track || selectedKeyframe === null) return;
-    if (track.keyframes.length <= 1) {
-      setStatus("至少保留一帧");
-      return;
-    }
-    updateTrack({
-      ...track,
-      keyframes: track.keyframes.filter((_, index) => index !== selectedKeyframe),
+  /** 拖动图上的点：改这一帧的角度，以及它在当前属性上的取值。 */
+  function moveFrame(frameId: string, angle: number, value: number) {
+    if (!effect || !attribute) return;
+    const frames = effect.frames.map((frame) => {
+      if (frame.id !== frameId) return frame;
+      const values = frame.values.some((item) => item.attribute === attribute)
+        ? frame.values.map((item) =>
+            item.attribute === attribute ? { ...item, value } : item,
+          )
+        : [...frame.values, { attribute, value }];
+      return { ...frame, angle, values };
     });
-    setSelectedKeyframe(null);
+    applyEffect({ ...effect, frames: sortFrames(frames) });
   }
 
-  const frame = selectedKeyframe !== null ? track?.keyframes[selectedKeyframe] ?? null : null;
+  function patchFrame(frameId: string, patch: Partial<Keyframe>) {
+    if (!effect) return;
+    applyEffect({
+      ...effect,
+      frames: sortFrames(
+        effect.frames.map((frame) => (frame.id === frameId ? { ...frame, ...patch } : frame)),
+      ),
+    });
+  }
+
+  function setFrameValue(frameId: string, value: number) {
+    if (!effect || !attribute) return;
+    moveFrame(frameId, effect.frames.find((frame) => frame.id === frameId)?.angle ?? 0, value);
+  }
+
+  function toggleAttribute(name: string) {
+    if (!effect) return;
+    applyEffect({
+      ...effect,
+      attributes: effect.attributes.map((item) =>
+        item.attribute === name ? { ...item, enabled: !item.enabled } : item,
+      ),
+    });
+  }
+
+  const canCapture = Boolean(effect) && activeAttributes.length > 0;
 
   return (
     <div style={rootStyle}>
-      {/* 工具栏：效果的增删选 */}
+      {/* 工具栏 */}
       <div style={toolbarStyle}>
         <span style={badgeStyle}>FX</span>
         <select
           className="lx-input lx-input-sm"
           value={effect?.id ?? ""}
-          onChange={(event) => void run("keyframe_select_effect", { effectId: event.currentTarget.value })}
-          style={{ width: 190 }}
+          onChange={(event) =>
+            void run("keyframe_select_effect", { effectId: event.currentTarget.value })
+          }
+          style={{ width: 180 }}
           disabled={document.effects.length === 0}
         >
           {document.effects.map((item) => (
@@ -480,189 +432,224 @@ export function KeyframeEditorWindow() {
         >
           删除
         </button>
+        <div style={{ flex: 1 }} />
         <button
           className="lx-btn lx-btn-ghost"
           type="button"
           disabled={!effect || selection.fixtureIds.length === 0}
           onClick={() => void applyToSelection()}
-          title={
-            activeAttributes.length === 0
-              ? "先在编程器里调一个属性"
-              : "把效果应用到当前选中的灯，进入编程器；随后按 Store 选插槽存下"
-          }
+          title="把效果应用到选中的灯，进入编程器；随后按 Store 选插槽存下"
         >
           应用 {selection.fixtureIds.length > 0 ? `(${selection.fixtureIds.length})` : ""}
         </button>
-        <div style={{ flex: 1 }} />
         {effect && (
           <input
             className="lx-input lx-input-sm"
             value={effect.name}
             onChange={(event) => applyEffect({ ...effect, name: event.currentTarget.value })}
-            style={{ width: 150 }}
+            style={{ width: 130 }}
           />
         )}
       </div>
 
       {effect ? (
         <div style={bodyStyle}>
-          {/* 轨道列表 */}
-          <div style={trackPanelStyle}>
-            <div style={panelHeadStyle}>轨道</div>
-            <div style={trackListStyle}>
-              {effect.tracks.map((item) => (
-                <div
-                  key={item.id}
-                  onClick={() => {
-                    setSelectedTrackId(item.id);
-                    setSelectedKeyframe(null);
-                  }}
-                  style={{
-                    ...trackRowStyle,
-                    borderColor:
-                      item.id === track?.id ? "var(--lx-accent-bright)" : "rgba(255,255,255,0.08)",
-                    opacity: item.enabled ? 1 : 0.45,
-                  }}
-                >
-                  <div style={{ display: "grid", gap: 1, minWidth: 0 }}>
-                    <strong style={ellipsisStyle}>{item.attribute}</strong>
-                    <small className="lx-code" style={{ color: "var(--lx-fg-tertiary)" }}>
-                      {item.keyframes.length} 帧 · {item.layer === "relative" ? "相对" : "绝对"}
-                    </small>
-                  </div>
-                  <div style={{ display: "flex", gap: 2 }}>
+          {/* 左栏：打帧 + 帧列表 + 属性 */}
+          <div style={sidePanelStyle}>
+            <div style={panelHeadStyle}>打帧</div>
+            <div style={captureBoxStyle}>
+              <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
+                <input
+                  className="lx-input lx-input-sm"
+                  type="number"
+                  min={0}
+                  max={359}
+                  value={captureAngle}
+                  onChange={(event) =>
+                    setCaptureAngle(clampAngle(Number(event.currentTarget.value)))
+                  }
+                  style={{ width: 62 }}
+                  title="在周期的哪个角度记这一帧"
+                />
+                <span style={unitStyle}>°</span>
+                <div style={{ display: "flex", gap: 2 }}>
+                  {ANGLE_PRESETS.map((angle) => (
                     <button
+                      key={angle}
                       className="lx-btn lx-btn-ghost"
                       type="button"
-                      title={item.enabled ? "停用" : "启用"}
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        updateTrack({ ...item, enabled: !item.enabled });
+                      onClick={() => setCaptureAngle(angle)}
+                      style={{
+                        padding: "0 5px",
+                        borderColor:
+                          captureAngle === angle ? "var(--lx-accent-bright)" : undefined,
                       }}
                     >
-                      {item.enabled ? "On" : "Off"}
-                    </button>
-                    <button
-                      className="lx-btn lx-btn-ghost"
-                      type="button"
-                      onClick={(event) => {
-                        event.stopPropagation();
-                        removeTrack(item.id);
-                      }}
-                    >
-                      ×
-                    </button>
-                  </div>
-                </div>
-              ))}
-              {effect.tracks.length === 0 && <div style={emptyHintStyle}>还没有轨道</div>}
-            </div>
-
-            <div style={panelHeadStyle}>编程器里已调的属性</div>
-            <div style={attributeListStyle}>
-              {selection.fixtureIds.length === 0 && (
-                <div style={emptyHintStyle}>先选灯</div>
-              )}
-              {selection.fixtureIds.length > 0 && activeAttributes.length === 0 && (
-                <div style={emptyHintStyle}>
-                  先在编程器里调一个属性 —— 效果驱动的就是你调过的东西
-                </div>
-              )}
-              {activeAttributes.map((item) => {
-                const partial = item.fixtureCount < item.totalFixtures;
-                return (
-                  <button
-                    key={item.attribute}
-                    className="lx-btn lx-btn-ghost"
-                    type="button"
-                    onClick={() => addTrack(item.attribute, item.featureGroup)}
-                    title={`${item.featureGroup} · 现值 ${
-                      item.value === null ? "—" : round(item.value)
-                    }${partial ? ` · 仅 ${item.fixtureCount}/${item.totalFixtures} 盏` : ""}`}
-                    style={{ justifyContent: "space-between" }}
-                  >
-                    <span style={ellipsisStyle}>{item.attribute}</span>
-                    <small className="lx-code" style={{ color: "var(--lx-accent-bright)" }}>
-                      {item.value === null ? "—" : round(item.value)}
-                    </small>
-                  </button>
-                );
-              })}
-            </div>
-
-            {/* 灯库里还有但编程器没碰过的属性，收在后面备用 */}
-            {otherAttributes.length > 0 && (
-              <>
-                <div style={panelHeadStyle}>灯库其余属性</div>
-                <div style={attributeListStyle}>
-                  {otherAttributes.map((option) => (
-                    <button
-                      key={option.name}
-                      className="lx-btn lx-btn-ghost"
-                      type="button"
-                      onClick={() => addTrack(option.name, option.featureGroup)}
-                      title={option.featureGroup}
-                      style={{ justifyContent: "space-between", opacity: 0.6 }}
-                    >
-                      <span style={ellipsisStyle}>{option.name}</span>
-                      <small className="lx-code" style={{ color: "var(--lx-fg-tertiary)" }}>
-                        {option.featureGroup}
-                      </small>
+                      {angle}
                     </button>
                   ))}
                 </div>
-              </>
-            )}
+              </div>
+              <button
+                className="lx-btn"
+                type="button"
+                disabled={!canCapture}
+                onClick={() => void captureFrame()}
+                title={
+                  activeAttributes.length === 0
+                    ? "先把灯调成想要的样子 —— 打帧记录的是编程器里此刻的值"
+                    : `记录 ${activeAttributes.map((item) => item.attribute).join(", ")}`
+                }
+                style={{
+                  borderColor: canCapture ? "var(--lx-accent-bright)" : undefined,
+                  color: canCapture ? "var(--lx-accent-bright)" : undefined,
+                }}
+              >
+                + 打帧
+              </button>
+              <small style={{ color: "var(--lx-fg-tertiary)", fontSize: 10, lineHeight: 1.4 }}>
+                {activeAttributes.length === 0
+                  ? "先把灯调成想要的样子，再打帧"
+                  : `将记录 ${activeAttributes.length} 个属性`}
+              </small>
+            </div>
+
+            <div style={panelHeadStyle}>帧 · {effect.frames.length}</div>
+            <div style={listStyle}>
+              {effect.frames.length === 0 && (
+                <div style={emptyHintStyle}>一帧都还没打</div>
+              )}
+              {effect.frames.map((frame) => (
+                <div
+                  key={frame.id}
+                  onClick={() => setSelectedFrameId(frame.id)}
+                  style={{
+                    ...rowStyle,
+                    borderColor:
+                      frame.id === selectedFrameId
+                        ? "var(--lx-accent-bright)"
+                        : "rgba(255,255,255,0.08)",
+                  }}
+                >
+                  <div style={{ display: "grid", gap: 1, minWidth: 0 }}>
+                    <strong className="lx-code">{round(frame.angle)}°</strong>
+                    <small style={ellipsisStyle} title={frame.values.map((v) => v.attribute).join(", ")}>
+                      {frame.values.length} 个属性
+                    </small>
+                  </div>
+                  <button
+                    className="lx-btn lx-btn-ghost"
+                    type="button"
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      void removeFrame(frame.id);
+                    }}
+                  >
+                    ×
+                  </button>
+                </div>
+              ))}
+            </div>
+
+            <div style={panelHeadStyle}>属性</div>
+            <div style={listStyle}>
+              {effect.attributes.length === 0 && (
+                <div style={emptyHintStyle}>打帧后属性会自动登记</div>
+              )}
+              {effect.attributes.map((item) => (
+                <div
+                  key={item.attribute}
+                  onClick={() => setSelectedAttribute(item.attribute)}
+                  style={{
+                    ...rowStyle,
+                    borderColor:
+                      item.attribute === attribute
+                        ? "var(--lx-accent-bright)"
+                        : "rgba(255,255,255,0.08)",
+                    opacity: item.enabled ? 1 : 0.45,
+                  }}
+                >
+                  <span style={ellipsisStyle}>{item.attribute}</span>
+                  <button
+                    className="lx-btn lx-btn-ghost"
+                    type="button"
+                    title={item.enabled ? "停用（帧里的值保留）" : "启用"}
+                    onClick={(event) => {
+                      event.stopPropagation();
+                      toggleAttribute(item.attribute);
+                    }}
+                  >
+                    {item.enabled ? "On" : "Off"}
+                  </button>
+                </div>
+              ))}
+            </div>
           </div>
 
-          {/* 曲线 + 参数 */}
+          {/* 右栏：曲线 + 参数 */}
           <div style={curveColumnStyle}>
             <div style={curveBoxStyle}>
-              {track ? (
+              {effect.frames.length > 0 && attribute ? (
                 <CurveEditor
-                  keyframes={track.keyframes}
-                  selectedIndex={selectedKeyframe}
-                  onSelect={setSelectedKeyframe}
-                  onChange={updateKeyframes}
+                  frames={effect.frames}
+                  attribute={attribute}
+                  ghostAttributes={ghostAttributes}
+                  selectedFrameId={selectedFrameId}
+                  onSelect={setSelectedFrameId}
+                  onMove={moveFrame}
                   playhead={previewAngle}
                 />
               ) : (
-                <div style={emptyHintStyle}>选一条轨道，或先加一条</div>
+                <div style={emptyHintStyle}>
+                  把灯调成想要的样子，按「打帧」记下第一帧
+                </div>
               )}
             </div>
 
             {/* 选中帧 */}
-            <div style={rowStyle}>
+            <div style={paramRowStyle}>
               <span style={labelStyle}>选中帧</span>
               <input
                 className="lx-input lx-input-sm"
                 type="number"
-                value={frame ? round(frame.angle) : ""}
-                disabled={!frame}
+                value={selectedFrame ? round(selectedFrame.angle) : ""}
+                disabled={!selectedFrame}
                 onChange={(event) =>
-                  updateSelectedKeyframe({ angle: clampAngle(Number(event.currentTarget.value)) })
+                  selectedFrame &&
+                  patchFrame(selectedFrame.id, {
+                    angle: clampAngle(Number(event.currentTarget.value)),
+                  })
                 }
-                style={{ width: 74 }}
+                style={{ width: 70 }}
                 title="角度"
               />
               <span style={unitStyle}>°</span>
               <input
                 className="lx-input lx-input-sm"
                 type="number"
-                value={frame ? round(frame.value) : ""}
-                disabled={!frame}
-                onChange={(event) => updateSelectedKeyframe({ value: Number(event.currentTarget.value) })}
+                value={
+                  selectedFrame && attribute
+                    ? (frameValue(selectedFrame, attribute) ?? "")
+                    : ""
+                }
+                disabled={!selectedFrame || !attribute}
+                onChange={(event) =>
+                  selectedFrame && setFrameValue(selectedFrame.id, Number(event.currentTarget.value))
+                }
                 style={{ width: 84 }}
-                title="值"
+                title={attribute ? `${attribute} 的取值` : "取值"}
               />
               <select
                 className="lx-input lx-input-sm"
-                value={frame?.interpolation ?? "linear"}
-                disabled={!frame}
+                value={selectedFrame?.interpolation ?? "smooth"}
+                disabled={!selectedFrame}
                 onChange={(event) =>
-                  updateSelectedKeyframe({ interpolation: event.currentTarget.value as Interpolation })
+                  selectedFrame &&
+                  patchFrame(selectedFrame.id, {
+                    interpolation: event.currentTarget.value as Interpolation,
+                  })
                 }
-                style={{ width: 92 }}
+                style={{ width: 88 }}
                 title="到下一帧的过渡方式"
               >
                 {INTERPOLATION_LABELS.map((item) => (
@@ -671,85 +658,32 @@ export function KeyframeEditorWindow() {
                   </option>
                 ))}
               </select>
-              <button className="lx-btn lx-btn-ghost" type="button" disabled={!frame} onClick={deleteSelectedKeyframe}>
+              <button
+                className="lx-btn lx-btn-ghost"
+                type="button"
+                disabled={!selectedFrame}
+                onClick={() => selectedFrame && void removeFrame(selectedFrame.id)}
+              >
                 删除帧
               </button>
               <div style={{ flex: 1 }} />
               <button
                 className="lx-btn lx-btn-ghost"
                 type="button"
-                disabled={!track}
-                onClick={() =>
-                  track &&
-                  updateTrack({ ...track, keyframes: sortKeyframes(curveFor(track.attribute)) })
-                }
-                title="回到首尾两帧的默认曲线"
+                disabled={!selectedFrame || !canCapture}
+                onClick={() => {
+                  if (!selectedFrame) return;
+                  setCaptureAngle(selectedFrame.angle);
+                  void captureFrame();
+                }}
+                title="用编程器里此刻的值覆盖这一帧"
               >
-                重置曲线
+                重录此帧
               </button>
             </div>
 
-            {/* 贝塞尔控制柄，只在选中帧用贝塞尔时才有意义 */}
-            {frame?.interpolation === "bezier" && (
-              <div style={rowStyle}>
-                <span style={labelStyle}>控制柄</span>
-                <span style={unitStyle}>出</span>
-                <input
-                  className="lx-input lx-input-sm"
-                  type="number"
-                  step={0.05}
-                  value={round(frame.handleOut.dx)}
-                  onChange={(event) =>
-                    updateSelectedKeyframe({
-                      handleOut: { ...frame.handleOut, dx: Number(event.currentTarget.value) },
-                    })
-                  }
-                  style={{ width: 70 }}
-                  title="横向"
-                />
-                <input
-                  className="lx-input lx-input-sm"
-                  type="number"
-                  step={0.05}
-                  value={round(frame.handleOut.dy)}
-                  onChange={(event) =>
-                    updateSelectedKeyframe({
-                      handleOut: { ...frame.handleOut, dy: Number(event.currentTarget.value) },
-                    })
-                  }
-                  style={{ width: 70 }}
-                  title="纵向，超出 0..1 会过冲"
-                />
-                <span style={unitStyle}>入</span>
-                <input
-                  className="lx-input lx-input-sm"
-                  type="number"
-                  step={0.05}
-                  value={round(frame.handleIn.dx)}
-                  onChange={(event) =>
-                    updateSelectedKeyframe({
-                      handleIn: { ...frame.handleIn, dx: Number(event.currentTarget.value) },
-                    })
-                  }
-                  style={{ width: 70 }}
-                />
-                <input
-                  className="lx-input lx-input-sm"
-                  type="number"
-                  step={0.05}
-                  value={round(frame.handleIn.dy)}
-                  onChange={(event) =>
-                    updateSelectedKeyframe({
-                      handleIn: { ...frame.handleIn, dy: Number(event.currentTarget.value) },
-                    })
-                  }
-                  style={{ width: 70 }}
-                />
-              </div>
-            )}
-
             {/* 播放 */}
-            <div style={rowStyle}>
+            <div style={paramRowStyle}>
               <span style={labelStyle}>周期</span>
               <input
                 className="lx-input lx-input-sm"
@@ -760,7 +694,7 @@ export function KeyframeEditorWindow() {
                 onChange={(event) =>
                   applyEffect({ ...effect, cycleMs: Number(event.currentTarget.value) })
                 }
-                style={{ width: 88 }}
+                style={{ width: 84 }}
                 title="跑完一圈要多久 —— 这就是速度"
               />
               <span style={unitStyle}>ms</span>
@@ -781,11 +715,8 @@ export function KeyframeEditorWindow() {
                   }
                   style={{
                     borderColor:
-                      effect.playback.kind === item.kind
-                        ? "var(--lx-accent-bright)"
-                        : "rgba(255,255,255,0.08)",
-                    color:
                       effect.playback.kind === item.kind ? "var(--lx-accent-bright)" : undefined,
+                    color: effect.playback.kind === item.kind ? "var(--lx-accent-bright)" : undefined,
                   }}
                 >
                   {item.label}
@@ -801,18 +732,21 @@ export function KeyframeEditorWindow() {
                     onChange={(event) =>
                       applyEffect({
                         ...effect,
-                        playback: { kind: "repeat", count: Math.max(1, Number(event.currentTarget.value)) },
+                        playback: {
+                          kind: "repeat",
+                          count: Math.max(1, Number(event.currentTarget.value)),
+                        },
                       })
                     }
-                    style={{ width: 62 }}
+                    style={{ width: 58 }}
                   />
                   <span style={unitStyle}>圈</span>
                 </>
               )}
             </div>
 
-            {/* 相位分布 */}
-            <div style={rowStyle}>
+            {/* 相位 */}
+            <div style={paramRowStyle}>
               <span style={labelStyle}>相位</span>
               <input
                 className="lx-input lx-input-sm"
@@ -825,7 +759,7 @@ export function KeyframeEditorWindow() {
                     phase: { ...effect.phase, spread: Number(event.currentTarget.value) },
                   })
                 }
-                style={{ width: 78 }}
+                style={{ width: 74 }}
                 title="整组从头到尾铺开多少度。360 = 首尾差一整圈"
               />
               <span style={unitStyle}>°</span>
@@ -852,7 +786,7 @@ export function KeyframeEditorWindow() {
                         },
                       })
                     }
-                    style={{ width: 56 }}
+                    style={{ width: 52 }}
                     title={hint}
                   />
                 </span>
@@ -867,7 +801,7 @@ export function KeyframeEditorWindow() {
                   })
                 }
                 style={{
-                  borderColor: effect.phase.reverse ? "var(--lx-accent-bright)" : "rgba(255,255,255,0.08)",
+                  borderColor: effect.phase.reverse ? "var(--lx-accent-bright)" : undefined,
                 }}
                 title="反向铺开"
               >
@@ -881,14 +815,14 @@ export function KeyframeEditorWindow() {
           </div>
         </div>
       ) : (
-        <div style={emptyHintStyle}>没有效果。点"新建"开始。</div>
+        <div style={emptyHintStyle}>没有效果。点「新建」开始。</div>
       )}
 
       <div style={statusStyle}>
         <span>{status}</span>
         <span>
           {effect
-            ? `${effect.tracks.length} 轨道 · 一圈 ${CYCLE_DEGREES}° / ${Math.round(effect.cycleMs)}ms`
+            ? `${effect.frames.length} 帧 · 一圈 ${CYCLE_DEGREES}° / ${Math.round(effect.cycleMs)}ms`
             : ""}
         </span>
       </div>
@@ -925,10 +859,14 @@ function fract(value: number): number {
   return fractional < 0 ? fractional + 1 : fractional;
 }
 
+/** 打完一帧后挪到下一个常用落点，连着打不用每次改角度。 */
+function nextAnglePreset(current: number): number {
+  return ANGLE_PRESETS.find((angle) => angle > current) ?? ANGLE_PRESETS[0];
+}
 
 function clampAngle(angle: number): number {
   if (!Number.isFinite(angle)) return 0;
-  return Math.min(CYCLE_DEGREES - 0.001, Math.max(0, angle));
+  return Math.min(CYCLE_DEGREES - 1, Math.max(0, Math.round(angle)));
 }
 
 function round(value: number): number {
@@ -948,7 +886,7 @@ const rootStyle: CSSProperties = {
 const toolbarStyle: CSSProperties = {
   display: "flex",
   alignItems: "center",
-  gap: 6,
+  gap: 5,
   padding: "0 8px",
   borderBottom: "1px solid var(--lx-stroke)",
   background: "rgba(255,255,255,0.035)",
@@ -970,14 +908,14 @@ const badgeStyle: CSSProperties = {
 
 const bodyStyle: CSSProperties = {
   display: "grid",
-  gridTemplateColumns: "184px minmax(0, 1fr)",
+  gridTemplateColumns: "178px minmax(0, 1fr)",
   minHeight: 0,
   overflow: "hidden",
 };
 
-const trackPanelStyle: CSSProperties = {
+const sidePanelStyle: CSSProperties = {
   display: "grid",
-  gridTemplateRows: "auto minmax(0, 1fr) auto auto",
+  gridTemplateRows: "auto auto auto minmax(0, 1fr) auto minmax(0, 1fr)",
   minHeight: 0,
   borderRight: "1px solid var(--lx-stroke)",
   background: "rgba(0,0,0,0.18)",
@@ -993,35 +931,32 @@ const panelHeadStyle: CSSProperties = {
   borderBottom: "1px solid rgba(255,255,255,0.05)",
 };
 
-const trackListStyle: CSSProperties = {
+const captureBoxStyle: CSSProperties = {
   display: "grid",
-  gap: 3,
+  gap: 4,
+  padding: 6,
+};
+
+const listStyle: CSSProperties = {
+  display: "grid",
+  gap: 2,
   alignContent: "start",
   padding: 5,
   minHeight: 0,
   overflowY: "auto",
 };
 
-const trackRowStyle: CSSProperties = {
+const rowStyle: CSSProperties = {
   display: "grid",
   gridTemplateColumns: "minmax(0, 1fr) auto",
   alignItems: "center",
   gap: 4,
-  padding: "4px 5px",
+  padding: "3px 5px",
   border: "1px solid rgba(255,255,255,0.08)",
   borderRadius: "var(--lx-radius-xs)",
   background: "rgba(0,0,0,0.24)",
   cursor: "pointer",
   fontSize: 11,
-};
-
-const attributeListStyle: CSSProperties = {
-  display: "grid",
-  gap: 2,
-  alignContent: "start",
-  padding: 5,
-  maxHeight: 168,
-  overflowY: "auto",
 };
 
 const curveColumnStyle: CSSProperties = {
@@ -1040,7 +975,7 @@ const curveBoxStyle: CSSProperties = {
   overflow: "hidden",
 };
 
-const rowStyle: CSSProperties = {
+const paramRowStyle: CSSProperties = {
   display: "flex",
   alignItems: "center",
   gap: 5,
@@ -1048,7 +983,7 @@ const rowStyle: CSSProperties = {
 };
 
 const labelStyle: CSSProperties = {
-  minWidth: 48,
+  minWidth: 46,
   color: "var(--lx-fg-secondary)",
   fontSize: 11,
   fontWeight: 800,
@@ -1069,9 +1004,10 @@ const ellipsisStyle: CSSProperties = {
 const emptyHintStyle: CSSProperties = {
   display: "grid",
   placeItems: "center",
-  padding: 16,
+  padding: 14,
   color: "var(--lx-fg-tertiary)",
   fontSize: 11,
+  textAlign: "center",
 };
 
 const statusStyle: CSSProperties = {

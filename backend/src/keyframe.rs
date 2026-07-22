@@ -18,7 +18,7 @@ use limxdesk_effect::AppliedEffect;
 use limxdesk_engine::{RecipeContext, RecipeEngine};
 use limxdesk_keyframe::{
     evaluate, library::next_effect_number, library::normalize_document, normalize_effect,
-    KeyframeEffect, KeyframeLibrary, KeyframeLibraryDocument, KeyframeTrack, TrackLayer,
+    FrameValue, KeyframeEffect, KeyframeLibrary, KeyframeLibraryDocument, TrackLayer,
 };
 use limxdesk_platform::current_timestamp_millis;
 use serde::Serialize;
@@ -505,13 +505,14 @@ pub fn keyframe_duplicate_effect(
     copy.cycle_ms = source.cycle_ms;
     copy.playback = source.playback;
     copy.phase = source.phase;
-    // 轨道要换新 id，否则两个效果的轨道会共用标识。
-    copy.tracks = source
-        .tracks
+    copy.attributes = source.attributes.clone();
+    // 帧要换新 id，否则两个效果的帧会共用标识。
+    copy.frames = source
+        .frames
         .iter()
-        .map(|track| KeyframeTrack {
+        .map(|frame| limxdesk_keyframe::Keyframe {
             id: uuid_string(),
-            ..track.clone()
+            ..frame.clone()
         })
         .collect();
 
@@ -534,7 +535,6 @@ pub fn keyframe_apply_to_selection(
     selection_state: State<'_, FixtureSelectionState>,
     programmer_state: State<'_, ProgrammerState>,
     keyframe_state: State<'_, KeyframeState>,
-    engine_state: State<'_, EngineState>,
     app: AppHandle,
 ) -> Result<limxdesk_programmer::Programmer, String> {
     let library = load_document(&show_state)?;
@@ -548,47 +548,6 @@ pub fn keyframe_apply_to_selection(
     }
 
     let programmer = programmer_state.current()?;
-    let active = programmer.active_attributes(&selection);
-
-    // 模板还没有轨道时，按 programmer 里已激活的属性补上 —— 效果该驱动
-    // 什么，答案是你手上正在调的那些属性。曲线以现值为高点：调到 50 再
-    // 加效果，就在 0..50 之间摆，而不是跳到满值。
-    let template_has_tracks = library
-        .effects
-        .iter()
-        .find(|item| item.id == effect_id)
-        .is_some_and(limxdesk_keyframe::KeyframeEffect::has_tracks);
-
-    if !template_has_tracks {
-        if active.is_empty() {
-            return Err(
-                "Set an attribute in the programmer first — the effect drives what you have touched."
-                    .to_string(),
-            );
-        }
-        let ranges = attribute_ranges(&selection.fixture_ids, &show_state)?;
-        let tracks = active
-            .iter()
-            .map(|entry| {
-                let mut track =
-                    KeyframeTrack::new(entry.attribute.clone(), entry.feature_group.clone());
-                track.keyframes = curve_from_current(entry, ranges.get(&entry.attribute));
-                track
-            })
-            .collect::<Vec<_>>();
-
-        let mut document = library.clone();
-        if let Some(template) = document
-            .effects
-            .iter_mut()
-            .find(|item| item.id == effect_id)
-        {
-            template.tracks = tracks;
-            template.updated_at_ms = now_ms()?;
-        }
-        document.version = document.version.saturating_add(1);
-        save(&document, &show_state, &keyframe_state, &engine_state, &app)?;
-    }
 
     // 顺序即相位铺开的次序，沿用选择本身的顺序。
     let applied = AppliedEffect::new(
@@ -602,6 +561,90 @@ pub fn keyframe_apply_to_selection(
     events::emit_programmer_changed(app_handle(&app), &programmer);
     request_output(&app);
     Ok(programmer)
+}
+
+/// 打一帧：把编程器里此刻的值记在指定角度上。
+///
+/// 这是关键帧的核心动作。把灯调成想要的样子 —— 颜色、位置、强度，
+/// 无论几个属性 —— 然后在某个角度打一帧，那一刻的全部激活属性被一起
+/// 记下。再调一次、再打一帧，效果就在两帧之间跑。
+///
+/// 一帧横跨所有属性而不是每个属性各打各的：红色是 R/G/B 三个值同时
+/// 成立的一件事，拆开记就不再是一个颜色了。
+#[tauri::command]
+pub fn keyframe_capture_frame(
+    effect_id: String,
+    angle: f64,
+    show_state: State<'_, ShowRuntimeState>,
+    selection_state: State<'_, FixtureSelectionState>,
+    programmer_state: State<'_, ProgrammerState>,
+    keyframe_state: State<'_, KeyframeState>,
+    engine_state: State<'_, EngineState>,
+    app: AppHandle,
+) -> Result<KeyframeLibraryDocument, String> {
+    let selection = selection_state.current()?;
+    let active = programmer_state
+        .current()?
+        .active_attributes(&selection);
+    if active.is_empty() {
+        return Err(
+            "Nothing to capture — set the fixtures to the look you want first.".to_string(),
+        );
+    }
+
+    let mut document = load_document(&show_state)?;
+    let effect = document
+        .effects
+        .iter_mut()
+        .find(|effect| effect.id == effect_id)
+        .ok_or_else(|| format!("effect not found: {effect_id}"))?;
+
+    let values = active
+        .iter()
+        .filter_map(|entry| {
+            entry.value.filter(|value| value.is_finite()).map(|value| {
+                FrameValue {
+                    attribute: entry.attribute.clone(),
+                    value,
+                }
+            })
+        })
+        .collect::<Vec<_>>();
+    if values.is_empty() {
+        return Err("The active attributes have no numeric value to capture.".to_string());
+    }
+
+    for entry in &active {
+        effect.ensure_attribute(&entry.attribute, &entry.feature_group);
+    }
+    effect.capture_frame(angle, values);
+    effect.updated_at_ms = now_ms()?;
+
+    document.version = document.version.saturating_add(1);
+    save(&document, &show_state, &keyframe_state, &engine_state, &app)
+}
+
+/// 删掉一帧。
+#[tauri::command]
+pub fn keyframe_remove_frame(
+    effect_id: String,
+    frame_id: String,
+    show_state: State<'_, ShowRuntimeState>,
+    keyframe_state: State<'_, KeyframeState>,
+    engine_state: State<'_, EngineState>,
+    app: AppHandle,
+) -> Result<KeyframeLibraryDocument, String> {
+    let mut document = load_document(&show_state)?;
+    let effect = document
+        .effects
+        .iter_mut()
+        .find(|effect| effect.id == effect_id)
+        .ok_or_else(|| format!("effect not found: {effect_id}"))?;
+    effect.remove_frame(&frame_id);
+    effect.updated_at_ms = now_ms()?;
+
+    document.version = document.version.saturating_add(1);
+    save(&document, &show_state, &keyframe_state, &engine_state, &app)
 }
 
 /// 改 programmer 里某个效果实例的参数（速度 / 相位 / 幅度）。
@@ -638,52 +681,7 @@ pub fn keyframe_remove_applied(
 
 // ── 内部 ────────────────────────────────────────────────────
 
-/// 属性名 → GDTF 量程，用来给曲线找一个合理的低点。
-fn attribute_ranges(
-    fixture_ids: &[String],
-    show_state: &State<'_, ShowRuntimeState>,
-) -> Result<BTreeMap<String, EffectAttributeOption>, String> {
-    Ok(collect_attribute_options(fixture_ids, show_state)?
-        .into_iter()
-        .map(|option| (option.name.clone(), option))
-        .collect())
-}
 
-/// 以 programmer 现值为基准生成首尾两帧。
-///
-/// 现值当高点，属性量程的低端当低点：把 Dimmer 调到 50 再加效果，
-/// 效果就在 0..50 之间摆动，而不是无视你刚设的值跳到满。
-/// 位置一类可正可负的属性以现值为中心对称摆动，那才是"摇头"该有的样子。
-fn curve_from_current(
-    entry: &limxdesk_programmer::ActiveAttribute,
-    range: Option<&EffectAttributeOption>,
-) -> Vec<limxdesk_keyframe::Keyframe> {
-    use limxdesk_keyframe::{Interpolation, Keyframe};
-
-    let current = entry.value.filter(|value| value.is_finite()).unwrap_or(0.0);
-    let min = range
-        .and_then(|option| option.min_value)
-        .filter(|value| value.is_finite());
-    let max = range
-        .and_then(|option| option.max_value)
-        .filter(|value| value.is_finite());
-
-    let (low, high) = match (min, max) {
-        // 量程跨越零（Pan / Tilt 这类）：以现值为中心对称摆动。
-        (Some(min), Some(max)) if min < 0.0 && max > 0.0 => {
-            let reach = ((max - min) * 0.25).abs();
-            ((current - reach).max(min), (current + reach).min(max))
-        }
-        // 单向量程（强度、色轮等）：从低端摆到现值。
-        (Some(min), _) => (min, current),
-        _ => (0.0, current),
-    };
-
-    vec![
-        Keyframe::new(0.0, low).with_interpolation(Interpolation::Smooth),
-        Keyframe::new(180.0, high).with_interpolation(Interpolation::Smooth),
-    ]
-}
 
 
 pub(crate) fn load_document(
@@ -777,67 +775,6 @@ mod tests {
             .iter()
             .find(|value| value.attribute == attribute)
             .and_then(|value| value.numeric)
-    }
-
-    fn active(attribute: &str, group: &str, value: Option<f64>) -> limxdesk_programmer::ActiveAttribute {
-        limxdesk_programmer::ActiveAttribute {
-            attribute: attribute.to_string(),
-            feature_group: group.to_string(),
-            value,
-            fixture_count: 1,
-            total_fixtures: 1,
-        }
-    }
-
-    fn range(name: &str, min: f64, max: f64) -> EffectAttributeOption {
-        EffectAttributeOption {
-            name: name.to_string(),
-            feature_group: String::new(),
-            min_value: Some(min),
-            max_value: Some(max),
-            default_value: None,
-            value_kind: "percent".to_string(),
-            fixture_count: 1,
-            total_fixtures: 1,
-        }
-    }
-
-    #[test]
-    fn a_curve_built_from_a_dimmer_swings_up_to_the_current_value() {
-        // 调到 50 再加效果，就该在 0..50 之间摆，而不是无视刚设的值跳到满。
-        let curve = curve_from_current(&active("Dimmer", "Dimmer", Some(50.0)), Some(&range("Dimmer", 0.0, 100.0)));
-        assert_eq!(curve[0].value, 0.0);
-        assert_eq!(curve[1].value, 50.0);
-    }
-
-    #[test]
-    fn a_curve_built_from_pan_swings_around_the_current_value() {
-        // 量程跨零的属性以现值为中心对称摆动 —— 摇头该绕着当前朝向摆。
-        let curve = curve_from_current(
-            &active("Pan", "Position", Some(0.0)),
-            Some(&range("Pan", -270.0, 270.0)),
-        );
-        assert!(curve[0].value < 0.0);
-        assert!(curve[1].value > 0.0);
-        assert!((curve[0].value + curve[1].value).abs() < 1e-9, "应关于现值对称");
-    }
-
-    #[test]
-    fn a_curve_stays_inside_the_attribute_range() {
-        // 现值贴着上限时，对称摆动不能冲出量程。
-        let curve = curve_from_current(
-            &active("Pan", "Position", Some(270.0)),
-            Some(&range("Pan", -270.0, 270.0)),
-        );
-        assert!(curve.iter().all(|frame| frame.value <= 270.0));
-        assert!(curve.iter().all(|frame| frame.value >= -270.0));
-    }
-
-    #[test]
-    fn a_curve_without_range_information_still_builds() {
-        let curve = curve_from_current(&active("Custom", "Other", Some(80.0)), None);
-        assert_eq!(curve.len(), 2);
-        assert_eq!(curve[1].value, 80.0);
     }
 
     #[test]

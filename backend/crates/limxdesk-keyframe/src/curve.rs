@@ -45,35 +45,14 @@ impl Default for Handle {
     }
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq)]
-#[serde(rename_all = "camelCase")]
-pub struct Keyframe {
-    /// 在周期中的位置，0..360 度。
+/// 曲线上的一个采样点：角度、取值，以及离开该点的过渡方式。
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct CurvePoint {
     pub angle: f64,
     pub value: f64,
-    /// 从本帧到下一帧的过渡方式。
     pub interpolation: Interpolation,
-    /// 离开本帧的控制柄。
     pub handle_out: Handle,
-    /// 进入本帧的控制柄。
     pub handle_in: Handle,
-}
-
-impl Keyframe {
-    pub fn new(angle: f64, value: f64) -> Self {
-        Self {
-            angle: normalize_angle(angle),
-            value,
-            interpolation: Interpolation::Linear,
-            handle_out: Handle::default(),
-            handle_in: Handle::default(),
-        }
-    }
-
-    pub fn with_interpolation(mut self, interpolation: Interpolation) -> Self {
-        self.interpolation = interpolation;
-        self
-    }
 }
 
 /// 把任意角度折算到 [0, 360)。
@@ -89,32 +68,31 @@ pub fn normalize_angle(angle: f64) -> f64 {
     }
 }
 
-/// 在给定角度上采样曲线。
+/// 在给定角度上采样一条曲线。
 ///
-/// 关键帧须已按角度升序排列（`sort_keyframes` 负责）。空曲线返回 0，
-/// 单帧曲线返回常量。
-pub fn sample(keyframes: &[Keyframe], angle: f64) -> f64 {
-    match keyframes.len() {
-        0 => 0.0,
-        1 => keyframes[0].value,
+/// 采样点须已按角度升序排列。空曲线返回 None —— 该属性在这条效果里没有
+/// 任何一帧记录过，调用方应当跳过它而不是当作零。
+pub fn sample_points(points: &[CurvePoint], angle: f64) -> Option<f64> {
+    match points.len() {
+        0 => None,
+        1 => Some(points[0].value),
         _ => {
             let angle = normalize_angle(angle);
-            let (from, to, progress) = segment_at(keyframes, angle);
-            interpolate(from, to, progress)
+            let (from, to, progress) = segment_at(points, angle);
+            Some(interpolate(from, to, progress))
         }
     }
 }
 
-/// 找出角度所在的段，并给出段内进度。
+/// 找出角度所在的段。
 ///
-/// 落在最后一帧之后或第一帧之前时，走的是跨越 0 度的收尾段 ——
-/// 曲线在这里闭合成环。
-fn segment_at(keyframes: &[Keyframe], angle: f64) -> (&Keyframe, &Keyframe, f64) {
-    let first = &keyframes[0];
-    let last = &keyframes[keyframes.len() - 1];
+/// 落在最后一个点之后或第一个点之前时，走的是跨越 0 度的收尾段 ——
+/// 一个周期是一整圈，曲线在这里闭合成环。
+fn segment_at(points: &[CurvePoint], angle: f64) -> (&CurvePoint, &CurvePoint, f64) {
+    let first = &points[0];
+    let last = &points[points.len() - 1];
 
     if angle < first.angle || angle >= last.angle {
-        // 收尾段：从最后一帧绕过 360 回到第一帧。
         let span = CYCLE_DEGREES - last.angle + first.angle;
         let travelled = if angle >= last.angle {
             angle - last.angle
@@ -124,7 +102,7 @@ fn segment_at(keyframes: &[Keyframe], angle: f64) -> (&Keyframe, &Keyframe, f64)
         return (last, first, ratio(travelled, span));
     }
 
-    for window in keyframes.windows(2) {
+    for window in points.windows(2) {
         let (from, to) = (&window[0], &window[1]);
         if angle >= from.angle && angle < to.angle {
             return (from, to, ratio(angle - from.angle, to.angle - from.angle));
@@ -142,7 +120,7 @@ fn ratio(travelled: f64, span: f64) -> f64 {
     }
 }
 
-fn interpolate(from: &Keyframe, to: &Keyframe, progress: f64) -> f64 {
+fn interpolate(from: &CurvePoint, to: &CurvePoint, progress: f64) -> f64 {
     match from.interpolation {
         Interpolation::Step => from.value,
         Interpolation::Linear => lerp(from.value, to.value, progress),
@@ -164,9 +142,6 @@ fn smoothstep(t: f64) -> f64 {
 }
 
 /// 由两个控制柄决定的三次贝塞尔缓动，与 CSS 的 cubic-bezier 同构。
-///
-/// 控制点为 P0=(0,0)、P1=(out.dx, out.dy)、P2=(1-in.dx, 1-in.dy)、P3=(1,1)。
-/// 曲线以 x 为参数，需要先由 x 反解 t，再取 y。
 fn bezier_ease(out_handle: Handle, in_handle: Handle, x: f64) -> f64 {
     let x = x.clamp(0.0, 1.0);
     let x1 = out_handle.dx.clamp(0.0, 1.0);
@@ -196,7 +171,6 @@ fn solve_bezier_t(x: f64, x1: f64, x2: f64) -> f64 {
         t -= error / derivative;
     }
 
-    // 牛顿法不收敛（控制柄极端时会这样），退回稳妥的二分。
     let (mut low, mut high) = (0.0_f64, 1.0_f64);
     let mut t = x.clamp(0.0, 1.0);
     for _ in 0..32 {
@@ -214,7 +188,6 @@ fn solve_bezier_t(x: f64, x1: f64, x2: f64) -> f64 {
     t
 }
 
-/// P0=0、P3=1 的三次贝塞尔在 t 处的值。
 fn cubic_bezier(t: f64, p1: f64, p2: f64) -> f64 {
     let inv = 1.0 - t;
     3.0 * inv * inv * t * p1 + 3.0 * inv * t * t * p2 + t * t * t
@@ -225,25 +198,20 @@ fn cubic_bezier_derivative(t: f64, p1: f64, p2: f64) -> f64 {
     3.0 * inv * inv * p1 + 6.0 * inv * t * (p2 - p1) + 3.0 * t * t * (1.0 - p2)
 }
 
-/// 按角度排序并把角度折算进 [0, 360)。
-pub fn sort_keyframes(keyframes: &mut Vec<Keyframe>) {
-    for keyframe in keyframes.iter_mut() {
-        keyframe.angle = normalize_angle(keyframe.angle);
-        if !keyframe.value.is_finite() {
-            keyframe.value = 0.0;
-        }
-    }
-    keyframes.sort_by(|left, right| left.angle.total_cmp(&right.angle));
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn frames(points: &[(f64, f64)]) -> Vec<Keyframe> {
-        points
+    fn points(items: &[(f64, f64)]) -> Vec<CurvePoint> {
+        items
             .iter()
-            .map(|(angle, value)| Keyframe::new(*angle, *value))
+            .map(|(angle, value)| CurvePoint {
+                angle: *angle,
+                value: *value,
+                interpolation: Interpolation::Linear,
+                handle_out: Handle::default(),
+                handle_in: Handle::default(),
+            })
             .collect()
     }
 
@@ -256,82 +224,58 @@ mod tests {
     }
 
     #[test]
-    fn linear_segment_interpolates_between_frames() {
-        let curve = frames(&[(0.0, 0.0), (180.0, 100.0)]);
-        assert_eq!(sample(&curve, 0.0), 0.0);
-        assert!((sample(&curve, 90.0) - 50.0).abs() < 1e-9);
-        assert!((sample(&curve, 180.0) - 100.0).abs() < 1e-9);
+    fn a_segment_interpolates_between_two_points() {
+        let curve = points(&[(0.0, 0.0), (180.0, 100.0)]);
+        assert_eq!(sample_points(&curve, 0.0), Some(0.0));
+        assert!((sample_points(&curve, 90.0).unwrap() - 50.0).abs() < 1e-9);
+        assert!((sample_points(&curve, 180.0).unwrap() - 100.0).abs() < 1e-9);
     }
 
     #[test]
-    fn the_curve_closes_back_to_the_first_frame() {
-        // 首尾两帧：180..360 这一段应从 100 回落到 0。
-        let curve = frames(&[(0.0, 0.0), (180.0, 100.0)]);
-        assert!((sample(&curve, 270.0) - 50.0).abs() < 1e-9);
-        assert!(sample(&curve, 359.9) < 1.0);
+    fn the_curve_closes_back_to_the_first_point() {
+        // 打了红和蓝两帧，后半圈应当从蓝走回红。
+        let curve = points(&[(0.0, 0.0), (180.0, 100.0)]);
+        assert!((sample_points(&curve, 270.0).unwrap() - 50.0).abs() < 1e-9);
+        assert!(sample_points(&curve, 359.9).unwrap() < 1.0);
     }
 
     #[test]
-    fn a_single_frame_holds_a_constant() {
-        let curve = frames(&[(90.0, 42.0)]);
-        assert_eq!(sample(&curve, 0.0), 42.0);
-        assert_eq!(sample(&curve, 300.0), 42.0);
+    fn a_single_point_holds_a_constant() {
+        let curve = points(&[(90.0, 42.0)]);
+        assert_eq!(sample_points(&curve, 0.0), Some(42.0));
+        assert_eq!(sample_points(&curve, 300.0), Some(42.0));
     }
 
     #[test]
-    fn an_empty_curve_is_zero() {
-        assert_eq!(sample(&[], 123.0), 0.0);
+    fn an_empty_curve_has_no_value_rather_than_zero() {
+        // 没有任何一帧记录过这个属性，调用方应当跳过它 ——
+        // 当成零会让灯突然熄掉。
+        assert_eq!(sample_points(&[], 123.0), None);
     }
 
     #[test]
     fn step_holds_the_previous_value() {
-        let mut curve = frames(&[(0.0, 0.0), (180.0, 100.0)]);
+        let mut curve = points(&[(0.0, 0.0), (180.0, 100.0)]);
         curve[0].interpolation = Interpolation::Step;
-        assert_eq!(sample(&curve, 90.0), 0.0);
-        assert_eq!(sample(&curve, 179.9), 0.0);
-        assert_eq!(sample(&curve, 180.0), 100.0);
+        assert_eq!(sample_points(&curve, 90.0), Some(0.0));
+        assert_eq!(sample_points(&curve, 180.0), Some(100.0));
     }
 
     #[test]
     fn smooth_eases_at_both_ends_but_matches_linear_at_the_midpoint() {
-        let mut curve = frames(&[(0.0, 0.0), (180.0, 100.0)]);
+        let mut curve = points(&[(0.0, 0.0), (180.0, 100.0)]);
         curve[0].interpolation = Interpolation::Smooth;
-        assert!((sample(&curve, 90.0) - 50.0).abs() < 1e-9);
-        // 起步比线性慢。
-        assert!(sample(&curve, 45.0) < 25.0);
-        // 收尾比线性快，因而更接近目标值。
-        assert!(sample(&curve, 135.0) > 75.0);
-    }
-
-    #[test]
-    fn bezier_with_default_handles_stays_close_to_linear() {
-        let mut curve = frames(&[(0.0, 0.0), (180.0, 100.0)]);
-        curve[0].interpolation = Interpolation::Bezier;
-        curve[0].handle_out = Handle { dx: 1.0 / 3.0, dy: 1.0 / 3.0 };
-        curve[1].handle_in = Handle { dx: 1.0 / 3.0, dy: 1.0 / 3.0 };
-        assert!((sample(&curve, 90.0) - 50.0).abs() < 1.0);
+        assert!((sample_points(&curve, 90.0).unwrap() - 50.0).abs() < 1e-9);
+        assert!(sample_points(&curve, 45.0).unwrap() < 25.0);
+        assert!(sample_points(&curve, 135.0).unwrap() > 75.0);
     }
 
     #[test]
     fn bezier_handles_bend_the_curve() {
-        let mut curve = frames(&[(0.0, 0.0), (180.0, 100.0)]);
+        let mut curve = points(&[(0.0, 0.0), (180.0, 100.0)]);
         curve[0].interpolation = Interpolation::Bezier;
-        // 强烈的缓入：中点应明显低于线性。
         curve[0].handle_out = Handle { dx: 0.9, dy: 0.0 };
         curve[1].handle_in = Handle { dx: 0.1, dy: 0.0 };
-        assert!(sample(&curve, 90.0) < 40.0);
-    }
-
-    #[test]
-    fn sorting_normalises_angles_and_orders_frames() {
-        let mut curve = vec![
-            Keyframe::new(400.0, 1.0),
-            Keyframe::new(0.0, 2.0),
-            Keyframe::new(-90.0, 3.0),
-        ];
-        sort_keyframes(&mut curve);
-        assert_eq!(curve[0].angle, 0.0);
-        assert_eq!(curve[1].angle, 40.0);
-        assert_eq!(curve[2].angle, 270.0);
+        assert!(sample_points(&curve, 90.0).unwrap() < 40.0);
     }
 }
