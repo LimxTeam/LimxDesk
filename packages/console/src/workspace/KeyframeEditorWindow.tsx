@@ -598,7 +598,7 @@ export function KeyframeEditorWindow() {
         >
           删除
         </button>
-        <div style={{ flex: 1 }} />
+        <div className="lx-spacer" />
         <button
           className="lx-btn lx-btn-ghost"
           type="button"
@@ -624,6 +624,8 @@ export function KeyframeEditorWindow() {
           <div style={sidePanelStyle}>
             <div style={panelHeadStyle}>打帧</div>
             <div style={captureBoxStyle}>
+              {/* 角度输入独占一行，四个快捷位在下面平分 —— 挤在同一行时
+                  最后一个会被窄侧栏切掉。 */}
               <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
                 <input
                   className="lx-input lx-input-sm"
@@ -634,27 +636,30 @@ export function KeyframeEditorWindow() {
                   onChange={(event) =>
                     setCaptureAngle(clampAngle(Number(event.currentTarget.value)))
                   }
-                  style={{ width: 62 }}
+                  style={{ flex: 1, minWidth: 0 }}
                   title="在周期的哪个角度记这一帧"
                 />
                 <span style={unitStyle}>°</span>
-                <div style={{ display: "flex", gap: 2 }}>
-                  {ANGLE_PRESETS.map((angle) => (
-                    <button
-                      key={angle}
-                      className="lx-btn lx-btn-ghost"
-                      type="button"
-                      onClick={() => setCaptureAngle(angle)}
-                      style={{
-                        padding: "0 5px",
-                        borderColor:
-                          captureAngle === angle ? "var(--lx-accent-bright)" : undefined,
-                      }}
-                    >
-                      {angle}
-                    </button>
-                  ))}
-                </div>
+              </div>
+              <div style={anglePresetRowStyle}>
+                {ANGLE_PRESETS.map((angle) => (
+                  <button
+                    key={angle}
+                    className="lx-btn lx-btn-ghost"
+                    type="button"
+                    onClick={() => setCaptureAngle(angle)}
+                    style={{
+                      padding: 0,
+                      minWidth: 0,
+                      fontSize: 10,
+                      borderColor:
+                        captureAngle === angle ? "var(--lx-accent-bright)" : undefined,
+                      color: captureAngle === angle ? "var(--lx-accent-bright)" : undefined,
+                    }}
+                  >
+                    {angle}
+                  </button>
+                ))}
               </div>
               <button
                 className="lx-btn"
@@ -821,8 +826,10 @@ export function KeyframeEditorWindow() {
               )}
             </div>
 
-            {/* 选中帧 */}
-            <div style={paramRowStyle}>
+            {/* 参数区：宽窗口两列，窄窗口一列 */}
+            <div style={paramGridStyle}>
+            {/* 选中点 */}
+            <div className="lx-param-row" style={paramRowStyle}>
               <span style={labelStyle} title="曲线上双击可插入一个点">
                 选中点
               </span>
@@ -894,7 +901,7 @@ export function KeyframeEditorWindow() {
               >
                 删除点
               </button>
-              <div style={{ flex: 1 }} />
+              <div className="lx-spacer" />
               <button
                 className="lx-btn lx-btn-ghost"
                 type="button"
@@ -911,7 +918,7 @@ export function KeyframeEditorWindow() {
             </div>
 
             {/* 选中轨道的批量操作 */}
-            <div style={paramRowStyle}>
+            <div className="lx-param-row" style={paramRowStyle}>
               <span style={labelStyle}>
                 {selectedTracks.length > 1 ? `${selectedTracks.length} 轨道` : "本轨道"}
               </span>
@@ -987,7 +994,7 @@ export function KeyframeEditorWindow() {
             </div>
 
             {/* 播放 */}
-            <div style={paramRowStyle}>
+            <div className="lx-param-row" style={paramRowStyle}>
               <span style={labelStyle}>周期</span>
               <input
                 className="lx-input lx-input-sm"
@@ -1050,7 +1057,7 @@ export function KeyframeEditorWindow() {
             </div>
 
             {/* 相位 */}
-            <div style={paramRowStyle}>
+            <div className="lx-param-row" style={paramRowStyle}>
               <span style={labelStyle}>相位</span>
               <input
                 className="lx-input lx-input-sm"
@@ -1111,10 +1118,11 @@ export function KeyframeEditorWindow() {
               >
                 反向
               </button>
-              <div style={{ flex: 1 }} />
+              <div className="lx-spacer" />
               <span className="lx-code" style={{ color: "var(--lx-fg-tertiary)" }}>
                 选中 {selection.fixtureIds.length} 盏
               </span>
+            </div>
             </div>
           </div>
         </div>
@@ -1214,14 +1222,16 @@ const badgeStyle: CSSProperties = {
 
 const bodyStyle: CSSProperties = {
   display: "grid",
-  gridTemplateColumns: "178px minmax(0, 1fr)",
+  // 左栏跟着窗口收放。死宽在小窗口下会把曲线挤成一条缝。
+  gridTemplateColumns: "clamp(132px, 21%, 186px) minmax(0, 1fr)",
   minHeight: 0,
   overflow: "hidden",
 };
 
 const sidePanelStyle: CSSProperties = {
   display: "grid",
-  gridTemplateRows: "auto auto auto minmax(0, 1fr) auto minmax(0, 1fr)",
+  // 轨道列表比点列表更该看全 —— 轨道数是固定的几条，点可以滚。
+  gridTemplateRows: "auto auto auto minmax(56px, 1.3fr) auto minmax(48px, 1fr)",
   minHeight: 0,
   borderRight: "1px solid var(--lx-stroke)",
   background: "rgba(0,0,0,0.18)",
@@ -1239,8 +1249,15 @@ const panelHeadStyle: CSSProperties = {
 
 const captureBoxStyle: CSSProperties = {
   display: "grid",
-  gap: 4,
+  gap: 3,
   padding: 6,
+};
+
+/** 四个角度快捷位平分一行，窄侧栏也放得下。 */
+const anglePresetRowStyle: CSSProperties = {
+  display: "grid",
+  gridTemplateColumns: "repeat(4, minmax(0, 1fr))",
+  gap: 2,
 };
 
 const listStyle: CSSProperties = {
@@ -1279,10 +1296,24 @@ const rowStyle: CSSProperties = {
 
 const curveColumnStyle: CSSProperties = {
   display: "grid",
-  gridTemplateRows: "minmax(0, 1fr) auto auto auto auto",
-  gap: 5,
+  // 曲线拿到一个下限：它是这个窗口的主体，不该被参数区一路挤没。
+  gridTemplateRows: "minmax(120px, 1fr) auto",
+  gap: 6,
   minHeight: 0,
   padding: 8,
+};
+
+/**
+ * 参数区。
+ *
+ * 宽窗口两列并排，窄窗口落成一列 —— 四块参数各自 flex-wrap 换行的话，
+ * 高度会成倍长，曲线就被挤没了。
+ */
+const paramGridStyle: CSSProperties = {
+  display: "grid",
+  gridTemplateColumns: "repeat(auto-fit, minmax(290px, 1fr))",
+  gap: "4px 12px",
+  alignContent: "start",
 };
 
 const curveBoxStyle: CSSProperties = {
@@ -1296,12 +1327,17 @@ const curveBoxStyle: CSSProperties = {
 const paramRowStyle: CSSProperties = {
   display: "flex",
   alignItems: "center",
-  gap: 5,
-  flexWrap: "wrap",
+  gap: 4,
+  // 不换行：一行内放不下就横向滚，高度始终是一行。
+  flexWrap: "nowrap",
+  overflowX: "auto",
+  minWidth: 0,
+  paddingBottom: 1,
 };
 
 const labelStyle: CSSProperties = {
-  minWidth: 46,
+  flex: "0 0 auto",
+  minWidth: 42,
   color: "var(--lx-fg-secondary)",
   fontSize: 11,
   fontWeight: 800,
