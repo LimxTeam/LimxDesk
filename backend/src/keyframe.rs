@@ -245,6 +245,8 @@ pub(crate) fn programmer_effects_moving(
 pub struct EffectAttributeOption {
     pub name: String,
     pub feature_group: String,
+    /// 该属性的可用范围。总是有值 —— 控台里每个属性都能给出一个范围，
+    /// 拿不到就用 0..100 兜底，与属性轮一致。
     pub min_value: Option<f64>,
     pub max_value: Option<f64>,
     pub default_value: Option<f64>,
@@ -299,13 +301,14 @@ fn collect_attribute_options(
         resolved += 1;
 
         for attribute in &mode.attribute_details {
+            let (min, max) = attribute_bounds(attribute);
             let entry = options
                 .entry(attribute.name.clone())
                 .or_insert_with(|| EffectAttributeOption {
                     name: attribute.name.clone(),
                     feature_group: attribute.feature_group.clone(),
-                    min_value: attribute.min_value,
-                    max_value: attribute.max_value,
+                    min_value: Some(min),
+                    max_value: Some(max),
                     default_value: attribute.default_value,
                     value_kind: attribute.value_kind.clone(),
                     fixture_count: 0,
@@ -313,8 +316,8 @@ fn collect_attribute_options(
                 });
             entry.fixture_count += 1;
             // 型号之间量程可能不同，取并集，曲线才不会被某一款的范围卡住。
-            entry.min_value = min_option(entry.min_value, attribute.min_value);
-            entry.max_value = max_option(entry.max_value, attribute.max_value);
+            entry.min_value = min_option(entry.min_value, Some(min));
+            entry.max_value = max_option(entry.max_value, Some(max));
         }
     }
 
@@ -364,6 +367,39 @@ fn parent_fixture_id(id: &str) -> &str {
     id.split("::sub:").next().unwrap_or(id)
 }
 
+/// 一个属性的可用范围。
+///
+/// 与前端属性轮的 atMinimum / atMaximum 是同一套规则，两处必须一致，
+/// 否则曲线能设出编码器给不出的值：
+///   · 百分比类属性固定 0..100。Dimmer 就是这种，它的 GDTF 里往往没有
+///     min/max —— 直接读那两个字段会得到"无范围"，值就能飞到几百。
+///   · 其余属性用 GDTF 的物理范围，缺失时兜底 0..100。
+///
+/// 永远给得出范围，不存在"未知所以不限制"这回事。
+fn attribute_bounds(
+    attribute: &limxdesk_fixture_types::FixtureModeAttributeEntry,
+) -> (f64, f64) {
+    if attribute.value_kind.eq_ignore_ascii_case("percent") {
+        return (0.0, 100.0);
+    }
+
+    let min = attribute
+        .min_value
+        .filter(|value| value.is_finite())
+        .unwrap_or(0.0);
+    let max = attribute
+        .max_value
+        .filter(|value| value.is_finite())
+        .unwrap_or(100.0);
+
+    // 量程反了就换过来，否则钳制会把所有值挤成一个数。
+    if min > max {
+        (max, min)
+    } else {
+        (min, max)
+    }
+}
+
 fn min_option(left: Option<f64>, right: Option<f64>) -> Option<f64> {
     match (left, right) {
         (Some(left), Some(right)) => Some(left.min(right)),
@@ -400,9 +436,60 @@ pub fn keyframe_load_current_show(
     show_state: State<'_, ShowRuntimeState>,
     keyframe_state: State<'_, KeyframeState>,
 ) -> Result<KeyframeLibraryDocument, String> {
-    let document = load_document(&show_state)?;
+    let mut document = load_document(&show_state)?;
+    backfill_ranges(&mut document, &show_state)?;
     keyframe_state.replace(&document)?;
     Ok(document)
+}
+
+/// 给没有量程的轨道补上量程，并把越界的点拉回范围内。
+///
+/// 早先存下的效果里轨道没记量程，值可能已经飞到量程之外。补量程时按
+/// patch 里全部灯具求并集 —— 模板不含灯具，作用对象要到应用时才定，
+/// 所以这里取一个不会误伤的宽范围。
+fn backfill_ranges(
+    document: &mut KeyframeLibraryDocument,
+    show_state: &State<'_, ShowRuntimeState>,
+) -> Result<(), String> {
+    let missing = document
+        .effects
+        .iter()
+        .any(|effect| effect.tracks.iter().any(|track| track.min_value.is_none() || track.max_value.is_none()));
+    if !missing {
+        return Ok(());
+    }
+
+    let patch = crate::patch::load_patch_document(show_state)?;
+    let all_fixtures = patch
+        .fixtures
+        .iter()
+        .map(|fixture| fixture.id.clone())
+        .collect::<Vec<_>>();
+    if all_fixtures.is_empty() {
+        return Ok(());
+    }
+
+    let ranges = collect_attribute_options(&all_fixtures, show_state)?
+        .into_iter()
+        .map(|option| (option.name.clone(), option))
+        .collect::<BTreeMap<_, _>>();
+
+    for effect in document.effects.iter_mut() {
+        for track in effect.tracks.iter_mut() {
+            let Some(range) = ranges.get(&track.attribute) else {
+                continue;
+            };
+            if track.min_value.is_none() {
+                track.min_value = range.min_value;
+            }
+            if track.max_value.is_none() {
+                track.max_value = range.max_value;
+            }
+            // sort 会把越界的点钳回范围内。
+            track.sort();
+        }
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -833,6 +920,61 @@ mod tests {
             .iter()
             .find(|value| value.attribute == attribute)
             .and_then(|value| value.numeric)
+    }
+
+    fn attribute_entry(
+        name: &str,
+        value_kind: &str,
+        min: Option<f64>,
+        max: Option<f64>,
+    ) -> limxdesk_fixture_types::FixtureModeAttributeEntry {
+        limxdesk_fixture_types::FixtureModeAttributeEntry {
+            name: name.to_string(),
+            feature_group: String::new(),
+            occurrence_count: 1,
+            module_ids: Vec::new(),
+            dmx_slots: Vec::new(),
+            min_value: min,
+            max_value: max,
+            default_value: None,
+            value_kind: value_kind.to_string(),
+        }
+    }
+
+    #[test]
+    fn percent_attributes_span_zero_to_one_hundred() {
+        // Dimmer 的 GDTF 往往不带 min/max，直接读那两个字段会得到无范围，
+        // 值就能飞到几百。百分比类属性的范围由 value_kind 决定。
+        let (min, max) = attribute_bounds(&attribute_entry("Dimmer", "percent", None, None));
+        assert_eq!((min, max), (0.0, 100.0));
+    }
+
+    #[test]
+    fn percent_attributes_ignore_a_stray_physical_range() {
+        let (min, max) =
+            attribute_bounds(&attribute_entry("Dimmer", "percent", Some(0.0), Some(1.0)));
+        assert_eq!((min, max), (0.0, 100.0), "百分比属性以 0..100 为准");
+    }
+
+    #[test]
+    fn physical_attributes_use_their_declared_range() {
+        let (min, max) =
+            attribute_bounds(&attribute_entry("Pan", "angle", Some(-270.0), Some(270.0)));
+        assert_eq!((min, max), (-270.0, 270.0));
+    }
+
+    #[test]
+    fn a_missing_physical_range_falls_back_to_zero_to_one_hundred() {
+        // 与属性轮的 atMinimum / atMaximum 一致 —— 不存在无范围这回事。
+        let (min, max) = attribute_bounds(&attribute_entry("Custom", "raw", None, None));
+        assert_eq!((min, max), (0.0, 100.0));
+    }
+
+    #[test]
+    fn a_reversed_declared_range_is_corrected() {
+        let (min, max) =
+            attribute_bounds(&attribute_entry("Pan", "angle", Some(270.0), Some(-270.0)));
+        assert_eq!((min, max), (-270.0, 270.0));
     }
 
     #[test]

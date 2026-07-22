@@ -47,7 +47,12 @@ export interface KeyframeTrack {
   points: TrackPoint[];
 }
 
-/** 把取值钳进轨道的量程。量程未知时原样返回。 */
+/**
+ * 把取值钳进轨道的量程。
+ *
+ * 量程来自打帧时读入的灯库定义，与属性轮同一套规则。老效果可能没记过
+ * 量程，那时不钳 —— 但新打的帧一定带着范围。
+ */
 export function clampToTrack(track: KeyframeTrack, value: number): number {
   if (!Number.isFinite(value)) return track.minValue ?? 0;
   let clamped = value;
