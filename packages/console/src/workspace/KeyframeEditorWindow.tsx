@@ -101,8 +101,10 @@ export function KeyframeEditorWindow() {
     selectedEffectId: null,
     version: 0,
   });
-  const [selectedAttribute, setSelectedAttribute] = useState<string | null>(null);
+  // 多选轨道。RGBW 这类分量本来就该一起调，一条条来没有意义。
+  const [selectedAttributes, setSelectedAttributes] = useState<string[]>([]);
   const [selectedPointId, setSelectedPointId] = useState<string | null>(null);
+  const [phaseNudge, setPhaseNudge] = useState(30);
   const [captureAngle, setCaptureAngle] = useState(0);
   const [status, setStatus] = useState("No show loaded");
   const [previewAngle, setPreviewAngle] = useState<number | null>(null);
@@ -125,23 +127,124 @@ export function KeyframeEditorWindow() {
     [document.effects, document.selectedEffectId],
   );
 
-  const track = useMemo(() => {
+  /** 实际选中的轨道。没选时落到第一条，避免空窗。 */
+  const selectedTracks = useMemo(() => {
     const list = effect?.tracks ?? [];
-    return list.find((item) => item.attribute === selectedAttribute) ?? list[0] ?? null;
-  }, [effect, selectedAttribute]);
+    const picked = list.filter((item) => selectedAttributes.includes(item.attribute));
+    return picked.length > 0 ? picked : list.slice(0, 1);
+  }, [effect, selectedAttributes]);
+
+  /** 主轨道：图上可拖动的那条，取选中里的第一条。 */
+  const track = selectedTracks[0] ?? null;
+
+  const peerTracks = useMemo(
+    () => selectedTracks.filter((item) => item.attribute !== track?.attribute && item.points.length > 0),
+    [selectedTracks, track],
+  );
 
   const ghostTracks = useMemo(
     () =>
       (effect?.tracks ?? []).filter(
-        (item) => item.enabled && item.attribute !== track?.attribute && item.points.length > 0,
+        (item) =>
+          item.enabled &&
+          item.points.length > 0 &&
+          !selectedTracks.some((picked) => picked.attribute === item.attribute),
       ),
-    [effect, track],
+    [effect, selectedTracks],
   );
+
+  /** 按 feature group 归拢轨道，便于整组选中。 */
+  const trackGroups = useMemo(() => {
+    const groups = new Map<string, KeyframeTrack[]>();
+    for (const item of effect?.tracks ?? []) {
+      const key = item.featureGroup || "Other";
+      groups.set(key, [...(groups.get(key) ?? []), item]);
+    }
+    return Array.from(groups.entries());
+  }, [effect]);
 
   const selectedPoint = useMemo(
     () => track?.points.find((point) => point.id === selectedPointId) ?? null,
     [track, selectedPointId],
   );
+
+  /** 点击轨道：默认单选，Ctrl/Cmd 加选，Shift 选整个 feature group。 */
+  function pickTrack(item: KeyframeTrack, event: { ctrlKey: boolean; metaKey: boolean; shiftKey: boolean }) {
+    setSelectedPointId(null);
+    if (event.shiftKey) {
+      const group = (effect?.tracks ?? [])
+        .filter((candidate) => (candidate.featureGroup || "Other") === (item.featureGroup || "Other"))
+        .map((candidate) => candidate.attribute);
+      setSelectedAttributes(group);
+      return;
+    }
+    if (event.ctrlKey || event.metaKey) {
+      setSelectedAttributes((current) =>
+        current.includes(item.attribute)
+          ? current.filter((name) => name !== item.attribute)
+          : [...current, item.attribute],
+      );
+      return;
+    }
+    setSelectedAttributes([item.attribute]);
+  }
+
+  function selectGroup(attributes: string[]) {
+    setSelectedAttributes(attributes);
+    setSelectedPointId(null);
+  }
+
+  /** 对所有选中轨道做同一件事。 */
+  function patchSelectedTracks(update: (item: KeyframeTrack) => KeyframeTrack) {
+    if (!effect) return;
+    const picked = new Set(selectedTracks.map((item) => item.attribute));
+    applyEffect({
+      ...effect,
+      tracks: effect.tracks.map((item) => (picked.has(item.attribute) ? update(item) : item)),
+    });
+  }
+
+  /**
+   * 把选中轨道的所有点整体平移。
+   *
+   * RGBW 之间的相对关系要保住，所以是整条轨道一起挪，而不是逐点去改。
+   */
+  function nudgePhase(delta: number) {
+    patchSelectedTracks((item) => ({
+      ...item,
+      points: sortPoints(
+        item.points.map((point) => ({
+          ...point,
+          angle: (((point.angle + delta) % CYCLE_DEGREES) + CYCLE_DEGREES) % CYCLE_DEGREES,
+        })),
+      ),
+    }));
+  }
+
+  /** 在选中轨道之间铺开相位：第一条不动，最后一条差 spread 度。 */
+  function fanPhase(spread: number) {
+    if (!effect || selectedTracks.length < 2) return;
+    const order = selectedTracks.map((item) => item.attribute);
+    const step = spread / order.length;
+    const picked = new Map(order.map((attribute, index) => [attribute, index * step]));
+
+    applyEffect({
+      ...effect,
+      tracks: effect.tracks.map((item) => {
+        const offset = picked.get(item.attribute);
+        if (offset === undefined) return item;
+        return {
+          ...item,
+          points: sortPoints(
+            item.points.map((point) => ({
+              ...point,
+              angle: (((point.angle + offset) % CYCLE_DEGREES) + CYCLE_DEGREES) % CYCLE_DEGREES,
+            })),
+          ),
+        };
+      }),
+    });
+  }
 
   useEffect(() => {
     void load();
@@ -496,44 +599,67 @@ export function KeyframeEditorWindow() {
               </small>
             </div>
 
-            <div style={panelHeadStyle}>轨道</div>
+            <div style={panelHeadStyle}>
+              轨道{selectedTracks.length > 1 ? ` · 选中 ${selectedTracks.length}` : ""}
+            </div>
             <div style={listStyle}>
               {effect.tracks.length === 0 && (
                 <div style={emptyHintStyle}>打帧后轨道会自动建立</div>
               )}
-              {effect.tracks.map((item) => (
-                <div
-                  key={item.id}
-                  onClick={() => {
-                    setSelectedAttribute(item.attribute);
-                    setSelectedPointId(null);
-                  }}
-                  style={{
-                    ...rowStyle,
-                    borderColor:
-                      item.attribute === track?.attribute
-                        ? "var(--lx-accent-bright)"
-                        : "rgba(255,255,255,0.08)",
-                    opacity: item.enabled ? 1 : 0.45,
-                  }}
-                >
-                  <div style={{ display: "grid", gap: 1, minWidth: 0 }}>
-                    <strong style={ellipsisStyle}>{item.attribute}</strong>
-                    <small className="lx-code" style={{ color: "var(--lx-fg-tertiary)" }}>
-                      {item.points.length} 点
-                    </small>
-                  </div>
+              {trackGroups.map(([group, items]) => (
+                <div key={group} style={{ display: "grid", gap: 2 }}>
                   <button
                     className="lx-btn lx-btn-ghost"
                     type="button"
-                    title={item.enabled ? "停用（点保留）" : "启用"}
-                    onClick={(event) => {
-                      event.stopPropagation();
-                      toggleTrack(item.id);
-                    }}
+                    onClick={() => selectGroup(items.map((item) => item.attribute))}
+                    title={`选中 ${group} 的全部 ${items.length} 条轨道`}
+                    style={groupHeadStyle}
                   >
-                    {item.enabled ? "On" : "Off"}
+                    {group} · {items.length}
                   </button>
+                  {items.map((item) => {
+                    const picked = selectedTracks.some(
+                      (candidate) => candidate.attribute === item.attribute,
+                    );
+                    return (
+                      <div
+                        key={item.id}
+                        onClick={(event) => pickTrack(item, event)}
+                        title="Ctrl 加选 · Shift 选整组"
+                        style={{
+                          ...rowStyle,
+                          borderColor: picked
+                            ? "var(--lx-accent-bright)"
+                            : "rgba(255,255,255,0.08)",
+                          background: picked ? "rgba(240,157,28,0.10)" : "rgba(0,0,0,0.24)",
+                          opacity: item.enabled ? 1 : 0.45,
+                        }}
+                      >
+                        <div style={{ display: "grid", gap: 1, minWidth: 0 }}>
+                          <strong style={ellipsisStyle}>
+                            {item.attribute}
+                            {item.attribute === track?.attribute && selectedTracks.length > 1
+                              ? " ◂"
+                              : ""}
+                          </strong>
+                          <small className="lx-code" style={{ color: "var(--lx-fg-tertiary)" }}>
+                            {item.points.length} 点
+                          </small>
+                        </div>
+                        <button
+                          className="lx-btn lx-btn-ghost"
+                          type="button"
+                          title={item.enabled ? "停用（点保留）" : "启用"}
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            toggleTrack(item.id);
+                          }}
+                        >
+                          {item.enabled ? "On" : "Off"}
+                        </button>
+                      </div>
+                    );
+                  })}
                 </div>
               ))}
             </div>
@@ -580,6 +706,7 @@ export function KeyframeEditorWindow() {
               {track && track.points.length > 0 ? (
                 <CurveEditor
                   track={track}
+                  peerTracks={peerTracks}
                   ghostTracks={ghostTracks}
                   selectedPointId={selectedPointId}
                   onSelect={setSelectedPointId}
@@ -663,6 +790,82 @@ export function KeyframeEditorWindow() {
                 title="用编程器里此刻的值在这个角度重录"
               >
                 重录
+              </button>
+            </div>
+
+            {/* 选中轨道的批量操作 */}
+            <div style={paramRowStyle}>
+              <span style={labelStyle}>
+                {selectedTracks.length > 1 ? `${selectedTracks.length} 轨道` : "本轨道"}
+              </span>
+              <button
+                className="lx-btn lx-btn-ghost"
+                type="button"
+                disabled={selectedTracks.length === 0}
+                onClick={() => nudgePhase(-phaseNudge)}
+                title="所有选中轨道的点整体前移"
+              >
+                ◂ 移相
+              </button>
+              <input
+                className="lx-input lx-input-sm"
+                type="number"
+                step={5}
+                value={phaseNudge}
+                onChange={(event) => setPhaseNudge(Number(event.currentTarget.value) || 0)}
+                style={{ width: 58 }}
+              />
+              <span style={unitStyle}>°</span>
+              <button
+                className="lx-btn lx-btn-ghost"
+                type="button"
+                disabled={selectedTracks.length === 0}
+                onClick={() => nudgePhase(phaseNudge)}
+                title="所有选中轨道的点整体后移"
+              >
+                移相 ▸
+              </button>
+              <button
+                className="lx-btn lx-btn-ghost"
+                type="button"
+                disabled={selectedTracks.length < 2}
+                onClick={() => fanPhase(CYCLE_DEGREES)}
+                title="在选中的轨道之间均匀铺开一整圈 —— RGBW 这样铺就是跑色"
+              >
+                铺开
+              </button>
+              <select
+                className="lx-input lx-input-sm"
+                value=""
+                disabled={selectedTracks.length === 0}
+                onChange={(event) => {
+                  const next = event.currentTarget.value as Interpolation;
+                  if (!next) return;
+                  patchSelectedTracks((item) => ({
+                    ...item,
+                    points: item.points.map((point) => ({ ...point, interpolation: next })),
+                  }));
+                  event.currentTarget.value = "";
+                }}
+                style={{ width: 96 }}
+                title="把选中轨道的所有点改成同一种过渡"
+              >
+                <option value="">统一过渡…</option>
+                {INTERPOLATION_LABELS.map((item) => (
+                  <option key={item.value} value={item.value}>
+                    {item.label}
+                  </option>
+                ))}
+              </select>
+              <button
+                className="lx-btn lx-btn-ghost"
+                type="button"
+                disabled={selectedTracks.length === 0}
+                onClick={() =>
+                  patchSelectedTracks((item) => ({ ...item, enabled: !item.enabled }))
+                }
+              >
+                启停
               </button>
             </div>
 
@@ -930,6 +1133,18 @@ const listStyle: CSSProperties = {
   overflowY: "auto",
 };
 
+const groupHeadStyle: CSSProperties = {
+  justifyContent: "flex-start",
+  padding: "1px 4px",
+  border: "none",
+  background: "transparent",
+  color: "var(--lx-fg-tertiary)",
+  fontSize: 9,
+  fontWeight: 800,
+  letterSpacing: "0.05em",
+  textTransform: "uppercase",
+};
+
 const rowStyle: CSSProperties = {
   display: "grid",
   gridTemplateColumns: "minmax(0, 1fr) auto",
@@ -945,7 +1160,7 @@ const rowStyle: CSSProperties = {
 
 const curveColumnStyle: CSSProperties = {
   display: "grid",
-  gridTemplateRows: "minmax(0, 1fr) auto auto auto",
+  gridTemplateRows: "minmax(0, 1fr) auto auto auto auto",
   gap: 5,
   minHeight: 0,
   padding: 8,

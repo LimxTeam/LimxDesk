@@ -15,8 +15,8 @@ import {
  * 横轴是一个完整周期的 0..360 度，纵轴是所选属性的值。曲线闭环 ——
  * 末帧接回首帧。
  *
- * 每个属性一条独立的轨道，图上显示当前所选轨道的点。拖动一个点只影响这条
- * 轨道 —— 挪亮度的点不会连带拖走颜色，两者的时间分布本来就该各自成立。
+ * 每个属性一条独立的轨道。选中的轨道都画出来，点画在当前主轨道上；拖动一个
+ * 点只影响它自己 —— 精确编辑走这里，成组调整走工具栏的批量操作。
  */
 
 /** 内部坐标系。SVG 用 viewBox 缩放到实际尺寸，交互换算只需按比例。 */
@@ -34,13 +34,15 @@ const PLOT_HEIGHT = VIEW_HEIGHT - PAD_TOP - PAD_BOTTOM;
 const SAMPLE_STEP = 2;
 
 export interface CurveEditorProps {
-  /** 当前在图上编辑的轨道 */
+  /** 主轨道：点画在它上面，可拖动 */
   track: KeyframeTrack | null;
-  /** 其余轨道，淡色作为参考 */
+  /** 其他被选中的轨道，一并画出（成组调整时要能同时看到） */
+  peerTracks: KeyframeTrack[];
+  /** 未选中的轨道，淡色作为参考 */
   ghostTracks: KeyframeTrack[];
   selectedPointId: string | null;
   onSelect: (pointId: string | null) => void;
-  /** 拖动改变某个点的角度与取值。只影响当前轨道。 */
+  /** 拖动改变某个点的角度与取值。只影响主轨道上的这一个点。 */
   onMove: (pointId: string, angle: number, value: number) => void;
   /** 当前播放角度，没有在跑时为 null */
   playhead: number | null;
@@ -48,6 +50,7 @@ export interface CurveEditorProps {
 
 export function CurveEditor({
   track,
+  peerTracks,
   ghostTracks,
   selectedPointId,
   onSelect,
@@ -179,14 +182,26 @@ export function CurveEditor({
         </g>
       ))}
 
-      {/* 其余轨道的曲线，淡色参考 —— 它们同时在跑，只看一条容易忘了别的 */}
+      {/* 未选中的轨道，淡色参考 —— 它们同时在跑，只看一条容易忘了别的 */}
       {ghostTracks.map((ghost) => (
         <path
           key={`ghost-${ghost.attribute}`}
           d={buildPath(ghost.points, toX, ghostMapper(ghost))}
           fill="none"
-          stroke="rgba(255,255,255,0.14)"
+          stroke="rgba(255,255,255,0.12)"
           strokeWidth={1}
+          pointerEvents="none"
+        />
+      ))}
+
+      {/* 其他被选中的轨道：成组调整时要能看清它们是否一起动了 */}
+      {peerTracks.map((peer) => (
+        <path
+          key={`peer-${peer.attribute}`}
+          d={buildPath(peer.points, toX, ghostMapper(peer))}
+          fill="none"
+          stroke="rgba(240,157,28,0.45)"
+          strokeWidth={1.5}
           pointerEvents="none"
         />
       ))}
