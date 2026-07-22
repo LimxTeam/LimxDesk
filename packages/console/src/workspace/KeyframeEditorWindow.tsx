@@ -411,16 +411,35 @@ export function KeyframeEditorWindow() {
     }
   }
 
-  /** 删掉当前轨道上的一个点。只影响这一个属性。 */
+  /**
+   * 删点，作用于所有选中轨道上同一角度的点。
+   *
+   * 那些点是一次打帧记下的，删的是"那一刻"，不是某条轨道上孤立的一个点。
+   */
   async function removePoint(pointId: string) {
     if (!effect || !track) return;
+    const origin = track.points.find((point) => point.id === pointId);
+    if (!origin) return;
     flushPendingSave();
+
+    const targets = selectedTracks
+      .map((item) => ({
+        attribute: item.attribute,
+        pointId:
+          item.attribute === track.attribute
+            ? pointId
+            : item.points.find((point) => Math.abs(point.angle - origin.angle) < 0.001)?.id,
+      }))
+      .filter((target): target is { attribute: string; pointId: string } =>
+        Boolean(target.pointId),
+      );
+
     try {
+      // 一次删完再落盘：逐条调用会写好几次盘，中途出错还会留下删了一半的状态。
       setDocument(
-        await invoke<KeyframeLibraryDocument>("keyframe_remove_point", {
+        await invoke<KeyframeLibraryDocument>("keyframe_remove_points", {
           effectId: effect.id,
-          attribute: track.attribute,
-          pointId,
+          targets,
         }),
       );
       setSelectedPointId(null);
@@ -442,26 +461,43 @@ export function KeyframeEditorWindow() {
   }
 
   /**
-   * 改当前轨道上的一个点。
+   * 改一个点，作用于所有选中的轨道。
    *
-   * 只动这一条轨道 —— 其他属性的时间分布与之无关，不该被牵动。
+   * 角度与过渡方式跨轨道同步：一次打帧在各轨道上落在同一角度，RGBW 的相位
+   * 本来就该一起动，否则选中四条却只有一条响应。同角度的点靠角度匹配 ——
+   * 各轨道的点 id 各不相同，但捕获时刻是共同的。
+   *
+   * 值不同步：R 的 100 和 G 的 0 是各自的取值，统一改会把颜色抹平。
    */
   function patchPoint(pointId: string, patch: Partial<TrackPoint>) {
     if (!effect || !track) return;
+    const origin = track.points.find((point) => point.id === pointId);
+    if (!origin) return;
+
+    const { value, ...shared } = patch;
+    const hasShared = Object.keys(shared).length > 0;
+    const picked = new Set(selectedTracks.map((item) => item.attribute));
+
     applyEffect({
       ...effect,
-      tracks: effect.tracks.map((item) =>
-        item.id === track.id
-          ? {
-              ...item,
-              points: sortPoints(
-                item.points.map((point) =>
-                  point.id === pointId ? { ...point, ...patch } : point,
-                ),
-              ),
-            }
-          : item,
-      ),
+      tracks: effect.tracks.map((item) => {
+        if (!picked.has(item.attribute)) return item;
+        const primary = item.attribute === track.attribute;
+        if (!primary && !hasShared) return item;
+
+        return {
+          ...item,
+          points: sortPoints(
+            item.points.map((point) => {
+              const matches = primary
+                ? point.id === pointId
+                : Math.abs(point.angle - origin.angle) < 0.001;
+              if (!matches) return point;
+              return primary ? { ...point, ...patch } : { ...point, ...shared };
+            }),
+          ),
+        };
+      }),
     });
   }
 
@@ -665,7 +701,11 @@ export function KeyframeEditorWindow() {
             </div>
 
             <div style={panelHeadStyle}>
-              {track ? `${track.attribute} · ${track.points.length} 点` : "关键点"}
+              {track
+                ? `${track.attribute} · ${track.points.length} 点${
+                    selectedTracks.length > 1 ? ` · 联动 ${selectedTracks.length}` : ""
+                  }`
+                : "关键点"}
             </div>
             <div style={listStyle}>
               {!track && <div style={emptyHintStyle}>先选一条轨道</div>}
@@ -710,6 +750,8 @@ export function KeyframeEditorWindow() {
                   ghostTracks={ghostTracks}
                   selectedPointId={selectedPointId}
                   onSelect={setSelectedPointId}
+                  // 左右拖是调相位，选中的轨道一起动；上下拖是改这条轨道
+                  // 自己的取值。patchPoint 已经区分了这两者。
                   onMove={(pointId, angle, value) => patchPoint(pointId, { angle, value })}
                   playhead={previewAngle}
                 />
@@ -735,7 +777,11 @@ export function KeyframeEditorWindow() {
                   })
                 }
                 style={{ width: 70 }}
-                title="角度 —— 只影响当前轨道"
+                title={
+                  selectedTracks.length > 1
+                    ? `角度 —— ${selectedTracks.length} 条选中轨道一起动`
+                    : "角度"
+                }
               />
               <span style={unitStyle}>°</span>
               <input
@@ -748,7 +794,11 @@ export function KeyframeEditorWindow() {
                   patchPoint(selectedPoint.id, { value: Number(event.currentTarget.value) })
                 }
                 style={{ width: 84 }}
-                title={track ? `${track.attribute} 的取值` : "取值"}
+                title={
+                  track
+                    ? `${track.attribute} 的取值 —— 只改这一条，各属性的值本就不同`
+                    : "取值"
+                }
               />
               <select
                 className="lx-input lx-input-sm"
@@ -761,7 +811,11 @@ export function KeyframeEditorWindow() {
                   })
                 }
                 style={{ width: 88 }}
-                title="到下一个点的过渡方式"
+                title={
+                  selectedTracks.length > 1
+                    ? `到下一个点的过渡 —— ${selectedTracks.length} 条一起改`
+                    : "到下一个点的过渡方式"
+                }
               >
                 {INTERPOLATION_LABELS.map((item) => (
                   <option key={item.value} value={item.value}>

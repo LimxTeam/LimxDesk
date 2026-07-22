@@ -629,9 +629,46 @@ pub fn keyframe_capture_frame(
     save(&document, &show_state, &keyframe_state, &engine_state, &app)
 }
 
-/// 删掉某条轨道上的一个关键点。
+/// 一个待删除的点。
+#[derive(Clone, Debug, serde::Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PointTarget {
+    pub attribute: String,
+    pub point_id: String,
+}
+
+/// 批量删点。
 ///
-/// 点属于单个属性，删它不影响其他属性在同一角度上的点。
+/// 成组编辑时一次要删掉若干条轨道上同一时刻的点。逐条调用会写四次盘、
+/// 发四次事件，中途出错还会留下删了一半的状态。这里一次改完再落盘。
+#[tauri::command]
+pub fn keyframe_remove_points(
+    effect_id: String,
+    targets: Vec<PointTarget>,
+    show_state: State<'_, ShowRuntimeState>,
+    keyframe_state: State<'_, KeyframeState>,
+    engine_state: State<'_, EngineState>,
+    app: AppHandle,
+) -> Result<KeyframeLibraryDocument, String> {
+    let mut document = load_document(&show_state)?;
+    let effect = document
+        .effects
+        .iter_mut()
+        .find(|effect| effect.id == effect_id)
+        .ok_or_else(|| format!("effect not found: {effect_id}"))?;
+
+    for target in &targets {
+        if let Some(track) = effect.track_mut(&target.attribute) {
+            track.remove_point(&target.point_id);
+        }
+    }
+    effect.updated_at_ms = now_ms()?;
+
+    document.version = document.version.saturating_add(1);
+    save(&document, &show_state, &keyframe_state, &engine_state, &app)
+}
+
+/// 删掉某条轨道上的一个关键点。
 #[tauri::command]
 pub fn keyframe_remove_point(
     effect_id: String,
