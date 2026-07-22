@@ -5,6 +5,7 @@ edition = "2021"
 
 [dependencies]
 limxdesk-cue = { path = "../limxdesk-cue" }
+limxdesk-effect = { path = "../limxdesk-effect" }
 limxdesk-programmer = { path = "../limxdesk-programmer" }
 serde = { version = "1", features = ["derive"] }
 uuid = { version = "1", features = ["v4", "serde"] }

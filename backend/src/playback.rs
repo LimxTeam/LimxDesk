@@ -10,7 +10,7 @@ use limxdesk_playback::{
     PlaybackAction, PlaybackDocument,
 };
 use limxdesk_programmer::StoreUseSelection;
-use limxdesk_sequence::{store_single_step_program, SequenceCommandResult, SingleStepStoreRequest};
+use limxdesk_sequence::{SequenceCommandResult, SingleStepStoreRequest};
 use serde::{Deserialize, Serialize};
 use tauri::{AppHandle, State};
 
@@ -111,10 +111,11 @@ pub fn playback_store_programmer_on_executor(
             ExecutorAssignmentKind::Sequence => Some(assignment.object_id.clone()),
         });
     let selection = selection_state.current()?;
-    let values = programmer_state
-        .current()?
-        .store_values(StoreUseSelection::Active, &selection);
-    let sequence_result = store_single_step_program(
+    let programmer = programmer_state.current()?;
+    let values = programmer.store_values(StoreUseSelection::Active, &selection);
+    // 效果与属性值一起走：Store 一个插槽时 programmer 里有什么就存什么。
+    let effects = programmer.store_effects(StoreUseSelection::Active, &selection);
+    let sequence_result = limxdesk_sequence::store_single_step_content(
         sequence::load_sequence_document(&show_state)?,
         SingleStepStoreRequest {
             sequence_id: existing_sequence_id,
@@ -127,6 +128,7 @@ pub fn playback_store_programmer_on_executor(
             store_mode,
         },
         values,
+        effects,
         sequence::now_ms()?,
     )
     .map_err(|error| error.to_string())?;
@@ -311,6 +313,7 @@ pub fn playback_runtime_snapshot(
 ) -> Result<EngineSnapshot, String> {
     engine_state.snapshot()
 }
+
 
 pub(crate) fn load_playback_document(state: &State<'_, ShowRuntimeState>) -> Result<PlaybackDocument, String> {
     let Some(_show) = state.current()? else {

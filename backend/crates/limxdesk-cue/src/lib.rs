@@ -1,3 +1,4 @@
+use limxdesk_effect::{normalize_effects, AppliedEffect};
 use serde::{Deserialize, Serialize};
 use std::fmt;
 use uuid::Uuid;
@@ -46,6 +47,12 @@ pub struct CuePart {
     pub timing: CueTiming,
     pub values: Vec<CueValue>,
     pub steps: Vec<CueStep>,
+    /// 该 part 上的效果实例。
+    ///
+    /// 效果跟着 cue 走：Go 到这个 cue 就跑，走开就停。存的是对效果池模板
+    /// 的引用加本次的参数，所以改模板会影响所有引用它的 cue。
+    #[serde(default)]
+    pub effects: Vec<AppliedEffect>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
@@ -163,8 +170,22 @@ impl Default for CueAppearance {
 
 impl Cue {
     pub fn new(number: f64, name: impl Into<String>, values: Vec<CueValue>, now_ms: u64) -> CueResult<Self> {
+        Self::with_effects(number, name, values, Vec::new(), now_ms)
+    }
+
+    /// 建一个带效果的 cue。
+    ///
+    /// 只有效果、没有属性值也是成立的 —— 存一个纯效果的 cue 很常见，
+    /// 不该被"没有值"挡下来。
+    pub fn with_effects(
+        number: f64,
+        name: impl Into<String>,
+        values: Vec<CueValue>,
+        effects: Vec<AppliedEffect>,
+        now_ms: u64,
+    ) -> CueResult<Self> {
         validate_cue_number(number)?;
-        if values.is_empty() {
+        if values.is_empty() && effects.is_empty() {
             return Err(CueError::EmptyValues);
         }
 
@@ -181,6 +202,7 @@ impl Cue {
                 timing: CueTiming::default(),
                 values,
                 steps: Vec::new(),
+                effects,
             }],
             appearance: CueAppearance::default(),
             enabled: true,
@@ -209,9 +231,39 @@ impl Cue {
             .collect()
     }
 
+    /// 该 cue 会跑的效果实例。
+    pub fn output_effects(&self) -> Vec<AppliedEffect> {
+        if !self.enabled {
+            return Vec::new();
+        }
+        self.parts
+            .iter()
+            .flat_map(|part| part.effects.iter())
+            .filter(|effect| effect.has_output())
+            .cloned()
+            .collect()
+    }
+
     pub fn merge_values(&mut self, values: Vec<CueValue>, mode: CueStoreMode, now_ms: u64) -> CueResult<()> {
-        if values.is_empty() {
+        self.merge_content(values, Vec::new(), mode, now_ms)
+    }
+
+    /// 合并属性值与效果实例。
+    pub fn merge_content(
+        &mut self,
+        values: Vec<CueValue>,
+        effects: Vec<AppliedEffect>,
+        mode: CueStoreMode,
+        now_ms: u64,
+    ) -> CueResult<()> {
+        if values.is_empty() && effects.is_empty() {
             return Err(CueError::EmptyValues);
+        }
+
+        merge_part_effects(self.ensure_main_part(), effects, mode);
+        if values.is_empty() {
+            self.updated_at_ms = now_ms;
+            return Ok(());
         }
 
         let part = self.ensure_main_part();
@@ -244,6 +296,7 @@ impl Cue {
                     timing: CueTiming::default(),
                     values: Vec::new(),
                     steps: Vec::new(),
+                    effects: Vec::new(),
                 },
             );
         }
@@ -268,6 +321,7 @@ pub fn normalize_cue(mut cue: Cue) -> Cue {
         .map(|mut part| {
             part.timing = normalize_timing(part.timing);
             part.values = part.values.into_iter().filter(valid_value).collect();
+            part.effects = normalize_effects(std::mem::take(&mut part.effects));
             part.steps = part
                 .steps
                 .into_iter()
@@ -330,6 +384,40 @@ fn normalize_timing(timing: CueTiming) -> CueTiming {
 
 fn valid_value(value: &CueValue) -> bool {
     !value.fixture_id.trim().is_empty() && !value.attribute.trim().is_empty()
+}
+
+/// 按存储方式合并效果实例。
+///
+/// 与属性值同一套语义：覆盖是整层替换，合并按同模板同灯具替换，
+/// 移除则按模板剔除。
+fn merge_part_effects(part: &mut CuePart, effects: Vec<AppliedEffect>, mode: CueStoreMode) {
+    if effects.is_empty() {
+        if mode == CueStoreMode::Overwrite {
+            part.effects.clear();
+        }
+        return;
+    }
+
+    match mode {
+        CueStoreMode::Overwrite => part.effects = effects,
+        CueStoreMode::Merge => {
+            for effect in effects {
+                match part.effects.iter_mut().find(|existing| {
+                    existing.effect_id == effect.effect_id
+                        && existing.fixture_ids == effect.fixture_ids
+                }) {
+                    Some(existing) => *existing = effect,
+                    None => part.effects.push(effect),
+                }
+            }
+        }
+        CueStoreMode::Remove => {
+            for effect in effects {
+                part.effects
+                    .retain(|existing| existing.effect_id != effect.effect_id);
+            }
+        }
+    }
 }
 
 fn upsert_value(values: &mut Vec<CueValue>, value: CueValue) {

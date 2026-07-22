@@ -252,6 +252,20 @@ fn save_show_fixture_type_document(
     )
 }
 
+/// 读出当前 show 里的灯具类型条目。
+///
+/// 供需要真实 GDTF 属性的模块使用（效果编辑器要按实际 patch 的灯具
+/// 列出可用属性，而不是猜一份清单）。
+pub(crate) fn load_current_show_entries(
+    state: &State<'_, ShowRuntimeState>,
+) -> Result<Vec<FixtureTypeEntry>, String> {
+    if state.current()?.is_none() {
+        return Ok(Vec::new());
+    }
+    let (_show, document) = load_show_fixture_type_document(state)?;
+    entries_from_document(&document)
+}
+
 fn entries_from_document(
     document: &ShowFixtureTypeDocument,
 ) -> Result<Vec<FixtureTypeEntry>, String> {

@@ -9,6 +9,7 @@ dependencies = [
  "limxdesk-artnet",
  "limxdesk-cue",
  "limxdesk-dmx",
+ "limxdesk-effect",
  "limxdesk-engine",
  "limxdesk-fixture-selection",
  "limxdesk-fixture-types",
@@ -1871,6 +1872,7 @@ dependencies = [
 name = "limxdesk-cue"
 version = "0.1.0"
 dependencies = [
+ "limxdesk-effect",
  "serde",
  "uuid",
 ]
@@ -1883,11 +1885,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "limxdesk-effect"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "uuid",
+]
+
+[[package]]
 name = "limxdesk-engine"
 version = "0.1.0"
 dependencies = [
  "limxdesk-cue",
  "limxdesk-dmx",
+ "limxdesk-effect",
  "limxdesk-playback",
  "limxdesk-sequence",
  "serde",
@@ -1924,6 +1935,7 @@ dependencies = [
 name = "limxdesk-keyframe"
 version = "0.1.0"
 dependencies = [
+ "limxdesk-effect",
  "serde",
  "uuid",
 ]
@@ -1963,6 +1975,7 @@ dependencies = [
 name = "limxdesk-programmer"
 version = "0.1.0"
 dependencies = [
+ "limxdesk-effect",
  "limxdesk-fixture-selection",
  "serde",
 ]
@@ -1972,6 +1985,7 @@ name = "limxdesk-sequence"
 version = "0.1.0"
 dependencies = [
  "limxdesk-cue",
+ "limxdesk-effect",
  "limxdesk-programmer",
  "serde",
  "uuid",

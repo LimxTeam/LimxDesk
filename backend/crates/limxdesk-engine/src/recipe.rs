@@ -2,23 +2,19 @@
 // 文件名称：recipe.rs
 // 功能描述：SequenceRecipeSlot 的消费契约
 //
-// SequenceRecipeSlot 一直带着 engine_kind 字段却没有任何消费方 —— 存得下、
-// 读得出，但渲染管线从不看它。这里给它一个明确的契约：配方引擎按 kind 注册，
-// 渲染时被调用来贡献值。
+// 效果引擎按 kind 注册，渲染时被调用来贡献值。一次调用对应一个效果实例：
+// 引擎拿到模板 id、作用灯具与参数覆盖，产出这一瞬的值。
 //
-// 这里刻意不实现任何具体的效果引擎。契约只规定"一个 slot 如何参与渲染"，
-// 至于效果本身怎么建模（相位、波形、分组方式）属于效果系统的设计，
-// 单独讨论后再来填。
+// 这里不认识任何具体的效果种类 —— 关键帧只是其中一种，注册发生在装配层。
 // ============================================================
 
-use crate::compiled::CompiledSequence;
 use crate::interner::Interner;
 use limxdesk_dmx::DmxOutputValue;
-use limxdesk_sequence::SequenceRecipeSlot;
+use limxdesk_effect::AppliedEffect;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-/// 引擎调用配方时给出的 executor 侧状态。
+/// 引擎调用效果时给出的 executor 侧状态。
 #[derive(Clone, Copy, Debug)]
 pub struct RecipeExecutorState {
     /// 所属 executor 的本地时间（毫秒，已按 rate 缩放）。效果是时间的函数，
@@ -32,8 +28,8 @@ pub struct RecipeExecutorState {
 
 /// 调用配方引擎时的上下文。
 pub struct RecipeContext<'a> {
-    pub slot: &'a SequenceRecipeSlot,
-    pub sequence: &'a CompiledSequence,
+    /// 要求值的效果实例：模板 id、作用灯具、参数覆盖都在里面。
+    pub applied: &'a AppliedEffect,
     pub interner: &'a Interner,
     /// 所属 executor 的本地时间（毫秒，已按 rate 缩放）。
     /// 效果是时间的函数，这就是那个 t。

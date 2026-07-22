@@ -9,14 +9,20 @@
 // 效果库是一份共享快照：文档写入时整体替换，渲染线程只读。
 // ============================================================
 
-use crate::{engine::EngineState, events, show::ShowRuntimeState};
+use crate::{
+    engine::EngineState, events, fixture_selection::FixtureSelectionState,
+    programmer::ProgrammerState, show::ShowRuntimeState,
+};
 use limxdesk_dmx::{merge_mode_for_feature_group, DmxChannelSource, DmxOutputValue};
+use limxdesk_effect::AppliedEffect;
 use limxdesk_engine::{RecipeContext, RecipeEngine};
 use limxdesk_keyframe::{
     evaluate, library::next_effect_number, library::normalize_document, normalize_effect,
     KeyframeEffect, KeyframeLibrary, KeyframeLibraryDocument, KeyframeTrack, TrackLayer,
 };
 use limxdesk_platform::current_timestamp_millis;
+use serde::Serialize;
+use std::collections::BTreeMap;
 use std::sync::{Arc, RwLock};
 use tauri::{AppHandle, State};
 
@@ -30,11 +36,42 @@ pub const KEYFRAME_ENGINE_KIND: &str = "keyframe";
 #[derive(Default)]
 pub struct KeyframeState {
     library: Arc<RwLock<KeyframeLibrary>>,
+    /// programmer 里效果的计时起点。
+    ///
+    /// programmer 没有 executor 那样的本地时钟，但效果需要一个 t。第一次
+    /// 往 programmer 加效果时记下这一刻，之后所有 programmer 效果共用它 ——
+    /// 这样同时加的几个效果相位一致，Once / 定次也能真正跑完而不是一上来
+    /// 就是完成态。
+    programmer_epoch: Arc<RwLock<Option<u64>>>,
 }
 
 impl KeyframeState {
     pub(crate) fn handle(&self) -> Arc<RwLock<KeyframeLibrary>> {
         Arc::clone(&self.library)
+    }
+
+    pub(crate) fn epoch_handle(&self) -> Arc<RwLock<Option<u64>>> {
+        Arc::clone(&self.programmer_epoch)
+    }
+
+    /// 记下计时起点，已经有就沿用。
+    pub(crate) fn mark_epoch(&self, now_ms: u64) -> Result<(), String> {
+        let mut epoch = self
+            .programmer_epoch
+            .write()
+            .map_err(|_| "keyframe epoch lock poisoned".to_string())?;
+        epoch.get_or_insert(now_ms);
+        Ok(())
+    }
+
+    /// programmer 里没有效果了就把起点清掉，下次重新计时。
+    pub(crate) fn reset_epoch(&self) -> Result<(), String> {
+        let mut epoch = self
+            .programmer_epoch
+            .write()
+            .map_err(|_| "keyframe epoch lock poisoned".to_string())?;
+        *epoch = None;
+        Ok(())
     }
 
     pub(crate) fn replace(&self, document: &KeyframeLibraryDocument) -> Result<(), String> {
@@ -69,13 +106,18 @@ impl RecipeEngine for KeyframeRecipeEngine {
             tracing::warn!("keyframe library lock poisoned; skipping effect");
             return;
         };
-        let Some(effect) = library.get(&context.slot.effect_id) else {
+        let Some(template) = library.get(&context.applied.effect_id) else {
             return;
         };
 
         // 效果时间就是所属 executor 的本地时钟，因此 executor 的 rate
         // 同样会拉伸效果 —— 一个推子既控回放速度也控效果速度。
-        let frame = evaluate(effect, context.local_time_ms);
+        let frame = evaluate(
+            template,
+            context.local_time_ms,
+            &context.applied.fixture_ids,
+            context.applied.overrides,
+        );
         push_effect_values(frame, context.master, out);
     }
 }
@@ -140,6 +182,217 @@ pub(crate) fn push_effect_values(
     }
 }
 
+/// 求 programmer 效果层这一瞬的输出。
+///
+/// programmer 的值优先级最高，效果也一样 —— 你正在手上调的东西应该盖过
+/// 回放。渲染路径每帧调它，因此只做哈希查找与曲线求值，不碰文档。
+pub(crate) fn programmer_effect_values(
+    programmer: &limxdesk_programmer::Programmer,
+    library: &KeyframeLibrary,
+    epoch_ms: Option<u64>,
+    now_ms: u64,
+    out: &mut Vec<DmxOutputValue>,
+) {
+    let applied_effects = programmer.effects();
+    if applied_effects.is_empty() {
+        return;
+    }
+    let elapsed = epoch_ms
+        .map(|epoch| now_ms.saturating_sub(epoch) as f64)
+        .unwrap_or(0.0);
+
+    for applied in applied_effects.iter().filter(|effect| effect.has_output()) {
+        if applied.engine_kind != KEYFRAME_ENGINE_KIND {
+            continue;
+        }
+        let Some(template) = library.get(&applied.effect_id) else {
+            continue;
+        };
+        let frame = evaluate(template, elapsed, &applied.fixture_ids, applied.overrides);
+        // programmer 不经过 executor 推子，满幅输出。
+        push_effect_values(frame, 1.0, out);
+    }
+
+    // programmer 的东西盖过回放。
+    for value in out.iter_mut() {
+        if value.source == DmxChannelSource::Effect {
+            value.source = DmxChannelSource::Programmer;
+        }
+    }
+}
+
+/// programmer 里是否有还在动的效果。用来决定时钟能不能停。
+pub(crate) fn programmer_effects_moving(
+    programmer: &limxdesk_programmer::Programmer,
+    library: &KeyframeLibrary,
+) -> bool {
+    programmer
+        .effects()
+        .iter()
+        .filter(|effect| effect.has_output())
+        .any(|applied| {
+            library
+                .get(&applied.effect_id)
+                .is_some_and(limxdesk_keyframe::KeyframeEffect::is_endless)
+        })
+}
+
+// ── 属性查询 ────────────────────────────────────────────────
+
+/// 一个可用于建轨道的属性，直接来自灯具类型的 GDTF 定义。
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EffectAttributeOption {
+    pub name: String,
+    pub feature_group: String,
+    pub min_value: Option<f64>,
+    pub max_value: Option<f64>,
+    pub default_value: Option<f64>,
+    pub value_kind: String,
+    /// 给定灯具中有多少盏具备该属性。不是全体都有时前端要能看出来。
+    pub fixture_count: usize,
+    /// 给定灯具总数。
+    pub total_fixtures: usize,
+}
+
+/// 列出给定灯具实际具备的属性。
+///
+/// 属性来自每盏灯所用模式的 GDTF 定义 —— 不同型号能做的事不一样，
+/// 一份写死的清单在真实 rig 上必然是错的。
+#[tauri::command]
+pub fn keyframe_available_attributes(
+    fixture_ids: Vec<String>,
+    show_state: State<'_, ShowRuntimeState>,
+) -> Result<Vec<EffectAttributeOption>, String> {
+    collect_attribute_options(&fixture_ids, &show_state)
+}
+
+fn collect_attribute_options(
+    fixture_ids: &[String],
+    show_state: &State<'_, ShowRuntimeState>,
+) -> Result<Vec<EffectAttributeOption>, String> {
+    if fixture_ids.is_empty() {
+        return Ok(Vec::new());
+    }
+
+    let patch = crate::patch::load_patch_document(show_state)?;
+    let fixture_types = crate::fixture_types::load_current_show_entries(show_state)?;
+
+    // 子灯具（fix::sub:x）的属性取自父灯具。
+    let mut wanted = fixture_ids
+        .iter()
+        .map(|id| parent_fixture_id(id).to_string())
+        .collect::<Vec<_>>();
+    wanted.sort();
+    wanted.dedup();
+
+    let mut options: BTreeMap<String, EffectAttributeOption> = BTreeMap::new();
+    let mut resolved = 0_usize;
+
+    for fixture_id in &wanted {
+        let Some(fixture) = patch.fixtures.iter().find(|item| &item.id == fixture_id) else {
+            continue;
+        };
+        let Some(mode) = resolve_mode(fixture, &fixture_types) else {
+            continue;
+        };
+        resolved += 1;
+
+        for attribute in &mode.attribute_details {
+            let entry = options
+                .entry(attribute.name.clone())
+                .or_insert_with(|| EffectAttributeOption {
+                    name: attribute.name.clone(),
+                    feature_group: attribute.feature_group.clone(),
+                    min_value: attribute.min_value,
+                    max_value: attribute.max_value,
+                    default_value: attribute.default_value,
+                    value_kind: attribute.value_kind.clone(),
+                    fixture_count: 0,
+                    total_fixtures: 0,
+                });
+            entry.fixture_count += 1;
+            // 型号之间量程可能不同，取并集，曲线才不会被某一款的范围卡住。
+            entry.min_value = min_option(entry.min_value, attribute.min_value);
+            entry.max_value = max_option(entry.max_value, attribute.max_value);
+        }
+    }
+
+    let mut options = options.into_values().collect::<Vec<_>>();
+    for option in &mut options {
+        option.total_fixtures = resolved;
+    }
+    // 先按 feature group 的惯用次序，再按名称。
+    options.sort_by(|left, right| {
+        feature_group_rank(&left.feature_group)
+            .cmp(&feature_group_rank(&right.feature_group))
+            .then(left.name.cmp(&right.name))
+    });
+    Ok(options)
+}
+
+fn resolve_mode<'a>(
+    fixture: &limxdesk_patch::PatchFixture,
+    fixture_types: &'a [limxdesk_fixture_types::FixtureTypeEntry],
+) -> Option<&'a limxdesk_fixture_types::FixtureModeEntry> {
+    let fixture_type = fixture_types.iter().find(|item| {
+        item.path == fixture.fixture_type_path
+            || item.id == fixture.fixture_type_id
+            || format!("{} {}", item.manufacturer, item.name).trim() == fixture.fixture_type_name
+    })?;
+
+    fixture_type
+        .modes
+        .iter()
+        .find(|mode| mode.id == fixture.mode_id)
+        .or_else(|| {
+            fixture_type
+                .modes
+                .iter()
+                .find(|mode| mode.name == fixture.mode_name)
+        })
+        .or_else(|| {
+            fixture_type
+                .modes
+                .iter()
+                .find(|mode| mode.channels == fixture.channels)
+        })
+        .or_else(|| fixture_type.modes.first())
+}
+
+fn parent_fixture_id(id: &str) -> &str {
+    id.split("::sub:").next().unwrap_or(id)
+}
+
+fn min_option(left: Option<f64>, right: Option<f64>) -> Option<f64> {
+    match (left, right) {
+        (Some(left), Some(right)) => Some(left.min(right)),
+        (value, None) | (None, value) => value,
+    }
+}
+
+fn max_option(left: Option<f64>, right: Option<f64>) -> Option<f64> {
+    match (left, right) {
+        (Some(left), Some(right)) => Some(left.max(right)),
+        (value, None) | (None, value) => value,
+    }
+}
+
+/// 控台惯用的 feature group 次序。
+fn feature_group_rank(group: &str) -> u8 {
+    match group.to_ascii_lowercase().as_str() {
+        "dimmer" => 0,
+        "position" => 1,
+        "color" => 2,
+        "gobo" => 3,
+        "beam" => 4,
+        "focus" => 5,
+        "strobe" => 6,
+        "control" => 8,
+        _ => 7,
+    }
+}
+
 // ── 命令 ────────────────────────────────────────────────────
 
 #[tauri::command]
@@ -156,6 +409,7 @@ pub fn keyframe_load_current_show(
 pub fn keyframe_create_effect(
     name: Option<String>,
     show_state: State<'_, ShowRuntimeState>,
+    selection_state: State<'_, FixtureSelectionState>,
     keyframe_state: State<'_, KeyframeState>,
     engine_state: State<'_, EngineState>,
     app: AppHandle,
@@ -163,9 +417,16 @@ pub fn keyframe_create_effect(
     let mut document = load_document(&show_state)?;
     let number = next_effect_number(&document);
     let mut effect = KeyframeEffect::new(number, name.unwrap_or_default(), now_ms()?);
-    // 新建的效果直接带一条 Dimmer 轨道：空效果无从下手，
-    // 一条首尾帧的曲线才是可以立刻上手改的起点。
-    effect.tracks.push(KeyframeTrack::new("Dimmer", "Dimmer"));
+
+    // 模板不含灯具。这里读一次当前选择只是为了挑一个合理的起手属性 ——
+    // 拿手上这批灯都具备的第一个属性建轨道，比塞一个可能不存在的属性强。
+    // 解析不出就留空，让用户从真实属性列表里挑。
+    let selection = selection_state.current()?;
+    if let Some(option) = first_common_attribute(&selection.fixture_ids, &show_state)? {
+        let mut track = KeyframeTrack::new(option.name.clone(), option.feature_group.clone());
+        track.keyframes = default_curve_for(&option);
+        effect.tracks.push(track);
+    }
 
     document.selected_effect_id = Some(effect.id.clone());
     document.effects.push(effect);
@@ -250,7 +511,6 @@ pub fn keyframe_duplicate_effect(
     copy.cycle_ms = source.cycle_ms;
     copy.playback = source.playback;
     copy.phase = source.phase;
-    copy.fixtures = source.fixtures.clone();
     // 轨道要换新 id，否则两个效果的轨道会共用标识。
     copy.tracks = source
         .tracks
@@ -267,64 +527,111 @@ pub fn keyframe_duplicate_effect(
     save(&document, &show_state, &keyframe_state, &engine_state, &app)
 }
 
-/// 把效果指派到某个 sequence 的配方槽上。
+/// 把效果应用到当前选择，进入 programmer。
+///
+/// 这是效果的入口动作，和给选中的灯设一个属性值属于同一类操作：效果落在
+/// programmer 的效果层上，能立刻看到、能改参数、能被 Clear 清掉。
+/// 之后按 Store 选一个插槽，它随 programmer 一起进 cue —— 存效果不需要
+/// 单独的命令，走的是已有的那条保存链路。
 #[tauri::command]
-pub fn keyframe_assign_to_sequence(
-    sequence_id: String,
+pub fn keyframe_apply_to_selection(
     effect_id: String,
     show_state: State<'_, ShowRuntimeState>,
-    engine_state: State<'_, EngineState>,
+    selection_state: State<'_, FixtureSelectionState>,
+    programmer_state: State<'_, ProgrammerState>,
+    keyframe_state: State<'_, KeyframeState>,
     app: AppHandle,
-) -> Result<limxdesk_sequence::SequenceDocument, String> {
-    let mut document = crate::sequence::load_sequence_document(&show_state)?;
-    let sequence = document
-        .sequences
-        .iter_mut()
-        .find(|sequence| sequence.id == sequence_id)
-        .ok_or_else(|| format!("sequence not found: {sequence_id}"))?;
-
-    // 同一个效果不重复挂载，重复指派视为幂等。
-    if !sequence
-        .recipe_slots
-        .iter()
-        .any(|slot| slot.effect_id == effect_id)
-    {
-        sequence
-            .recipe_slots
-            .push(limxdesk_sequence::SequenceRecipeSlot {
-                id: uuid_string(),
-                engine_kind: KEYFRAME_ENGINE_KIND.to_string(),
-                effect_id,
-                label: String::new(),
-                enabled: true,
-            });
+) -> Result<limxdesk_programmer::Programmer, String> {
+    let library = load_document(&show_state)?;
+    if !library.effects.iter().any(|effect| effect.id == effect_id) {
+        return Err(format!("effect not found: {effect_id}"));
     }
-    document.version = document.version.saturating_add(1);
-    crate::sequence::save_sequence_from_keyframe(&document, &show_state, &engine_state, &app)?;
-    Ok(document)
+
+    let selection = selection_state.current()?;
+    if selection.fixture_ids.is_empty() {
+        return Err("Select fixtures before applying an effect.".to_string());
+    }
+
+    // 顺序即相位铺开的次序，沿用选择本身的顺序。
+    let applied = AppliedEffect::new(
+        KEYFRAME_ENGINE_KIND,
+        effect_id,
+        selection.fixture_ids.clone(),
+    );
+    keyframe_state.mark_epoch(now_ms()?)?;
+    let programmer = programmer_state.current()?.apply_effect(applied);
+    let programmer = programmer_state.set_current(programmer)?;
+    events::emit_programmer_changed(app_handle(&app), &programmer);
+    request_output(&app);
+    Ok(programmer)
 }
 
+/// 改 programmer 里某个效果实例的参数（速度 / 相位 / 幅度）。
 #[tauri::command]
-pub fn keyframe_remove_from_sequence(
-    sequence_id: String,
-    slot_id: String,
-    show_state: State<'_, ShowRuntimeState>,
-    engine_state: State<'_, EngineState>,
+pub fn keyframe_update_applied(
+    applied: AppliedEffect,
+    programmer_state: State<'_, ProgrammerState>,
     app: AppHandle,
-) -> Result<limxdesk_sequence::SequenceDocument, String> {
-    let mut document = crate::sequence::load_sequence_document(&show_state)?;
-    let sequence = document
-        .sequences
-        .iter_mut()
-        .find(|sequence| sequence.id == sequence_id)
-        .ok_or_else(|| format!("sequence not found: {sequence_id}"))?;
-    sequence.recipe_slots.retain(|slot| slot.id != slot_id);
-    document.version = document.version.saturating_add(1);
-    crate::sequence::save_sequence_from_keyframe(&document, &show_state, &engine_state, &app)?;
-    Ok(document)
+) -> Result<limxdesk_programmer::Programmer, String> {
+    let programmer = programmer_state.current()?.update_effect(applied);
+    let programmer = programmer_state.set_current(programmer)?;
+    events::emit_programmer_changed(app_handle(&app), &programmer);
+    request_output(&app);
+    Ok(programmer)
+}
+
+/// 从 programmer 里移除一个效果实例。
+#[tauri::command]
+pub fn keyframe_remove_applied(
+    applied_id: String,
+    programmer_state: State<'_, ProgrammerState>,
+    keyframe_state: State<'_, KeyframeState>,
+    app: AppHandle,
+) -> Result<limxdesk_programmer::Programmer, String> {
+    let programmer = programmer_state.current()?.remove_effect(&applied_id);
+    let programmer = programmer_state.set_current(programmer)?;
+    if programmer.effects().is_empty() {
+        keyframe_state.reset_epoch()?;
+    }
+    events::emit_programmer_changed(app_handle(&app), &programmer);
+    request_output(&app);
+    Ok(programmer)
 }
 
 // ── 内部 ────────────────────────────────────────────────────
+
+/// 选中灯具全都具备的第一个属性，按 feature group 的惯用次序取。
+fn first_common_attribute(
+    fixture_ids: &[String],
+    show_state: &State<'_, ShowRuntimeState>,
+) -> Result<Option<EffectAttributeOption>, String> {
+    if fixture_ids.is_empty() {
+        return Ok(None);
+    }
+    let options = collect_attribute_options(fixture_ids, show_state)?;
+    Ok(options
+        .into_iter()
+        .find(|option| option.fixture_count == option.total_fixtures))
+}
+
+/// 按属性的实际量程给出首尾两帧。
+///
+/// 量程来自 GDTF：Pan 可能是 -270..270，Dimmer 是 0..100。拿固定的
+/// 0..100 建曲线，在非百分比属性上一上来就是错的。
+fn default_curve_for(option: &EffectAttributeOption) -> Vec<limxdesk_keyframe::Keyframe> {
+    use limxdesk_keyframe::{Interpolation, Keyframe};
+
+    let low = option.min_value.filter(|value| value.is_finite()).unwrap_or(0.0);
+    let high = option
+        .max_value
+        .filter(|value| value.is_finite() && *value != low)
+        .unwrap_or(low + 100.0);
+
+    vec![
+        Keyframe::new(0.0, low).with_interpolation(Interpolation::Smooth),
+        Keyframe::new(180.0, high).with_interpolation(Interpolation::Smooth),
+    ]
+}
 
 pub(crate) fn load_document(
     state: &State<'_, ShowRuntimeState>,
@@ -360,6 +667,16 @@ fn save(
     }
     let _ = engine_state;
     Ok(document)
+}
+
+fn app_handle(app: &AppHandle) -> &AppHandle {
+    app
+}
+
+fn request_output(app: &AppHandle) {
+    if let Err(error) = crate::output::request_output_send(app) {
+        tracing::warn!("failed to request output after effect change: {error}");
+    }
 }
 
 fn now_ms() -> Result<u64, String> {

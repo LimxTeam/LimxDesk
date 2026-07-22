@@ -21,9 +21,8 @@ use limxdesk_playback::PlaybackAction;
 use limxdesk_programmer::StoreUseSelection;
 use limxdesk_sequence::{
     copy_cue_to_number, copy_sequence_to_number, delete_cue, delete_sequence, move_cue_to_number,
-    move_sequence_to_number, normalize_document, select_sequence, store_programmer_values,
-    store_single_step_program, update_cue, CuePatch, SequenceCommandResult, SequenceDocument,
-    SequenceStoreRequest, SingleStepStoreRequest,
+    move_sequence_to_number, normalize_document, select_sequence, update_cue, CuePatch,
+    SequenceCommandResult, SequenceDocument, SequenceStoreRequest, SingleStepStoreRequest,
 };
 use limxdesk_showfile::LoadedShow;
 use serde::{Deserialize, Serialize};
@@ -185,13 +184,14 @@ pub fn sequence_store_programmer(
         return Err("No show file loaded. Create or load a show before storing cues.".to_string());
     };
     let selection = selection_state.current()?;
-    let values = programmer_state
-        .current()?
-        .store_values(StoreUseSelection::Active, &selection);
-    let result = store_programmer_values(
+    let programmer = programmer_state.current()?;
+    let values = programmer.store_values(StoreUseSelection::Active, &selection);
+    let effects = programmer.store_effects(StoreUseSelection::Active, &selection);
+    let result = limxdesk_sequence::store_programmer_content(
         load_sequence_document(&show_state)?,
         request,
         values,
+        effects,
         now_ms()?,
     )
     .map_err(|error| error.to_string())?;
@@ -215,13 +215,14 @@ pub fn sequence_store_single_step_program(
         );
     };
     let selection = selection_state.current()?;
-    let values = programmer_state
-        .current()?
-        .store_values(StoreUseSelection::Active, &selection);
-    let result = store_single_step_program(
+    let programmer = programmer_state.current()?;
+    let values = programmer.store_values(StoreUseSelection::Active, &selection);
+    let effects = programmer.store_effects(StoreUseSelection::Active, &selection);
+    let result = limxdesk_sequence::store_single_step_content(
         load_sequence_document(&show_state)?,
         request,
         values,
+        effects,
         now_ms()?,
     )
     .map_err(|error| error.to_string())?;
@@ -464,17 +465,6 @@ pub(crate) fn save_and_emit_sequence_document(
     save_and_emit(document, show_state, engine_state, app)
 }
 
-/// 供效果模块写回 sequence 文档（指派 / 解除配方槽）。
-pub(crate) fn save_sequence_from_keyframe(
-    document: &SequenceDocument,
-    show_state: &State<'_, ShowRuntimeState>,
-    engine_state: &State<'_, EngineState>,
-    app: &AppHandle,
-) -> Result<(), String> {
-    save_and_emit(document, show_state, engine_state, app)?;
-    request_sequence_output(app);
-    Ok(())
-}
 
 pub(crate) fn now_ms() -> Result<u64, String> {
     current_timestamp_millis().map_err(|error| error.to_string())

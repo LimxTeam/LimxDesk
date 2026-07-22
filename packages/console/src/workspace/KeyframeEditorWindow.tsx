@@ -9,7 +9,12 @@ import { clearWorkspaceRuntimeCache } from "./workspaceRuntime";
 /**
  * 关键帧效果编辑器。
  *
- * 一个周期就是一整圈 360 度：打上首尾帧，曲线自动闭环。速度用"跑完一圈
+ * 这里编辑的是效果模板：形状、速度、相位规则，不含灯具。选中灯之后点
+ * "应用"，效果就落到 programmer 的效果层上；随后按 Store 选一个插槽，
+ * 它跟 programmer 里的其他内容一起进 cue —— 存效果走的是既有的那条
+ * 保存链路，没有单独的保存命令。
+ *
+ * 一个周期是一整圈 360 度：打上首尾帧，曲线自动闭环。速度用"跑完一圈
  * 要多久"来设，而不是某个抽象的速率数字。
  */
 
@@ -47,7 +52,6 @@ interface KeyframeEffect {
   cycleMs: number;
   playback: PlaybackMode;
   phase: PhaseSpread;
-  fixtures: string[];
   tracks: KeyframeTrack[];
   updatedAtMs: number;
 }
@@ -79,17 +83,18 @@ const INTERPOLATION_LABELS: Array<{ value: Interpolation; label: string }> = [
   { value: "bezier", label: "贝塞尔" },
 ];
 
-/** 常用属性，建轨道时一键选择。 */
-const COMMON_ATTRIBUTES: Array<{ attribute: string; featureGroup: string }> = [
-  { attribute: "Dimmer", featureGroup: "Dimmer" },
-  { attribute: "Pan", featureGroup: "Position" },
-  { attribute: "Tilt", featureGroup: "Position" },
-  { attribute: "ColorRGB_R", featureGroup: "Color" },
-  { attribute: "ColorRGB_G", featureGroup: "Color" },
-  { attribute: "ColorRGB_B", featureGroup: "Color" },
-  { attribute: "Zoom", featureGroup: "Focus" },
-  { attribute: "Shutter1", featureGroup: "Strobe" },
-];
+/** 可用属性，由后端按效果所含灯具的 GDTF 定义解析得出。 */
+interface AttributeOption {
+  name: string;
+  featureGroup: string;
+  minValue: number | null;
+  maxValue: number | null;
+  defaultValue: number | null;
+  valueKind: string;
+  /** 具备该属性的灯具数 */
+  fixtureCount: number;
+  totalFixtures: number;
+}
 
 export function KeyframeEditorWindow() {
   const [document, setDocument] = useState<KeyframeLibraryDocument>({
@@ -101,6 +106,12 @@ export function KeyframeEditorWindow() {
   const [selectedKeyframe, setSelectedKeyframe] = useState<number | null>(null);
   const [status, setStatus] = useState("No show loaded");
   const [previewAngle, setPreviewAngle] = useState<number | null>(null);
+  const [attributes, setAttributes] = useState<AttributeOption[]>([]);
+  const [selection, setSelection] = useState<FixtureSelection>({
+    fixtureIds: [],
+    primaryFixtureId: null,
+    version: 0,
+  });
 
   // 编辑是本地即时的，落盘另行节流 —— 拖一次曲线不该写十几次 show 文件。
   const pendingSaveRef = useRef<KeyframeEffect | null>(null);
@@ -121,6 +132,7 @@ export function KeyframeEditorWindow() {
 
   useEffect(() => {
     void load();
+    void invoke<FixtureSelection>("fixture_selection_get").then(setSelection).catch(() => {});
     return () => flushPendingSave();
   }, []);
 
@@ -132,6 +144,10 @@ export function KeyframeEditorWindow() {
       const changed = await listen("keyframe:changed", () => {
         void load();
       });
+      const selectionChanged = await listen<FixtureSelection>(
+        "fixture-selection:changed",
+        (event) => setSelection(event.payload),
+      );
       const showLoaded = await listen("show:loaded", () => {
         void load();
       });
@@ -142,11 +158,12 @@ export function KeyframeEditorWindow() {
 
       if (!active) {
         changed();
+        selectionChanged();
         showLoaded();
         showDeleted();
         return;
       }
-      unlisteners.push(changed, showLoaded, showDeleted);
+      unlisteners.push(changed, selectionChanged, showLoaded, showDeleted);
     };
 
     void register();
@@ -172,6 +189,28 @@ export function KeyframeEditorWindow() {
     frame = requestAnimationFrame(step);
     return () => cancelAnimationFrame(frame);
   }, [effect?.id, effect?.cycleMs, effect?.playback.kind, effect?.playback.count]);
+
+  // 可用属性取决于手上选中的灯 —— 型号不同能做的事就不同，
+  // 一份写死的清单在真实 rig 上必然是错的。
+  useEffect(() => {
+    if (selection.fixtureIds.length === 0) {
+      setAttributes([]);
+      return;
+    }
+    let active = true;
+    void invoke<AttributeOption[]>("keyframe_available_attributes", {
+      fixtureIds: selection.fixtureIds,
+    })
+      .then((next) => {
+        if (active) setAttributes(next);
+      })
+      .catch((error) => {
+        if (active) setStatus(String(error));
+      });
+    return () => {
+      active = false;
+    };
+  }, [selection.fixtureIds.join("|")]);
 
   async function load() {
     try {
@@ -250,26 +289,24 @@ export function KeyframeEditorWindow() {
     });
   }
 
-  function addTrack(attribute: string, featureGroup: string) {
+  function addTrack(option: AttributeOption) {
     if (!effect) return;
-    if (effect.tracks.some((item) => item.attribute === attribute)) {
-      setStatus(`${attribute} 已有轨道`);
+    if (effect.tracks.some((item) => item.attribute === option.name)) {
+      setSelectedTrackId(effect.tracks.find((item) => item.attribute === option.name)?.id ?? null);
+      setStatus(`${option.name} 已有轨道`);
       return;
     }
     const created: KeyframeTrack = {
       id: crypto.randomUUID(),
-      attribute,
-      featureGroup,
+      attribute: option.name,
+      featureGroup: option.featureGroup,
       layer: "absolute",
       enabled: true,
-      // 首尾两帧就是一条完整的往复 —— 曲线闭环，180..360 自动走回来。
-      keyframes: sortKeyframes([
-        { angle: 0, value: 0, interpolation: "smooth", handleOut: { dx: 1 / 3, dy: 0 }, handleIn: { dx: 1 / 3, dy: 0 } },
-        { angle: 180, value: 100, interpolation: "smooth", handleOut: { dx: 1 / 3, dy: 0 }, handleIn: { dx: 1 / 3, dy: 0 } },
-      ]),
+      keyframes: sortKeyframes(defaultCurveFor(option)),
     };
     applyEffect({ ...effect, tracks: [...effect.tracks, created] });
     setSelectedTrackId(created.id);
+    setSelectedKeyframe(null);
   }
 
   function removeTrack(trackId: string) {
@@ -278,17 +315,18 @@ export function KeyframeEditorWindow() {
     setSelectedTrackId(null);
   }
 
-  async function useSelectionAsFixtures() {
+  /**
+   * 把效果应用到当前选择，进入 programmer。
+   *
+   * 之后按 Store 选插槽即可存下 —— 效果和 programmer 里的其他内容一起走，
+   * 不需要为它单开一条保存路径。
+   */
+  async function applyToSelection() {
     if (!effect) return;
+    flushPendingSave();
     try {
-      const selection = await invoke<FixtureSelection>("fixture_selection_get");
-      if (selection.fixtureIds.length === 0) {
-        setStatus("先选中灯具再指派");
-        return;
-      }
-      // 顺序有意义：相位就是按这个次序铺开的。
-      applyEffect({ ...effect, fixtures: selection.fixtureIds });
-      setStatus(`${selection.fixtureIds.length} 盏灯`);
+      await invoke("keyframe_apply_to_selection", { effectId: effect.id });
+      setStatus(`已应用到 ${selection.fixtureIds.length} 盏灯 · 按 Store 选插槽存下`);
     } catch (error) {
       setStatus(String(error));
     }
@@ -360,6 +398,15 @@ export function KeyframeEditorWindow() {
         >
           删除
         </button>
+        <button
+          className="lx-btn lx-btn-ghost"
+          type="button"
+          disabled={!effect || selection.fixtureIds.length === 0}
+          onClick={() => void applyToSelection()}
+          title="把效果应用到当前选中的灯，进入 programmer；随后按 Store 选插槽存下"
+        >
+          应用 {selection.fixtureIds.length > 0 ? `(${selection.fixtureIds.length})` : ""}
+        </button>
         <div style={{ flex: 1 }} />
         {effect && (
           <input
@@ -425,19 +472,39 @@ export function KeyframeEditorWindow() {
               {effect.tracks.length === 0 && <div style={emptyHintStyle}>还没有轨道</div>}
             </div>
 
-            <div style={panelHeadStyle}>加轨道</div>
-            <div style={attributeGridStyle}>
-              {COMMON_ATTRIBUTES.map((item) => (
-                <button
-                  key={item.attribute}
-                  className="lx-btn lx-btn-ghost"
-                  type="button"
-                  onClick={() => addTrack(item.attribute, item.featureGroup)}
-                  title={item.featureGroup}
-                >
-                  {item.attribute}
-                </button>
-              ))}
+            <div style={panelHeadStyle}>
+              加轨道{attributes.length > 0 ? ` · ${attributes.length}` : ""}
+            </div>
+            <div style={attributeListStyle}>
+              {selection.fixtureIds.length === 0 && (
+                <div style={emptyHintStyle}>选中灯具后按其灯库定义列出属性</div>
+              )}
+              {selection.fixtureIds.length > 0 && attributes.length === 0 && (
+                <div style={emptyHintStyle}>选中的灯具没有可用属性</div>
+              )}
+              {attributes.map((option) => {
+                const partial = option.fixtureCount < option.totalFixtures;
+                return (
+                  <button
+                    key={option.name}
+                    className="lx-btn lx-btn-ghost"
+                    type="button"
+                    onClick={() => addTrack(option)}
+                    title={`${option.featureGroup}${
+                      partial ? ` · 仅 ${option.fixtureCount}/${option.totalFixtures} 盏具备` : ""
+                    }`}
+                    style={{
+                      justifyContent: "space-between",
+                      opacity: partial ? 0.65 : 1,
+                    }}
+                  >
+                    <span style={ellipsisStyle}>{option.name}</span>
+                    <small className="lx-code" style={{ color: "var(--lx-fg-tertiary)" }}>
+                      {partial ? `${option.fixtureCount}/${option.totalFixtures}` : option.featureGroup}
+                    </small>
+                  </button>
+                );
+              })}
             </div>
           </div>
 
@@ -505,7 +572,15 @@ export function KeyframeEditorWindow() {
                 className="lx-btn lx-btn-ghost"
                 type="button"
                 disabled={!track}
-                onClick={() => track && updateTrack({ ...track, keyframes: sortKeyframes(defaultCurve()) })}
+                onClick={() =>
+                  track &&
+                  updateTrack({
+                    ...track,
+                    keyframes: sortKeyframes(
+                      defaultCurveFor(attributes.find((item) => item.name === track.attribute)),
+                    ),
+                  })
+                }
                 title="回到首尾两帧的默认曲线"
               >
                 重置曲线
@@ -697,11 +772,8 @@ export function KeyframeEditorWindow() {
                 反向
               </button>
               <div style={{ flex: 1 }} />
-              <button className="lx-btn lx-btn-ghost" type="button" onClick={() => void useSelectionAsFixtures()}>
-                指派选中灯具
-              </button>
               <span className="lx-code" style={{ color: "var(--lx-fg-tertiary)" }}>
-                {effect.fixtures.length} 盏
+                选中 {selection.fixtureIds.length} 盏
               </span>
             </div>
           </div>
@@ -751,10 +823,22 @@ function fract(value: number): number {
   return fractional < 0 ? fractional + 1 : fractional;
 }
 
-function defaultCurve(): Keyframe[] {
+/**
+ * 按属性的实际量程给出首尾两帧。
+ *
+ * 量程来自 GDTF：Pan 可能是 -270..270，Dimmer 是 0..100。用固定的 0..100
+ * 建曲线，在非百分比属性上一上来就是错的。
+ */
+function defaultCurveFor(option?: AttributeOption): Keyframe[] {
+  const min = option?.minValue ?? 0;
+  const max = option?.maxValue ?? 100;
+  const low = Number.isFinite(min) ? min : 0;
+  const high = Number.isFinite(max) && max !== low ? max : low + 100;
+
+  const handle = { dx: 1 / 3, dy: 0 };
   return [
-    { angle: 0, value: 0, interpolation: "smooth", handleOut: { dx: 1 / 3, dy: 0 }, handleIn: { dx: 1 / 3, dy: 0 } },
-    { angle: 180, value: 100, interpolation: "smooth", handleOut: { dx: 1 / 3, dy: 0 }, handleIn: { dx: 1 / 3, dy: 0 } },
+    { angle: 0, value: round(low), interpolation: "smooth", handleOut: { ...handle }, handleIn: { ...handle } },
+    { angle: 180, value: round(high), interpolation: "smooth", handleOut: { ...handle }, handleIn: { ...handle } },
   ];
 }
 
@@ -847,11 +931,13 @@ const trackRowStyle: CSSProperties = {
   fontSize: 11,
 };
 
-const attributeGridStyle: CSSProperties = {
+const attributeListStyle: CSSProperties = {
   display: "grid",
-  gridTemplateColumns: "1fr 1fr",
-  gap: 3,
+  gap: 2,
+  alignContent: "start",
   padding: 5,
+  maxHeight: 168,
+  overflowY: "auto",
 };
 
 const curveColumnStyle: CSSProperties = {

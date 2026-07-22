@@ -159,8 +159,10 @@ pub fn run() {
             keyframe::keyframe_delete_effect,
             keyframe::keyframe_select_effect,
             keyframe::keyframe_duplicate_effect,
-            keyframe::keyframe_assign_to_sequence,
-            keyframe::keyframe_remove_from_sequence,
+            keyframe::keyframe_available_attributes,
+            keyframe::keyframe_apply_to_selection,
+            keyframe::keyframe_update_applied,
+            keyframe::keyframe_remove_applied,
         ])
         .run(tauri::generate_context!())
         .expect("启动 Tauri 应用失败");

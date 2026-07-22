@@ -19,6 +19,7 @@ members = [
     "crates/limxdesk-keyframe",
     "crates/limxdesk-artnet",
     "crates/limxdesk-dmx",
+    "crates/limxdesk-effect",
     "crates/limxdesk-engine",
     "crates/limxdesk-network",
     "crates/limxdesk-patch",
@@ -69,6 +70,7 @@ limxdesk-sequence = { path = "crates/limxdesk-sequence" }
 limxdesk-playback = { path = "crates/limxdesk-playback" }
 limxdesk-dmx = { path = "crates/limxdesk-dmx" }
 limxdesk-engine = { path = "crates/limxdesk-engine" }
+limxdesk-effect = { path = "crates/limxdesk-effect" }
 limxdesk-keyframe = { path = "crates/limxdesk-keyframe" }
 limxdesk-network = { path = "crates/limxdesk-network" }
 limxdesk-artnet = { path = "crates/limxdesk-artnet" }

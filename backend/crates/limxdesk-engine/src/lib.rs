@@ -167,16 +167,17 @@ impl PlaybackEngine {
                 continue;
             };
             runtime.collect_output(sequence, &self.compiled.interner, &mut out);
-            self.contribute_recipes(runtime, sequence, &mut out);
+            self.contribute_effects(runtime, sequence, &mut out);
         }
         out
     }
 
-    /// 让 sequence 上启用的配方 slot 贡献值。
+    /// 让当前 cue 上的效果实例贡献值。
     ///
-    /// 未注册的 kind 直接跳过：show 文件里可能存着当前版本不认识的配方，
-    /// 那不该让渲染失败。
-    fn contribute_recipes(
+    /// 效果跟着 cue 走：Go 到哪个 cue 就跑那个 cue 上的效果。未注册的 kind
+    /// 直接跳过 —— show 文件里可能存着当前版本不认识的效果种类，
+    /// 那不该让整帧渲染失败。
+    fn contribute_effects(
         &self,
         runtime: &ExecutorRuntime,
         sequence: &CompiledSequence,
@@ -185,18 +186,20 @@ impl PlaybackEngine {
         if self.recipes.is_empty() || !runtime.is_active() {
             return;
         }
+        let Some(cue) = runtime.current_cue(sequence) else {
+            return;
+        };
 
         let state = runtime.recipe_state();
-        for slot in sequence.recipe_slots.iter().filter(|slot| slot.enabled) {
-            let Some(engine) = self.recipes.get(&slot.engine_kind) else {
+        for applied in cue.effects.iter().filter(|effect| effect.has_output()) {
+            let Some(engine) = self.recipes.get(&applied.engine_kind) else {
                 continue;
             };
 
             let start = out.len();
             engine.contribute(
                 &RecipeContext {
-                    slot,
-                    sequence,
+                    applied,
                     interner: &self.compiled.interner,
                     local_time_ms: state.local_time_ms,
                     master: state.master,
@@ -205,8 +208,8 @@ impl PlaybackEngine {
                 out,
             );
 
-            // 配方只需给出值本身。优先级与排序依据由所属 sequence 和 executor
-            // 决定，在这里统一盖上 —— 否则一个填错 priority 的配方就能
+            // 引擎只需给出值本身。优先级与排序依据由所属 sequence 和 executor
+            // 决定，在这里统一盖上 —— 否则一个填错 priority 的效果就能
             // 掀翻整场演出的合并顺序。
             for value in &mut out[start..] {
                 value.priority = sequence.priority;

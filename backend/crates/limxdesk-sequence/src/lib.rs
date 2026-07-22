@@ -1,6 +1,7 @@
 use limxdesk_cue::{
     format_cue_number, normalize_cue, Cue, CueStoreMode, CueValue, CueValueLayer, CueValueSource,
 };
+use limxdesk_effect::AppliedEffect;
 use limxdesk_programmer::{ProgrammerLayer, ProgrammerValue};
 use serde::{Deserialize, Serialize};
 use std::fmt;
@@ -55,27 +56,8 @@ pub struct Sequence {
     pub tracking: bool,
     pub release_on_off: bool,
     pub protected: bool,
-    pub recipe_slots: Vec<SequenceRecipeSlot>,
     pub cues: Vec<Cue>,
     pub updated_at_ms: u64,
-}
-
-/// sequence 上的一个配方槽。
-///
-/// 槽本身不携带效果参数，只按 id 引用效果库里的对象 —— 同一个效果因此
-/// 可以挂在多处，改一次处处生效；渲染路径也只需一次哈希查找，不必在
-/// 每帧反序列化内联配置。
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "camelCase")]
-pub struct SequenceRecipeSlot {
-    pub id: String,
-    /// 由哪种引擎处理，对应 RecipeEngine::kind()。
-    pub engine_kind: String,
-    /// 引用的效果对象 id。
-    #[serde(default)]
-    pub effect_id: String,
-    pub label: String,
-    pub enabled: bool,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -129,7 +111,6 @@ impl Sequence {
             tracking: true,
             release_on_off: true,
             protected: false,
-            recipe_slots: Vec::new(),
             cues: Vec::new(),
             updated_at_ms: now_ms,
         })
@@ -167,14 +148,25 @@ pub fn create_sequence(
 }
 
 pub fn store_programmer_values(
-    mut document: SequenceDocument,
+    document: SequenceDocument,
     request: SequenceStoreRequest,
     programmer_values: Vec<ProgrammerValue>,
     now_ms: u64,
 ) -> SequenceResult<SequenceCommandResult> {
+    store_programmer_content(document, request, programmer_values, Vec::new(), now_ms)
+}
+
+/// 存 cue，连同 programmer 里的效果实例。
+pub fn store_programmer_content(
+    mut document: SequenceDocument,
+    request: SequenceStoreRequest,
+    programmer_values: Vec<ProgrammerValue>,
+    programmer_effects: Vec<AppliedEffect>,
+    now_ms: u64,
+) -> SequenceResult<SequenceCommandResult> {
     document = normalize_document(document);
     let cue_values = programmer_values_to_cue_values(programmer_values);
-    if cue_values.is_empty() {
+    if cue_values.is_empty() && programmer_effects.is_empty() {
         return Err(SequenceError::EmptyProgrammer);
     }
 
@@ -201,7 +193,7 @@ pub fn store_programmer_values(
             .iter_mut()
             .find(|cue| cue.id == cue_id)
             .ok_or_else(|| SequenceError::MissingCue(cue_id.clone()))?;
-        cue.merge_values(cue_values, request.store_mode, now_ms)?;
+        cue.merge_content(cue_values, programmer_effects, request.store_mode, now_ms)?;
         cue.clone()
     } else {
         let number = request
@@ -212,18 +204,19 @@ pub fn store_programmer_values(
             .iter_mut()
             .find(|cue| (cue.number - number).abs() < f64::EPSILON)
         {
-            cue.merge_values(cue_values, request.store_mode, now_ms)?;
+            cue.merge_content(cue_values, programmer_effects, request.store_mode, now_ms)?;
             if let Some(name) = request.cue_name.filter(|name| !name.trim().is_empty()) {
                 cue.name = name.trim().to_string();
             }
             cue.clone()
         } else {
-            let cue = Cue::new(
+            let cue = Cue::with_effects(
                 number,
                 request
                     .cue_name
                     .unwrap_or_else(|| format!("Cue {}", format_cue_number(number))),
                 cue_values,
+                programmer_effects,
                 now_ms,
             )?;
             sequence.cues.push(cue.clone());
@@ -244,14 +237,28 @@ pub fn store_programmer_values(
 }
 
 pub fn store_single_step_program(
-    mut document: SequenceDocument,
+    document: SequenceDocument,
     request: SingleStepStoreRequest,
     programmer_values: Vec<ProgrammerValue>,
     now_ms: u64,
 ) -> SequenceResult<SequenceCommandResult> {
+    store_single_step_content(document, request, programmer_values, Vec::new(), now_ms)
+}
+
+/// 存单步程序，连同 programmer 里的效果实例。
+///
+/// 效果与属性值走同一条路：Store 一个插槽时 programmer 里有什么就存什么，
+/// 不需要为效果另开一条命令。
+pub fn store_single_step_content(
+    mut document: SequenceDocument,
+    request: SingleStepStoreRequest,
+    programmer_values: Vec<ProgrammerValue>,
+    programmer_effects: Vec<AppliedEffect>,
+    now_ms: u64,
+) -> SequenceResult<SequenceCommandResult> {
     document = normalize_document(document);
     let cue_values = programmer_values_to_cue_values(programmer_values);
-    if cue_values.is_empty() {
+    if cue_values.is_empty() && programmer_effects.is_empty() {
         return Err(SequenceError::EmptyProgrammer);
     }
 
@@ -292,12 +299,18 @@ pub fn store_single_step_program(
         .find(|cue| (cue.number - 1.0).abs() < f64::EPSILON)
         .cloned()
         .unwrap_or_else(|| {
-            Cue::new(1.0, "Step 1", cue_values.clone(), now_ms)
-                .expect("single step cue values were already validated")
+            Cue::with_effects(
+                1.0,
+                "Step 1",
+                cue_values.clone(),
+                programmer_effects.clone(),
+                now_ms,
+            )
+            .expect("single step content was already validated")
         });
     cue.number = 1.0;
     cue.name = "Step 1".to_string();
-    cue.merge_values(cue_values, request.store_mode, now_ms)?;
+    cue.merge_content(cue_values, programmer_effects, request.store_mode, now_ms)?;
 
     sequence.cues = vec![cue.clone()];
     sequence.tracking = false;

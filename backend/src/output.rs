@@ -132,9 +132,10 @@ pub fn output_render_dmx(
     show_state: State<'_, ShowRuntimeState>,
     programmer_state: State<'_, ProgrammerState>,
     engine_state: State<'_, EngineState>,
+    keyframe_state: State<'_, crate::keyframe::KeyframeState>,
     output_state: State<'_, OutputState>,
 ) -> Result<Vec<DmxUniverseFrame>, String> {
-    render_current_dmx(&show_state, &programmer_state, &engine_state, &output_state)
+    render_current_dmx(&show_state, &programmer_state, &engine_state, &keyframe_state, &output_state)
 }
 
 #[tauri::command]
@@ -142,10 +143,11 @@ pub fn output_send_current(
     show_state: State<'_, ShowRuntimeState>,
     programmer_state: State<'_, ProgrammerState>,
     engine_state: State<'_, EngineState>,
+    keyframe_state: State<'_, crate::keyframe::KeyframeState>,
     output_state: State<'_, OutputState>,
     app: AppHandle,
 ) -> Result<OutputSendReport, String> {
-    let report = send_current_output(&show_state, &programmer_state, &engine_state, &output_state)?;
+    let report = send_current_output(&show_state, &programmer_state, &engine_state, &keyframe_state, &output_state)?;
     events::emit_output_sent(&app, &report);
     Ok(report)
 }
@@ -154,9 +156,10 @@ pub(crate) fn send_current_output(
     show_state: &State<'_, ShowRuntimeState>,
     programmer_state: &State<'_, ProgrammerState>,
     engine_state: &State<'_, EngineState>,
+    keyframe_state: &State<'_, crate::keyframe::KeyframeState>,
     output_state: &State<'_, OutputState>,
 ) -> Result<OutputSendReport, String> {
-    let frames = render_current_dmx(show_state, programmer_state, engine_state, output_state)?;
+    let frames = render_current_dmx(show_state, programmer_state, engine_state, keyframe_state, output_state)?;
     let sequence = next_sequence(output_state)?;
     let targets = runtime_targets(show_state, output_state)?;
     let packets = build_network_packets(&frames, &targets, sequence)?;
@@ -202,6 +205,7 @@ pub(crate) fn request_output_send(app: &AppHandle) -> Result<(), String> {
         let show_state = app.state::<ShowRuntimeState>();
         let programmer_state = app.state::<ProgrammerState>();
         let engine_state = app.state::<EngineState>();
+        let keyframe_state = app.state::<crate::keyframe::KeyframeState>();
         let output_state = app.state::<OutputState>();
 
         // 推进回放时钟。淡变、多步链都是在这里往前走的 —— 引擎回报是否
@@ -217,7 +221,7 @@ pub(crate) fn request_output_send(app: &AppHandle) -> Result<(), String> {
             }
         };
 
-        match send_current_output(&show_state, &programmer_state, &engine_state, &output_state) {
+        match send_current_output(&show_state, &programmer_state, &engine_state, &keyframe_state, &output_state) {
             Ok(report) => events::emit_output_sent(&app, &report),
             Err(error) => tracing::warn!("failed to send programmer output: {error}"),
         }
@@ -236,7 +240,7 @@ pub(crate) fn request_output_send(app: &AppHandle) -> Result<(), String> {
                     return;
                 }
             };
-            if worker.dirty || motion == Motion::Moving {
+            if worker.dirty || motion == Motion::Moving || programmer_effects_running(&app) {
                 true
             } else {
                 worker.running = false;
@@ -260,13 +264,14 @@ fn render_current_dmx(
     show_state: &State<'_, ShowRuntimeState>,
     programmer_state: &State<'_, ProgrammerState>,
     engine_state: &State<'_, EngineState>,
+    keyframe_state: &State<'_, crate::keyframe::KeyframeState>,
     output_state: &State<'_, OutputState>,
 ) -> Result<Vec<DmxUniverseFrame>, String> {
     let Some(cache) = runtime_cache(show_state, output_state)? else {
         return Ok(Vec::new());
     };
     let programmer = programmer_state.current()?;
-    let input = render_input_from_cache(&cache, &programmer, engine_state)?;
+    let input = render_input_from_cache(&cache, &programmer, engine_state, keyframe_state)?;
     render_dmx(&input).map_err(|error| error.to_string())
 }
 
@@ -275,18 +280,58 @@ fn render_current_dmx(
 /// 回放的值直接从引擎取 —— 它持有已编译的内容和每个 executor 的当前进度。
 /// 这条路径不再触碰 show 文档：过去每帧都要把整份 SequenceDocument
 /// 反序列化并重新展开 tracking，那部分开销与帧率无关，现在只在文档写入时发生一次。
+/// programmer 里是否有循环效果在跑。
+fn programmer_effects_running(app: &AppHandle) -> bool {
+    let programmer_state = app.state::<ProgrammerState>();
+    let keyframe_state = app.state::<crate::keyframe::KeyframeState>();
+    let Ok(programmer) = programmer_state.current() else {
+        return false;
+    };
+    let library = keyframe_state.handle();
+    let Ok(library) = library.read() else {
+        return false;
+    };
+    crate::keyframe::programmer_effects_moving(&programmer, &library)
+}
+
 fn render_input_from_cache(
     cache: &OutputRuntimeCache,
     programmer: &Programmer,
     engine_state: &State<'_, EngineState>,
+    keyframe_state: &State<'_, crate::keyframe::KeyframeState>,
 ) -> Result<DmxRenderInput, String> {
     let mut output_values = engine_state.collect_output()?;
     output_values.extend(active_output_values(programmer));
+    // programmer 的效果层：正在手上调的效果要立刻看得见。
+    append_programmer_effects(programmer, keyframe_state, &mut output_values)?;
     Ok(DmxRenderInput {
         fixtures: cache.fixtures.clone(),
         fixture_types: cache.fixture_types.clone(),
         output_values,
     })
+}
+
+fn append_programmer_effects(
+    programmer: &Programmer,
+    keyframe_state: &State<'_, crate::keyframe::KeyframeState>,
+    out: &mut Vec<DmxOutputValue>,
+) -> Result<(), String> {
+    if programmer.effects().is_empty() {
+        return Ok(());
+    }
+    let library = keyframe_state.handle();
+    let Ok(library) = library.read() else {
+        tracing::warn!("keyframe library lock poisoned; skipping programmer effects");
+        return Ok(());
+    };
+    let epoch = keyframe_state.epoch_handle();
+    let epoch = epoch.read().ok().and_then(|value| *value);
+    let now = current_timestamp_millis().map_err(|error| error.to_string())?;
+
+    let mut effect_values = Vec::new();
+    crate::keyframe::programmer_effect_values(programmer, &library, epoch, now, &mut effect_values);
+    out.extend(effect_values);
+    Ok(())
 }
 
 fn active_output_values(programmer: &Programmer) -> Vec<DmxOutputValue> {

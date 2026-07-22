@@ -15,7 +15,8 @@
 use crate::interner::{Interner, ValueKey};
 use limxdesk_cue::{Cue, CueTiming, CueValue, CueValueLayer};
 use limxdesk_dmx::{merge_mode_for_feature_group, DmxMergeMode};
-use limxdesk_sequence::{Sequence, SequenceDocument, SequenceRecipeSlot};
+use limxdesk_effect::AppliedEffect;
+use limxdesk_sequence::{Sequence, SequenceDocument};
 use std::collections::HashMap;
 
 /// 一个已归约的输出值。
@@ -66,6 +67,8 @@ pub struct CompiledCue {
     pub tracked: Vec<CompiledValue>,
     pub timing_overrides: HashMap<ValueKey, AttributeTiming>,
     pub chasers: Vec<CompiledChaser>,
+    /// 该 cue 上的效果实例。Go 到这个 cue 就跑，走开就停。
+    pub effects: Vec<AppliedEffect>,
 }
 
 impl CompiledCue {
@@ -89,6 +92,11 @@ impl CompiledCue {
     pub fn has_chasers(&self) -> bool {
         self.chasers.iter().any(|chaser| chaser.steps.len() > 1)
     }
+
+    /// 是否挂着效果。效果在跑就不能让时钟停下。
+    pub fn has_effects(&self) -> bool {
+        self.effects.iter().any(AppliedEffect::has_output)
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -100,7 +108,6 @@ pub struct CompiledSequence {
     pub tracking: bool,
     pub release_on_off: bool,
     pub cues: Vec<CompiledCue>,
-    pub recipe_slots: Vec<SequenceRecipeSlot>,
 }
 
 impl CompiledSequence {
@@ -173,7 +180,6 @@ fn compile_sequence(sequence: &Sequence, interner: &mut Interner) -> CompiledSeq
         tracking: sequence.tracking,
         release_on_off: sequence.release_on_off,
         cues,
-        recipe_slots: sequence.recipe_slots.clone(),
     }
 }
 
@@ -184,9 +190,11 @@ fn compile_cue(
 ) -> CompiledCue {
     let mut timing_overrides: HashMap<ValueKey, AttributeTiming> = HashMap::new();
     let mut chasers = Vec::new();
+    let mut effects = Vec::new();
 
     // 停用的 cue 不贡献任何值，但仍要占住序号位置，否则 Go 的索引会错位。
     if cue.enabled {
+        effects = cue.output_effects();
         for part in &cue.parts {
             for value in part.values.iter().filter(|value| value.active) {
                 apply_value(value, interner, carried, &mut timing_overrides);
@@ -217,6 +225,7 @@ fn compile_cue(
         tracked,
         timing_overrides,
         chasers,
+        effects,
     }
 }
 

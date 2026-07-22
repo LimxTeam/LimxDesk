@@ -1,3 +1,4 @@
+use limxdesk_effect::{normalize_effects, AppliedEffect};
 use limxdesk_fixture_selection::FixtureSelection;
 use serde::{Deserialize, Serialize};
 use std::fmt;
@@ -56,6 +57,13 @@ impl Default for Programmer {
 pub struct ProgrammerBuffer {
     pub selected_part_id: u16,
     pub parts: Vec<ProgrammerPart>,
+    /// 效果层。
+    ///
+    /// 效果与属性值平级地待在 programmer 里 —— 选灯之后加一个效果，和给
+    /// 同一批灯设一个 Dimmer 值属于同一类操作。Store 时它随 parts 一起走，
+    /// Clear 也一并清掉。
+    #[serde(default)]
+    pub effects: Vec<AppliedEffect>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
@@ -376,6 +384,83 @@ impl Programmer {
 
         self.bump_version();
         Ok(self)
+    }
+
+    /// 给当前选择加一个效果实例。
+    ///
+    /// 同一个模板重复应用到同一批灯时替换而不是叠加 —— 再点一次效果池
+    /// 应当是"重新应用"，不是把两份一样的东西摞起来。
+    pub fn apply_effect(mut self, applied: AppliedEffect) -> Self {
+        if applied.fixture_ids.is_empty() {
+            return self;
+        }
+        let buffer = self.active_buffer_mut();
+        match buffer.effects.iter_mut().find(|existing| {
+            existing.effect_id == applied.effect_id && existing.fixture_ids == applied.fixture_ids
+        }) {
+            Some(existing) => *existing = applied,
+            None => buffer.effects.push(applied),
+        }
+        self.bump_version();
+        self
+    }
+
+    pub fn remove_effect(mut self, applied_id: &str) -> Self {
+        self.active_buffer_mut()
+            .effects
+            .retain(|effect| effect.id != applied_id);
+        self.bump_version();
+        self
+    }
+
+    /// 改一个效果实例的参数覆盖。
+    pub fn update_effect(mut self, applied: AppliedEffect) -> Self {
+        if let Some(existing) = self
+            .active_buffer_mut()
+            .effects
+            .iter_mut()
+            .find(|existing| existing.id == applied.id)
+        {
+            *existing = applied;
+        }
+        self.bump_version();
+        self
+    }
+
+    pub fn effects(&self) -> &[AppliedEffect] {
+        &self.active_buffer().effects
+    }
+
+    /// 收集要存进 cue 的效果实例。
+    ///
+    /// 与 store_values 同一套取舍：按选择过滤时，实例上不属于选择的灯
+    /// 要摘掉，摘空了就整条不存 —— 存一个作用于零盏灯的效果没有意义。
+    pub fn store_effects(
+        &self,
+        use_selection: StoreUseSelection,
+        selection: &FixtureSelection,
+    ) -> Vec<AppliedEffect> {
+        let effects = self
+            .active_buffer()
+            .effects
+            .iter()
+            .filter(|effect| effect.has_output())
+            .cloned();
+
+        match use_selection {
+            StoreUseSelection::Active | StoreUseSelection::All => normalize_effects(effects.collect()),
+            StoreUseSelection::ActiveForSelected | StoreUseSelection::AllForSelected => {
+                let effective = self
+                    .clone()
+                    .sync_selection(selection)
+                    .effective_fixture_selection();
+                normalize_effects(
+                    effects
+                        .filter_map(|effect| effect.retain_fixtures(&effective.fixture_ids))
+                        .collect(),
+                )
+            }
+        }
     }
 
     pub fn clear(
@@ -721,7 +806,7 @@ impl ProgrammerBuffer {
     }
 
     fn has_values(&self) -> bool {
-        self.values().next().is_some()
+        self.values().next().is_some() || self.has_effects()
     }
 
     fn has_active_values(&self) -> bool {
@@ -739,6 +824,12 @@ impl ProgrammerBuffer {
     fn clear_values(&mut self) {
         self.parts.clear();
         self.selected_part_id = 0;
+        // 效果和值同属 programmer 的内容，Clear 不能只清掉一半。
+        self.effects.clear();
+    }
+
+    fn has_effects(&self) -> bool {
+        self.effects.iter().any(AppliedEffect::has_output)
     }
 }
 

@@ -450,6 +450,7 @@ fn multi_step_part_advances_over_time_instead_of_lighting_at_once() {
         name: "Chase".to_string(),
         timing: CueTiming::default(),
         values: Vec::new(),
+        effects: Vec::new(),
         steps: vec![
             CueStep {
                 id: 0,
@@ -497,6 +498,7 @@ fn a_running_chaser_keeps_the_clock_awake() {
         name: "Chase".to_string(),
         timing: CueTiming::default(),
         values: Vec::new(),
+        effects: Vec::new(),
         steps: vec![
             CueStep {
                 id: 0,
@@ -643,7 +645,7 @@ fn sequence_priority_reaches_the_output_values() {
 
 use limxdesk_dmx::{DmxChannelSource, DmxMergeMode};
 use limxdesk_engine::{RecipeContext, RecipeEngine};
-use limxdesk_sequence::SequenceRecipeSlot;
+use limxdesk_effect::AppliedEffect;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
@@ -670,6 +672,11 @@ impl RecipeEngine for ProbeEngine {
     fn contribute(&self, context: &RecipeContext<'_>, out: &mut Vec<DmxOutputValue>) {
         self.last_time_ms
             .store(context.local_time_ms as u64, Ordering::SeqCst);
+        // 实例带着作用灯具，一盏一个值。
+        assert!(
+            !context.applied.fixture_ids.is_empty(),
+            "引擎只应在实例有灯具时被调用"
+        );
         out.push(DmxOutputValue {
             merge: DmxMergeMode::Ltp,
             // 故意填错优先级：引擎应当无权决定自己的合并优先级。
@@ -686,26 +693,23 @@ impl RecipeEngine for ProbeEngine {
     }
 }
 
-fn sequence_with_slot(kind: &str) -> (SequenceDocument, String) {
-    let (mut document, id) = sequence_with(vec![cue(
-        1.0,
-        vec![dimmer("fix-1", 100.0)],
-        CueTiming::default(),
-    )]);
+/// 建一条 cue 上挂着效果实例的序列。
+fn sequence_with_effect(kind: &str) -> (SequenceDocument, String) {
+    let mut base = cue(1.0, vec![dimmer("fix-1", 100.0)], CueTiming::default());
+    base.parts[0].effects = vec![AppliedEffect::new(
+        kind,
+        "effect-1",
+        vec!["fix-9".to_string()],
+    )];
+
+    let (mut document, id) = sequence_with(vec![base]);
     document.sequences[0].priority = 42;
-    document.sequences[0].recipe_slots = vec![SequenceRecipeSlot {
-        id: "slot-1".to_string(),
-        engine_kind: kind.to_string(),
-        effect_id: "effect-1".to_string(),
-        label: "Probe".to_string(),
-        enabled: true,
-    }];
     (document, id)
 }
 
 #[test]
-fn a_registered_recipe_contributes_to_the_output() {
-    let (document, sequence_id) = sequence_with_slot("probe");
+fn a_registered_effect_contributes_to_the_output() {
+    let (document, sequence_id) = sequence_with_effect("probe");
     let (mut engine, key) = engine_with(&document, &sequence_id);
     engine.recipes_mut().register(ProbeEngine::new("probe"));
 
@@ -715,13 +719,13 @@ fn a_registered_recipe_contributes_to_the_output() {
     assert_eq!(
         find(&engine.collect_output(), "fix-9", "Dimmer"),
         Some(100.0),
-        "启用的 slot 应当参与渲染"
+        "cue 上启用的效果实例应当参与渲染"
     );
 }
 
 #[test]
-fn recipe_priority_and_order_come_from_the_owner_not_the_engine() {
-    let (document, sequence_id) = sequence_with_slot("probe");
+fn effect_priority_and_order_come_from_the_owner_not_the_engine() {
+    let (document, sequence_id) = sequence_with_effect("probe");
     let (mut engine, key) = engine_with(&document, &sequence_id);
     engine.recipes_mut().register(ProbeEngine::new("probe"));
 
@@ -732,7 +736,7 @@ fn recipe_priority_and_order_come_from_the_owner_not_the_engine() {
     let contributed = output
         .iter()
         .find(|value| value.fixture_id == "fix-9")
-        .expect("recipe value present");
+        .expect("effect value present");
 
     assert_eq!(
         contributed.priority, 42,
@@ -742,8 +746,8 @@ fn recipe_priority_and_order_come_from_the_owner_not_the_engine() {
 }
 
 #[test]
-fn recipes_receive_the_scaled_local_clock() {
-    let (document, sequence_id) = sequence_with_slot("probe");
+fn effects_receive_the_scaled_local_clock() {
+    let (document, sequence_id) = sequence_with_effect("probe");
     let (mut engine, key) = engine_with(&document, &sequence_id);
     let probe = ProbeEngine::new("probe");
     engine.recipes_mut().register(probe.clone());
@@ -757,13 +761,13 @@ fn recipes_receive_the_scaled_local_clock() {
     let observed = probe.last_time_ms.load(Ordering::SeqCst);
     assert!(
         (1800..=2200).contains(&observed),
-        "双倍速下走过 1 秒挂钟，配方看到的 t 应约为 2000ms，实际 {observed}"
+        "双倍速下走过 1 秒挂钟，效果看到的 t 应约为 2000ms，实际 {observed}"
     );
 }
 
 #[test]
 fn an_unregistered_kind_is_skipped_rather_than_failing() {
-    let (document, sequence_id) = sequence_with_slot("not-installed");
+    let (document, sequence_id) = sequence_with_effect("not-installed");
     let (mut engine, key) = engine_with(&document, &sequence_id);
     engine.recipes_mut().register(ProbeEngine::new("probe"));
 
@@ -775,14 +779,14 @@ fn an_unregistered_kind_is_skipped_rather_than_failing() {
     assert_eq!(
         find(&output, "fix-9", "Dimmer"),
         None,
-        "不认识的配方跳过即可，不该影响其余渲染"
+        "不认识的效果种类跳过即可，不该影响其余渲染"
     );
 }
 
 #[test]
-fn a_disabled_slot_does_not_contribute() {
-    let (mut document, sequence_id) = sequence_with_slot("probe");
-    document.sequences[0].recipe_slots[0].enabled = false;
+fn a_disabled_instance_does_not_contribute() {
+    let (mut document, sequence_id) = sequence_with_effect("probe");
+    document.sequences[0].cues[0].parts[0].effects[0].enabled = false;
     let (mut engine, key) = engine_with(&document, &sequence_id);
     engine.recipes_mut().register(ProbeEngine::new("probe"));
 
@@ -793,8 +797,8 @@ fn a_disabled_slot_does_not_contribute() {
 }
 
 #[test]
-fn an_idle_executor_runs_no_recipes() {
-    let (document, sequence_id) = sequence_with_slot("probe");
+fn an_idle_executor_runs_no_effects() {
+    let (document, sequence_id) = sequence_with_effect("probe");
     let (mut engine, _key) = engine_with(&document, &sequence_id);
     engine.recipes_mut().register(ProbeEngine::new("probe"));
 
@@ -802,6 +806,6 @@ fn an_idle_executor_runs_no_recipes() {
 
     assert!(
         engine.collect_output().is_empty(),
-        "executor 没在跑时配方也不该产出"
+        "executor 没在跑时效果也不该产出"
     );
 }

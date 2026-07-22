@@ -164,6 +164,10 @@ impl ExecutorRuntime {
         if self.advance_chasers(cue) {
             moving = true;
         }
+        // 效果一直在动，时钟就不能停。
+        if cue.has_effects() {
+            moving = true;
+        }
         if moving {
             Motion::Moving
         } else {
@@ -394,7 +398,7 @@ impl ExecutorRuntime {
         }
     }
 
-    fn current_cue<'a>(&self, sequence: &'a CompiledSequence) -> Option<&'a CompiledCue> {
+    pub(crate) fn current_cue<'a>(&self, sequence: &'a CompiledSequence) -> Option<&'a CompiledCue> {
         self.cue_index.and_then(|index| sequence.cues.get(index))
     }
 
