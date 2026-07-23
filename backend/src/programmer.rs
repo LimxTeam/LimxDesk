@@ -209,6 +209,9 @@ pub fn programmer_clear(
     target: ProgrammerClearTarget,
     programmer_state: State<'_, ProgrammerState>,
     selection_state: State<'_, FixtureSelectionState>,
+    show_state: State<'_, ShowRuntimeState>,
+    keyframe_state: State<'_, crate::keyframe::KeyframeState>,
+    engine_state: State<'_, crate::engine::EngineState>,
     app: AppHandle,
 ) -> Result<ProgrammerClearResult, String> {
     let selection = selection_state.current()?;
@@ -217,6 +220,13 @@ pub fn programmer_clear(
         .clear(target, !selection.fixture_ids.is_empty());
     let programmer = programmer_state.set_current(result.programmer.clone())?;
     events::emit_programmer_changed(&app, &programmer);
+
+    // 清到底时把正在编的关键帧效果也丢掉。关键帧是一次性的 —— 编程器
+    // 空了它没有理由继续留着，Clear 就是它的清除入口。
+    if result.cleared_level == limxdesk_programmer::ProgrammerClearedLevel::All {
+        crate::keyframe::clear_working_effect(&show_state, &keyframe_state, &engine_state, &app)?;
+    }
+
     if let Err(error) = output::request_output_send(&app) {
         tracing::warn!("failed to request programmer output after clear: {error}");
     }

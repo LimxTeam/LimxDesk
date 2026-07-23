@@ -378,20 +378,6 @@ export function KeyframeEditorWindow() {
     }
   }
 
-  /** 清除整个效果。帧没了效果也就没了。 */
-  async function clearEffect() {
-    flushPendingSave();
-    try {
-      setDocument(await invoke<KeyframeLibraryDocument>("keyframe_clear"));
-      setSelectedPointId(null);
-      setSelectedAttributes([]);
-      clearWorkspaceRuntimeCache(["frames"]);
-      setStatus("已清除");
-    } catch (error) {
-      setStatus(String(error));
-    }
-  }
-
   /**
    * 打一帧：把编程器里此刻的值记在指定角度上。
    *
@@ -407,7 +393,9 @@ export function KeyframeEditorWindow() {
       setDocument(next);
       clearWorkspaceRuntimeCache(["frames"]);
       const captured = activeAttributes.map((item) => item.attribute).join(", ");
-      setStatus(`已在 ${captureAngle}° 记录：${captured}`);
+      setStatus(
+        `已在 ${captureAngle}° 记录 ${captured} · 效果已在 ${selection.fixtureIds.length} 盏灯上运行`,
+      );
       // 角度停在原处。自动跳到下一个落点看着省事，实际是让人在没注意的
       // 位置又打一帧 —— 打哪个角度该由手指决定。
     } catch (error) {
@@ -448,17 +436,6 @@ export function KeyframeEditorWindow() {
       );
       setSelectedPointId(null);
       clearWorkspaceRuntimeCache(["frames"]);
-    } catch (error) {
-      setStatus(String(error));
-    }
-  }
-
-  async function applyToSelection() {
-    if (!effect) return;
-    flushPendingSave();
-    try {
-      await invoke("keyframe_apply_to_selection");
-      setStatus(`已应用到 ${selection.fixtureIds.length} 盏灯 · 按 Store 选插槽存下`);
     } catch (error) {
       setStatus(String(error));
     }
@@ -623,24 +600,11 @@ export function KeyframeEditorWindow() {
 
         <div className="lx-spacer" />
 
-        <button
-          className="lx-btn lx-btn-ghost"
-          type="button"
-          disabled={!effect || selection.fixtureIds.length === 0}
-          onClick={() => void applyToSelection()}
-          title="把效果应用到选中的灯，进入编程器；随后按 Store 选插槽存下"
-        >
-          应用 {selection.fixtureIds.length > 0 ? `(${selection.fixtureIds.length})` : ""}
-        </button>
-        <button
-          className="lx-btn lx-btn-ghost"
-          type="button"
-          disabled={!effect}
-          onClick={() => void clearEffect()}
-          title="清除整个效果 —— 帧没了效果也就没了"
-        >
-          清除
-        </button>
+        {/* 打完就跑，作用在打帧时选中的那批灯上，不需要再点一次「应用」。
+            清除走控台的 Clear 键，这里不另设按钮。 */}
+        <span className="lx-code" style={{ color: "var(--lx-fg-tertiary)" }}>
+          {effect ? `${effect.tracks.length} 轨道` : ""}
+        </span>
       </div>
 
       {effect ? (

@@ -539,21 +539,27 @@ fn drop_empty_effects(document: &mut KeyframeLibraryDocument) {
 }
 
 /// 清除当前效果。
-#[tauri::command]
-pub fn keyframe_clear(
-    show_state: State<'_, ShowRuntimeState>,
-    keyframe_state: State<'_, KeyframeState>,
-    engine_state: State<'_, EngineState>,
-    app: AppHandle,
-) -> Result<KeyframeLibraryDocument, String> {
-    let mut document = load_document(&show_state)?;
+///
+/// 由控台的 Clear 键触发 —— 关键帧是一次性的，编程器被清空时它没有理由
+/// 继续留着。编辑器里不再另设清除按钮，Clear 就是清除的入口。
+pub(crate) fn clear_working_effect(
+    show_state: &State<'_, ShowRuntimeState>,
+    keyframe_state: &State<'_, KeyframeState>,
+    engine_state: &State<'_, EngineState>,
+    app: &AppHandle,
+) -> Result<(), String> {
+    if show_state.current()?.is_none() {
+        return Ok(());
+    }
+    let mut document = load_document(show_state)?;
     let Some(id) = working_effect_id(&document) else {
-        return Ok(document);
+        return Ok(());
     };
     document.effects.retain(|effect| effect.id != id);
     document.selected_effect_id = document.effects.first().map(|effect| effect.id.clone());
     document.version = document.version.saturating_add(1);
-    save(&document, &show_state, &keyframe_state, &engine_state, &app)
+    save(&document, show_state, keyframe_state, engine_state, app)?;
+    Ok(())
 }
 
 #[tauri::command]
@@ -584,31 +590,22 @@ pub fn keyframe_update_effect(
     save(&document, &show_state, &keyframe_state, &engine_state, &app)
 }
 
-/// 把效果应用到当前选择，进入 programmer。
+/// 让效果作用在当前选择上，落进 programmer 的效果层。
 ///
-/// 这是效果的入口动作，和给选中的灯设一个属性值属于同一类操作：效果落在
-/// programmer 的效果层上，能立刻看到、能改参数、能被 Clear 清掉。
-/// 之后按 Store 选一个插槽，它随 programmer 一起进 cue —— 存效果不需要
-/// 单独的命令，走的是已有的那条保存链路。
-#[tauri::command]
-pub fn keyframe_apply_to_selection(
-    show_state: State<'_, ShowRuntimeState>,
-    selection_state: State<'_, FixtureSelectionState>,
-    programmer_state: State<'_, ProgrammerState>,
-    keyframe_state: State<'_, KeyframeState>,
-    app: AppHandle,
-) -> Result<limxdesk_programmer::Programmer, String> {
-    let library = load_document(&show_state)?;
-    let Some(effect_id) = working_effect_id(&library) else {
-        return Err("Capture a frame first — there is nothing to apply.".to_string());
-    };
-
+/// 打帧时顺带完成，没有单独的"应用"动作 —— 打帧用的就是这批灯和它们此刻
+/// 的值，效果理应立刻跑起来。效果落在 programmer 上，因此能实时看到、能改
+/// 参数、能被 Clear 清掉；随后按 Store 选插槽，它随 programmer 一起进 cue。
+fn attach_to_selection(
+    effect_id: String,
+    selection_state: &State<'_, FixtureSelectionState>,
+    programmer_state: &State<'_, ProgrammerState>,
+    keyframe_state: &State<'_, KeyframeState>,
+    app: &AppHandle,
+) -> Result<(), String> {
     let selection = selection_state.current()?;
     if selection.fixture_ids.is_empty() {
-        return Err("Select fixtures before applying an effect.".to_string());
+        return Ok(());
     }
-
-    let programmer = programmer_state.current()?;
 
     // 顺序即相位铺开的次序，沿用选择本身的顺序。
     let applied = AppliedEffect::new(
@@ -617,11 +614,11 @@ pub fn keyframe_apply_to_selection(
         selection.fixture_ids.clone(),
     );
     keyframe_state.mark_epoch(now_ms()?)?;
-    let programmer = programmer.apply_effect(applied);
+    let programmer = programmer_state.current()?.apply_effect(applied);
     let programmer = programmer_state.set_current(programmer)?;
-    events::emit_programmer_changed(app_handle(&app), &programmer);
-    request_output(&app);
-    Ok(programmer)
+    events::emit_programmer_changed(app_handle(app), &programmer);
+    request_output(app);
+    Ok(())
 }
 
 /// 打一帧：把编程器里此刻的值记在指定角度上。
@@ -692,7 +689,18 @@ pub fn keyframe_capture_frame(
     effect.updated_at_ms = now_ms()?;
 
     document.version = document.version.saturating_add(1);
-    save(&document, &show_state, &keyframe_state, &engine_state, &app)
+    let saved = save(&document, &show_state, &keyframe_state, &engine_state, &app)?;
+
+    // 打完就跑。打帧用的正是这批灯和它们此刻的值，再让人点一次"应用"
+    // 是多出来的一步。重复挂载会被 apply_effect 当作重新应用。
+    attach_to_selection(
+        effect_id,
+        &selection_state,
+        &programmer_state,
+        &keyframe_state,
+        &app,
+    )?;
+    Ok(saved)
 }
 
 /// 一个待删除的点。
