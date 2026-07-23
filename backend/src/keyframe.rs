@@ -492,25 +492,66 @@ fn backfill_ranges(
     Ok(())
 }
 
+/// 当前正在编辑的那个效果。
+///
+/// 关键帧是一次性的：打帧就有效果，帧清空效果就消失，不存在同时编若干个
+/// 效果的场景。所以没有新建 / 选择 / 复制这些动作，只有"当前这一个"。
+fn working_effect_id(document: &KeyframeLibraryDocument) -> Option<String> {
+    document
+        .selected_effect_id
+        .clone()
+        .filter(|id| document.effects.iter().any(|effect| &effect.id == id))
+        .or_else(|| document.effects.first().map(|effect| effect.id.clone()))
+}
+
+/// 取当前效果，没有就现建一个。
+fn ensure_working_effect(
+    document: &mut KeyframeLibraryDocument,
+    now_ms: u64,
+) -> Result<String, String> {
+    if let Some(id) = working_effect_id(document) {
+        document.selected_effect_id = Some(id.clone());
+        return Ok(id);
+    }
+
+    let number = next_effect_number(document);
+    let effect = KeyframeEffect::new(number, String::new(), now_ms);
+    let id = effect.id.clone();
+    document.selected_effect_id = Some(id.clone());
+    document.effects.push(effect);
+    Ok(id)
+}
+
+/// 丢掉一个点也没有的效果。
+///
+/// 有帧即有效果，无帧则无效果 —— 删光了点还留着一个空壳没有意义。
+fn drop_empty_effects(document: &mut KeyframeLibraryDocument) {
+    document
+        .effects
+        .retain(|effect| effect.tracks.iter().any(|track| !track.points.is_empty()));
+    if !document
+        .effects
+        .iter()
+        .any(|effect| Some(&effect.id) == document.selected_effect_id.as_ref())
+    {
+        document.selected_effect_id = document.effects.first().map(|effect| effect.id.clone());
+    }
+}
+
+/// 清除当前效果。
 #[tauri::command]
-pub fn keyframe_create_effect(
-    name: Option<String>,
+pub fn keyframe_clear(
     show_state: State<'_, ShowRuntimeState>,
-    selection_state: State<'_, FixtureSelectionState>,
     keyframe_state: State<'_, KeyframeState>,
     engine_state: State<'_, EngineState>,
     app: AppHandle,
 ) -> Result<KeyframeLibraryDocument, String> {
     let mut document = load_document(&show_state)?;
-    let number = next_effect_number(&document);
-    let effect = KeyframeEffect::new(number, name.unwrap_or_default(), now_ms()?);
-
-    // 模板建出来是空的。轨道在"应用"那一刻按 programmer 里已激活的属性
-    // 生成 —— 你调过什么，效果就驱动什么。这里猜属性只会猜错。
-    let _ = &selection_state;
-
-    document.selected_effect_id = Some(effect.id.clone());
-    document.effects.push(effect);
+    let Some(id) = working_effect_id(&document) else {
+        return Ok(document);
+    };
+    document.effects.retain(|effect| effect.id != id);
+    document.selected_effect_id = document.effects.first().map(|effect| effect.id.clone());
     document.version = document.version.saturating_add(1);
     save(&document, &show_state, &keyframe_state, &engine_state, &app)
 }
@@ -537,81 +578,8 @@ pub fn keyframe_update_effect(
         Some(existing) => *existing = effect,
         None => return Err(format!("effect not found: {}", effect.id)),
     }
-    document.version = document.version.saturating_add(1);
-    save(&document, &show_state, &keyframe_state, &engine_state, &app)
-}
-
-#[tauri::command]
-pub fn keyframe_delete_effect(
-    effect_id: String,
-    show_state: State<'_, ShowRuntimeState>,
-    keyframe_state: State<'_, KeyframeState>,
-    engine_state: State<'_, EngineState>,
-    app: AppHandle,
-) -> Result<KeyframeLibraryDocument, String> {
-    let mut document = load_document(&show_state)?;
-    document.effects.retain(|effect| effect.id != effect_id);
-    document.version = document.version.saturating_add(1);
-    save(&document, &show_state, &keyframe_state, &engine_state, &app)
-}
-
-#[tauri::command]
-pub fn keyframe_select_effect(
-    effect_id: String,
-    show_state: State<'_, ShowRuntimeState>,
-    keyframe_state: State<'_, KeyframeState>,
-    engine_state: State<'_, EngineState>,
-    app: AppHandle,
-) -> Result<KeyframeLibraryDocument, String> {
-    let mut document = load_document(&show_state)?;
-    if !document.effects.iter().any(|effect| effect.id == effect_id) {
-        return Err(format!("effect not found: {effect_id}"));
-    }
-    document.selected_effect_id = Some(effect_id);
-    save(&document, &show_state, &keyframe_state, &engine_state, &app)
-}
-
-#[tauri::command]
-pub fn keyframe_duplicate_effect(
-    effect_id: String,
-    show_state: State<'_, ShowRuntimeState>,
-    keyframe_state: State<'_, KeyframeState>,
-    engine_state: State<'_, EngineState>,
-    app: AppHandle,
-) -> Result<KeyframeLibraryDocument, String> {
-    let mut document = load_document(&show_state)?;
-    let source = document
-        .effects
-        .iter()
-        .find(|effect| effect.id == effect_id)
-        .cloned()
-        .ok_or_else(|| format!("effect not found: {effect_id}"))?;
-
-    let number = next_effect_number(&document);
-    let mut copy = KeyframeEffect::new(number, format!("{} copy", source.name), now_ms()?);
-    copy.cycle_ms = source.cycle_ms;
-    copy.playback = source.playback;
-    copy.phase = source.phase;
-    // 轨道与点都要换新 id，否则两个效果会共用标识。
-    copy.tracks = source
-        .tracks
-        .iter()
-        .map(|track| limxdesk_keyframe::KeyframeTrack {
-            id: uuid_string(),
-            points: track
-                .points
-                .iter()
-                .map(|point| limxdesk_keyframe::TrackPoint {
-                    id: uuid_string(),
-                    ..point.clone()
-                })
-                .collect(),
-            ..track.clone()
-        })
-        .collect();
-
-    document.selected_effect_id = Some(copy.id.clone());
-    document.effects.push(copy);
+    // 删掉最后一条轨道就等于删光了帧，效果随之消失。
+    drop_empty_effects(&mut document);
     document.version = document.version.saturating_add(1);
     save(&document, &show_state, &keyframe_state, &engine_state, &app)
 }
@@ -624,7 +592,6 @@ pub fn keyframe_duplicate_effect(
 /// 单独的命令，走的是已有的那条保存链路。
 #[tauri::command]
 pub fn keyframe_apply_to_selection(
-    effect_id: String,
     show_state: State<'_, ShowRuntimeState>,
     selection_state: State<'_, FixtureSelectionState>,
     programmer_state: State<'_, ProgrammerState>,
@@ -632,9 +599,9 @@ pub fn keyframe_apply_to_selection(
     app: AppHandle,
 ) -> Result<limxdesk_programmer::Programmer, String> {
     let library = load_document(&show_state)?;
-    if !library.effects.iter().any(|effect| effect.id == effect_id) {
-        return Err(format!("effect not found: {effect_id}"));
-    }
+    let Some(effect_id) = working_effect_id(&library) else {
+        return Err("Capture a frame first — there is nothing to apply.".to_string());
+    };
 
     let selection = selection_state.current()?;
     if selection.fixture_ids.is_empty() {
@@ -667,7 +634,6 @@ pub fn keyframe_apply_to_selection(
 /// 成立的一件事，拆开记就不再是一个颜色了。
 #[tauri::command]
 pub fn keyframe_capture_frame(
-    effect_id: String,
     angle: f64,
     show_state: State<'_, ShowRuntimeState>,
     selection_state: State<'_, FixtureSelectionState>,
@@ -687,6 +653,8 @@ pub fn keyframe_capture_frame(
     }
 
     let mut document = load_document(&show_state)?;
+    // 第一帧顺手把效果建出来 —— 有帧即有效果，不需要先"新建"再打。
+    let effect_id = ensure_working_effect(&mut document, now_ms()?)?;
     let effect = document
         .effects
         .iter_mut()
@@ -761,6 +729,8 @@ pub fn keyframe_remove_points(
         }
     }
     effect.updated_at_ms = now_ms()?;
+    // 点删光了效果就不该继续存在 —— 有帧即有效果，无帧则无效果。
+    drop_empty_effects(&mut document);
 
     document.version = document.version.saturating_add(1);
     save(&document, &show_state, &keyframe_state, &engine_state, &app)
@@ -787,6 +757,7 @@ pub fn keyframe_remove_point(
         track.remove_point(&point_id);
     }
     effect.updated_at_ms = now_ms()?;
+    drop_empty_effects(&mut document);
 
     document.version = document.version.saturating_add(1);
     save(&document, &show_state, &keyframe_state, &engine_state, &app)
@@ -879,9 +850,6 @@ fn now_ms() -> Result<u64, String> {
     current_timestamp_millis().map_err(|error| error.to_string())
 }
 
-fn uuid_string() -> String {
-    uuid::Uuid::new_v4().to_string()
-}
 
 #[cfg(test)]
 mod tests {

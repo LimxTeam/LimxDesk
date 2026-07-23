@@ -378,11 +378,15 @@ export function KeyframeEditorWindow() {
     }
   }
 
-  async function run(command: string, args: Record<string, unknown> = {}) {
+  /** 清除整个效果。帧没了效果也就没了。 */
+  async function clearEffect() {
+    flushPendingSave();
     try {
-      flushPendingSave();
-      setDocument(await invoke<KeyframeLibraryDocument>(command, args));
+      setDocument(await invoke<KeyframeLibraryDocument>("keyframe_clear"));
       setSelectedPointId(null);
+      setSelectedAttributes([]);
+      clearWorkspaceRuntimeCache(["frames"]);
+      setStatus("已清除");
     } catch (error) {
       setStatus(String(error));
     }
@@ -392,13 +396,12 @@ export function KeyframeEditorWindow() {
    * 打一帧：把编程器里此刻的值记在指定角度上。
    *
    * 这是关键帧的核心动作 —— 记录你已经调好的样子，而不是生成一条曲线。
+   * 第一帧会把效果一并建出来：有帧即有效果，不需要先"新建"。
    */
   async function captureFrame() {
-    if (!effect) return;
     flushPendingSave();
     try {
       const next = await invoke<KeyframeLibraryDocument>("keyframe_capture_frame", {
-        effectId: effect.id,
         angle: captureAngle,
       });
       setDocument(next);
@@ -454,7 +457,7 @@ export function KeyframeEditorWindow() {
     if (!effect) return;
     flushPendingSave();
     try {
-      await invoke("keyframe_apply_to_selection", { effectId: effect.id });
+      await invoke("keyframe_apply_to_selection");
       setStatus(`已应用到 ${selection.fixtureIds.length} 盏灯 · 按 Store 选插槽存下`);
     } catch (error) {
       setStatus(String(error));
@@ -556,49 +559,70 @@ export function KeyframeEditorWindow() {
     });
   }
 
-  const canCapture = Boolean(effect) && activeAttributes.length > 0;
+  // 不要求已有效果 —— 第一帧会把它建出来。
+  const canCapture = activeAttributes.length > 0;
 
   return (
     <div style={rootStyle}>
-      {/* 工具栏 */}
-      <div style={toolbarStyle}>
-        <span style={badgeStyle}>FX</span>
-        <select
-          className="lx-input lx-input-sm"
-          value={effect?.id ?? ""}
-          onChange={(event) =>
-            void run("keyframe_select_effect", { effectId: event.currentTarget.value })
+      {/*
+        工具栏。
+        关键帧是一次性的 —— 没有效果池，也就没有新建 / 选择 / 复制。
+        打帧就有效果，清除就没有，工具栏只剩这两个动作加一个应用。
+      */}
+      <div className="lx-param-row" style={toolbarStyle}>
+        <span style={badgeStyle}>KF</span>
+        <button
+          className="lx-btn"
+          type="button"
+          disabled={!canCapture}
+          onClick={() => void captureFrame()}
+          title={
+            activeAttributes.length === 0
+              ? "先把灯调成想要的样子 —— 打帧记录的是编程器里此刻的值"
+              : `在 ${captureAngle}° 记录 ${activeAttributes
+                  .map((item) => item.attribute)
+                  .join(", ")}`
           }
-          style={{ width: 180 }}
-          disabled={document.effects.length === 0}
+          style={{
+            borderColor: canCapture ? "var(--lx-accent-bright)" : undefined,
+            color: canCapture ? "var(--lx-accent-bright)" : undefined,
+            fontWeight: 800,
+          }}
         >
-          {document.effects.map((item) => (
-            <option key={item.id} value={item.id}>
-              {item.number} · {item.name}
-            </option>
-          ))}
-          {document.effects.length === 0 && <option value="">无效果</option>}
-        </select>
-        <button className="lx-btn lx-btn-ghost" type="button" onClick={() => void run("keyframe_create_effect")}>
-          新建
+          + 打帧
         </button>
-        <button
-          className="lx-btn lx-btn-ghost"
-          type="button"
-          disabled={!effect}
-          onClick={() => effect && void run("keyframe_duplicate_effect", { effectId: effect.id })}
-        >
-          复制
-        </button>
-        <button
-          className="lx-btn lx-btn-ghost"
-          type="button"
-          disabled={!effect}
-          onClick={() => effect && void run("keyframe_delete_effect", { effectId: effect.id })}
-        >
-          删除
-        </button>
+        <input
+          className="lx-input lx-input-sm"
+          type="number"
+          min={0}
+          max={359}
+          value={captureAngle}
+          onChange={(event) => setCaptureAngle(clampAngle(Number(event.currentTarget.value)))}
+          style={{ width: 58 }}
+          title="在周期的哪个角度记这一帧"
+        />
+        <span style={unitStyle}>°</span>
+        {ANGLE_PRESETS.map((angle) => (
+          <button
+            key={angle}
+            className="lx-btn lx-btn-ghost"
+            type="button"
+            onClick={() => setCaptureAngle(angle)}
+            style={{
+              padding: "0 6px",
+              borderColor: captureAngle === angle ? "var(--lx-accent-bright)" : undefined,
+              color: captureAngle === angle ? "var(--lx-accent-bright)" : undefined,
+            }}
+          >
+            {angle}
+          </button>
+        ))}
+        <span style={unitStyle}>
+          {activeAttributes.length === 0 ? "先调灯" : `记 ${activeAttributes.length} 个属性`}
+        </span>
+
         <div className="lx-spacer" />
+
         <button
           className="lx-btn lx-btn-ghost"
           type="button"
@@ -608,83 +632,21 @@ export function KeyframeEditorWindow() {
         >
           应用 {selection.fixtureIds.length > 0 ? `(${selection.fixtureIds.length})` : ""}
         </button>
-        {effect && (
-          <input
-            className="lx-input lx-input-sm"
-            value={effect.name}
-            onChange={(event) => applyEffect({ ...effect, name: event.currentTarget.value })}
-            style={{ width: 130 }}
-          />
-        )}
+        <button
+          className="lx-btn lx-btn-ghost"
+          type="button"
+          disabled={!effect}
+          onClick={() => void clearEffect()}
+          title="清除整个效果 —— 帧没了效果也就没了"
+        >
+          清除
+        </button>
       </div>
 
       {effect ? (
         <div style={bodyStyle}>
-          {/* 左栏：打帧 + 帧列表 + 属性 */}
+          {/* 左栏：轨道 + 关键点 */}
           <div style={sidePanelStyle}>
-            <div style={panelHeadStyle}>打帧</div>
-            <div style={captureBoxStyle}>
-              {/* 角度输入独占一行，四个快捷位在下面平分 —— 挤在同一行时
-                  最后一个会被窄侧栏切掉。 */}
-              <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
-                <input
-                  className="lx-input lx-input-sm"
-                  type="number"
-                  min={0}
-                  max={359}
-                  value={captureAngle}
-                  onChange={(event) =>
-                    setCaptureAngle(clampAngle(Number(event.currentTarget.value)))
-                  }
-                  style={{ flex: 1, minWidth: 0 }}
-                  title="在周期的哪个角度记这一帧"
-                />
-                <span style={unitStyle}>°</span>
-              </div>
-              <div style={anglePresetRowStyle}>
-                {ANGLE_PRESETS.map((angle) => (
-                  <button
-                    key={angle}
-                    className="lx-btn lx-btn-ghost"
-                    type="button"
-                    onClick={() => setCaptureAngle(angle)}
-                    style={{
-                      padding: 0,
-                      minWidth: 0,
-                      fontSize: 10,
-                      borderColor:
-                        captureAngle === angle ? "var(--lx-accent-bright)" : undefined,
-                      color: captureAngle === angle ? "var(--lx-accent-bright)" : undefined,
-                    }}
-                  >
-                    {angle}
-                  </button>
-                ))}
-              </div>
-              <button
-                className="lx-btn"
-                type="button"
-                disabled={!canCapture}
-                onClick={() => void captureFrame()}
-                title={
-                  activeAttributes.length === 0
-                    ? "先把灯调成想要的样子 —— 打帧记录的是编程器里此刻的值"
-                    : `记录 ${activeAttributes.map((item) => item.attribute).join(", ")}`
-                }
-                style={{
-                  borderColor: canCapture ? "var(--lx-accent-bright)" : undefined,
-                  color: canCapture ? "var(--lx-accent-bright)" : undefined,
-                }}
-              >
-                + 打帧
-              </button>
-              <small style={{ color: "var(--lx-fg-tertiary)", fontSize: 10, lineHeight: 1.4 }}>
-                {activeAttributes.length === 0
-                  ? "先把灯调成想要的样子，再打帧"
-                  : `将记录 ${activeAttributes.length} 个属性`}
-              </small>
-            </div>
-
             <div style={panelHeadStyle}>
               轨道{selectedTracks.length > 1 ? ` · 选中 ${selectedTracks.length}` : ""}
             </div>
@@ -1127,7 +1089,9 @@ export function KeyframeEditorWindow() {
           </div>
         </div>
       ) : (
-        <div style={emptyHintStyle}>没有效果。点「新建」开始。</div>
+        <div style={emptyHintStyle}>
+          把灯调成想要的样子，按工具栏的「打帧」记下第一帧
+        </div>
       )}
 
       <div style={statusStyle}>
@@ -1231,7 +1195,7 @@ const bodyStyle: CSSProperties = {
 const sidePanelStyle: CSSProperties = {
   display: "grid",
   // 轨道列表比点列表更该看全 —— 轨道数是固定的几条，点可以滚。
-  gridTemplateRows: "auto auto auto minmax(56px, 1.3fr) auto minmax(48px, 1fr)",
+  gridTemplateRows: "auto minmax(56px, 1.3fr) auto minmax(48px, 1fr)",
   minHeight: 0,
   borderRight: "1px solid var(--lx-stroke)",
   background: "rgba(0,0,0,0.18)",
@@ -1245,19 +1209,6 @@ const panelHeadStyle: CSSProperties = {
   letterSpacing: "0.06em",
   textTransform: "uppercase",
   borderBottom: "1px solid rgba(255,255,255,0.05)",
-};
-
-const captureBoxStyle: CSSProperties = {
-  display: "grid",
-  gap: 3,
-  padding: 6,
-};
-
-/** 四个角度快捷位平分一行，窄侧栏也放得下。 */
-const anglePresetRowStyle: CSSProperties = {
-  display: "grid",
-  gridTemplateColumns: "repeat(4, minmax(0, 1fr))",
-  gap: 2,
 };
 
 const listStyle: CSSProperties = {
